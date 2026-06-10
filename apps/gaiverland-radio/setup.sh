@@ -228,53 +228,54 @@ echo "  ✓ Schéma DB créé"
 # ════════════════════════════════════════════════════════════════════════
 cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
 {
+  "_note": "Formatage intentionnel : majuscules = emphase Kokoro, '...' = pause, phrases courtes = punch",
   "modes": {
     "normal": {
       "templates": [
-        "Ce morceau est exactement ce qu'il fallait là.",
-        "Je vais rester discrète et laisser ça tourner.",
-        "C'est bien. Continuons.",
-        "Aucune raison d'interrompre ça.",
-        "Parfait pour ce moment."
+        "Ce morceau... exactement ce qu'il fallait.",
+        "Je reste discrète. La musique, elle, ne l'est pas.",
+        "C'est BIEN. Continuons.",
+        "Aucune raison d'interrompre ça. Aucune.",
+        "Parfait... pour ce moment précis."
       ]
     },
     "hype": {
       "triggers": ["festival", "energique"],
       "templates": [
-        "Ok… là ça commence sérieusement à accélérer.",
-        "On est clairement dans la montée. Bonne chance aux voisins.",
-        "On reste dans l'énergie festival et franchement, ça me va très bien.",
-        "Quelqu'un a commandé de l'énergie ? Livraison en cours.",
+        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+        "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
+        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
+        "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
         "Je crois que les enceintes viennent de demander une augmentation.",
         "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
-        "La transition était parfaite. Je ne dis rien. Je profite.",
-        "On monte. On monte encore. Et puis on monte un peu plus."
+        "Transition PARFAITE. Je ne dis rien. Je profite.",
+        "On monte... on monte encore... et puis on monte UN PEU PLUS."
       ]
     },
     "peak": {
       "triggers": ["intense"],
       "templates": [
-        "Bon… celui-là, il n'est clairement pas venu pour être discret.",
-        "Je vais faire semblant d'être surprise par ce drop.",
-        "C'est loud. C'est voulu. C'est bien.",
-        "On est au sommet. Profitez-en.",
-        "Ça c'est le genre de track qui fait changer d'avis sur la vie.",
-        "Hardstyle activé. Tout le reste peut attendre.",
+        "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
+        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
+        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "On est au sommet. PROFITEZ-EN.",
+        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Hardstyle activé. Tout le reste... peut attendre.",
         "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
-        "Je ne sais pas ce que tu fais là mais j'espère que c'est physique."
+        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
       ]
     },
     "flow": {
       "triggers": ["melodique", "nocturne"],
       "templates": [
-        "On glisse vers quelque chose de plus profond. C'est agréable.",
-        "Ce changement de rythme était exactement ce qu'il fallait.",
-        "Melodic techno à cette heure. Les choix sont défendables.",
+        "On glisse... vers quelque chose de plus profond. C'est agréable.",
+        "Ce changement de rythme... exactement ce qu'il fallait.",
+        "Melodic techno à cette heure. Les choix sont DÉFENDABLES.",
         "On descend en douceur. Sans perdre l'essentiel.",
-        "Miss Monique approuverait probablement.",
+        "Miss Monique approuverait... probablement.",
         "Progressive. Le mot dit tout.",
-        "C'est le genre de moment où on réalise que la nuit commence vraiment.",
-        "Moins fort. Mais toujours là. C'est ça la profondeur."
+        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
+        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
       ]
     }
   }
@@ -898,9 +899,18 @@ app = FastAPI(title="Rebexis Engine")
 SYSTEM = """Tu es Rebexis, animatrice de Gaiverland Radio — une radio électro autonome.
 Tu n'es pas une IA. Tu es une présence radio vivante et passionnée.
 Style : énergie de festival, légèrement sarcastique, surprenante, jamais robotique.
-Format OBLIGATOIRE : 1 à 2 phrases maximum. 15 à 60 mots. Radio-friendly. Français naturel.
-Tu NE décris JAMAIS la musique — tu RÉAGIS à ce qu'elle fait ressentir.
-Humour léger OK. Pas de blagues longues. Jamais répétitif."""
+
+Format OBLIGATOIRE :
+- 1 à 2 phrases MAXIMUM. 15 à 60 mots.
+- Radio-friendly. Français naturel et parlé.
+- Tu NE décris JAMAIS la musique — tu RÉAGIS à ce qu'elle fait ressentir.
+- Humour léger OK. Pas de blagues longues. Jamais répétitif.
+
+Formatage de la prosodie (IMPORTANT — influence la synthèse vocale) :
+- Utilise les MAJUSCULES pour les mots à accentuer fortement (ex: "c'est ÉNORME")
+- Utilise "..." pour marquer des pauses dramatiques (ex: "Et là... ça commence.")
+- Phrases COURTES pour l'énergie. Pas de subordonnées longues.
+- Ponctuation expressive : points d'exclamation, mais avec parcimonie."""
 
 
 def load_tpl():
@@ -1050,7 +1060,7 @@ AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
 # Voix Kokoro française — ff_siwis (SIWIS corpus, voix féminine expressive)
 KOKORO_VOICE = "ff_siwis"
 KOKORO_LANG  = "f"   # French
-KOKORO_SPEED = 1.05  # légèrement plus rapide = plus punchy pour la radio
+KOKORO_SPEED = 1.12  # plus rapide = livraison plus punchy, style DJ radio
 
 # Pipeline TTS (chargé une fois)
 _pipeline = None
@@ -1088,22 +1098,26 @@ def synthesize_raw(text: str) -> pathlib.Path:
     return wav_path
 
 
-# Chaîne ffmpeg radio — inspirée des processeurs broadcast (Orban, Optimod)
+# Chaîne ffmpeg radio — style festival/broadcast
+# Objectif : voix présente, punchy, qui "sort" des basses du mix électro
 FFMPEG_RADIO_CHAIN = ",".join([
-    # 1. Nettoyage fréquences basses (80Hz et moins — inutiles en voix radio)
-    "highpass=f=80",
-    # 2. Légère coupure basse-mid (200Hz) — réduit l'aspect "nasillard"
-    "equalizer=f=200:width_type=o:width=2:g=-2",
-    # 3. Boost présence voix (2-3kHz) — intelligibilité radio
-    "equalizer=f=2500:width_type=o:width=1.5:g=4",
-    # 4. Air haute fréquence (10kHz) — brillance, moins robotique
-    "equalizer=f=10000:width_type=o:width=2:g=2",
-    # 5. Compresseur dynamique — style DJ radio (compression serrée)
-    "acompressor=threshold=-20dB:ratio=4:attack=3:release=80:makeup=5",
-    # 6. Limiteur de crête (évite les clips)
-    "alimiter=limit=0.95:attack=1:release=5",
-    # 7. Loudnorm EBU R128 (-14 LUFS streaming, TP=-1.5)
-    "loudnorm=I=-14:LRA=7:TP=-1.5",
+    # 1. Highpass 90Hz — nettoie les basses (inutiles, masquées par la musique)
+    "highpass=f=90",
+    # 2. Coupure basse-mid (180Hz) — évite l'aspect "nasillard" du TTS
+    "equalizer=f=180:width_type=o:width=2:g=-3",
+    # 3. Boost présence voix (2.5kHz) — intelligibilité et énergie perçue
+    "equalizer=f=2500:width_type=o:width=1.5:g=5",
+    # 4. Boost air (10kHz) — brillance, réduit l'aspect synthétique
+    "equalizer=f=10000:width_type=o:width=2:g=3",
+    # 5. Compresseur agressif style festival radio (ratio élevé, makeup fort)
+    #    Attack rapide = claque sur les consonnes, release lent = sustain
+    "acompressor=threshold=-22dB:ratio=6:attack=2:release=120:makeup=7",
+    # 6. Saturation harmonique légère — ajoute de la chaleur et de l'agressivité
+    "aexciter=level_in=1:level_out=1:amount=2:drive=3",
+    # 7. Limiteur brick-wall (0.92 = marge sécurité broadcast)
+    "alimiter=limit=0.92:attack=0.5:release=3",
+    # 8. Loudnorm EBU R128 — -13 LUFS (légèrement plus fort que streaming std)
+    "loudnorm=I=-13:LRA=5:TP=-1.0",
 ])
 
 
