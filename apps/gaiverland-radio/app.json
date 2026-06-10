@@ -19,52 +19,14 @@
     { "name": "api",     "container": 8080,  "dynamic": true }
   ],
   "volumes": [
-    {
-      "source": "app-data/azuracast/stations",
-      "target": "/var/azuracast/stations",
-      "nas": true,
-      "description": "Bibliothèque musicale AzuraCast — peut être volumineuse (Go à To)"
-    },
-    {
-      "source": "app-data/azuracast/geoip",
-      "target": "/var/azuracast/geoip",
-      "nas": false
-    },
-    {
-      "source": "app-data/azuracast/backups",
-      "target": "/var/azuracast/backups",
-      "nas": true,
-      "description": "Sauvegardes AzuraCast"
-    },
-    {
-      "source": "app-data/azuracast/acme",
-      "target": "/var/azuracast/acme",
-      "nas": false
-    },
-    {
-      "source": "app-data/gaiverland-radio/db",
-      "target": "/var/lib/postgresql/data",
-      "nas": false,
-      "description": "Base de données PostgreSQL — garder en local (latence I/O critique)"
-    },
-    {
-      "source": "app-data/gaiverland-radio/tts-cache",
-      "target": "/tts-cache",
-      "nas": true,
-      "description": "Cache des fichiers audio Rebexis générés"
-    },
-    {
-      "source": "app-data/gaiverland-radio/ollama",
-      "target": "/root/.ollama",
-      "nas": true,
-      "description": "Modèles LLM Ollama (2-8 Go selon modèle)"
-    },
-    {
-      "source": "app-data/gaiverland-radio/essentia-models",
-      "target": "/essentia-models",
-      "nas": true,
-      "description": "Modèles Essentia Discogs (~50 Mo)"
-    }
+    { "source": "app-data/azuracast/stations",         "target": "/var/azuracast/stations" },
+    { "source": "app-data/azuracast/geoip",            "target": "/var/azuracast/geoip" },
+    { "source": "app-data/azuracast/backups",          "target": "/var/azuracast/backups" },
+    { "source": "app-data/azuracast/acme",             "target": "/var/azuracast/acme" },
+    { "source": "app-data/gaiverland-radio/db",        "target": "/var/lib/postgresql/data" },
+    { "source": "app-data/gaiverland-radio/tts-cache", "target": "/tts-cache" },
+    { "source": "app-data/gaiverland-radio/ollama",    "target": "/root/.ollama" },
+    { "source": "app-data/gaiverland-radio/essentia-models", "target": "/essentia-models" }
   ],
   "backup": { "enabled": true }
 }
