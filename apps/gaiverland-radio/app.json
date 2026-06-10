@@ -10,10 +10,21 @@
     "docker_socket": false,
     "privileged": false
   },
-  "network": { "public": true, "internal": false },
-  "ports": [{ "name": "web", "container": 80, "dynamic": true }],
+  "network": { "public": true, "internal": true },
+  "ports": [
+    { "name": "web",     "container": 80,   "dynamic": true },
+    { "name": "sftp",    "container": 2022,  "dynamic": true },
+    { "name": "icecast", "container": 8000,  "dynamic": true },
+    { "name": "api",     "container": 8080,  "dynamic": true }
+  ],
   "volumes": [
-    { "source": "app-data/gaiverland-radio/db", "target": "/var/lib/postgresql/data" }
+    { "source": "app-data/gaiverland-radio/db",              "target": "/var/lib/postgresql/data", "nas": false },
+    { "source": "app-data/gaiverland-radio/tts-cache",       "target": "/tts-cache",               "nas": true  },
+    { "source": "app-data/gaiverland-radio/ollama",          "target": "/root/.ollama",            "nas": true  },
+    { "source": "app-data/gaiverland-radio/essentia-models", "target": "/essentia-models",          "nas": true  },
+    { "source": "app-data/azuracast/stations",               "target": "/var/azuracast/stations",  "nas": true  },
+    { "source": "app-config/gaiverland-radio",               "target": "/app-config",              "nas": false },
+    { "source": "app-data/gaiverland-radio/backups",         "target": "/backups",                 "nas": true  }
   ],
   "backup": { "enabled": true }
 }

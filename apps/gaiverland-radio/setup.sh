@@ -6,10 +6,16 @@ APP_ID="gaiverland-radio"
 CONFIG_DIR="${CALEOPE_BASE_DIR}/app-config/${APP_ID}"
 DATA_DIR="${CALEOPE_BASE_DIR}/app-data/${APP_ID}"
 SCRIPTS_DIR="${CONFIG_DIR}/scripts"
+COMPOSE_DIR="${CALEOPE_BASE_DIR}/apps-installed/${APP_ID}"
+
+# Support NAS : CALEOPE_PARAM_STORAGE_PATH fourni via --storage <path>
+STORAGE_PATH="${CALEOPE_PARAM_STORAGE_PATH:-${DATA_DIR}}"
 
 mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}" \
-         "${DATA_DIR}/db" "${DATA_DIR}/tts-cache" \
-         "${DATA_DIR}/ollama" "${DATA_DIR}/essentia-models"
+         "${DATA_DIR}/db" \
+         "${STORAGE_PATH}/tts-cache" "${STORAGE_PATH}/ollama" \
+         "${STORAGE_PATH}/essentia-models" "${STORAGE_PATH}/backups" \
+         "${CALEOPE_BASE_DIR}/app-data/azuracast/stations"
 
 # ── Nettoyage containers ───────────────────────────────────────────────
 for _ct in gaiverland-db gaiverland-analyzer gaiverland-playlist \
@@ -31,30 +37,51 @@ echo "└───────────────────────�
 
 AZ_EXISTING=false
 AZ_NETWORK_EXTERNAL=true
+AZ_NETWORK_NAME="azuracast-internal"
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^azuracast$"; then
     AZ_EXISTING=true
     echo "  ✓ Container 'azuracast' détecté — mode addon (connexion à l'instance existante)"
     AZ_NETWORK_EXTERNAL=true
     COMPOSE_PROFILES_VALUE=""
+    # Détecter le nom réel du réseau interne AzuraCast (peut être préfixé par Docker Compose)
+    _DETECTED=$(docker inspect azuracast \
+        --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null \
+        | tr ' ' '\n' | grep -i "internal" | head -1 || true)
+    if [[ -z "${_DETECTED}" ]]; then
+        _DETECTED=$(docker network ls --format '{{.Name}}' 2>/dev/null \
+            | grep -i "azuracast.*internal" | head -1 || true)
+    fi
+    [[ -n "${_DETECTED}" ]] && AZ_NETWORK_NAME="${_DETECTED}"
+    echo "  ✓ Réseau AzuraCast : ${AZ_NETWORK_NAME}"
 else
     echo "  ℹ AzuraCast absent — mode autonome (AzuraCast sera déployé avec ce package)"
     AZ_NETWORK_EXTERNAL=false
+    AZ_NETWORK_NAME="azuracast-internal"
     COMPOSE_PROFILES_VALUE="with-azuracast"
     # Créer le réseau avant que compose le déclare en external
     docker network create azuracast-internal 2>/dev/null || true
     docker network create caleope-public 2>/dev/null || true
-    # Nettoyer l'azuracast si orphelin
     docker stop azuracast 2>/dev/null || true
     docker rm   azuracast 2>/dev/null || true
 fi
 
-# Écrire le .env Docker Compose (lu automatiquement par docker compose)
+# Écrire le .env Docker Compose (lu depuis le répertoire du compose.yml)
 cat > "${CONFIG_DIR}/.env" <<EOF
 COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}
 AZURACAST_NETWORK_EXTERNAL=${AZ_NETWORK_EXTERNAL}
+AZURACAST_NETWORK_NAME=${AZ_NETWORK_NAME}
 AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
+WEB_PORT=${CALEOPE_PORT_WEB:-8099}
+SFTP_PORT=${CALEOPE_PORT_SFTP:-2022}
+ICECAST_PORT=${CALEOPE_PORT_ICECAST:-8000}
+API_PORT=${CALEOPE_PORT_API:-8080}
 EOF
+
+# Copier .env dans le répertoire du compose (Docker Compose v2 le lit depuis là)
+if [[ -d "${COMPOSE_DIR}" ]]; then
+    cp "${CONFIG_DIR}/.env" "${COMPOSE_DIR}/.env"
+fi
 
 # ── Paramètres ────────────────────────────────────────────────────────
 AZ_URL="${CALEOPE_PARAM_AZURACAST_URL:-http://azuracast:80}"
@@ -229,7 +256,7 @@ echo "  ✓ Schéma DB créé"
 # ════════════════════════════════════════════════════════════════════════
 cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
 {
-  "_note": "Formatage intentionnel : majuscules = emphase Kokoro, '...' = pause, phrases courtes = punch",
+  "_note": "Formatage intentionnel : majuscules = emphase XTTS v2, '...' = pause, phrases courtes = punch",
   "modes": {
     "normal": {
       "templates": [
@@ -1408,7 +1435,7 @@ if __name__ == "__main__":
     main()
 PYEOF
 
-echo "  ✓ Scripts Python créés (Essentia + Kokoro TTS + playlists 0.23.4)"
+echo "  ✓ Scripts Python créés (Essentia + XTTS v2 + playlists 0.23.4)"
 
 # ════════════════════════════════════════════════════════════════════════
 # BOOTSTRAP AZURACAST (mode autonome uniquement)
@@ -1521,7 +1548,7 @@ $([ -z "${AZ_API_KEY}" ] && echo "║     Puis : docker restart gaiverland-sched
 ║     Essentia + Discogs 400 genres (téléchargement ~50Mo au 1er démarrage)
 ║     → logs : docker logs gaiverland-analyzer -f
 ║
-║  🎙 REBEXIS : mode ${REBEXIS_MODE} | voix Kokoro ff_siwis
+║  🎙 REBEXIS : mode ${REBEXIS_MODE} | voix XTTS v2 (Coqui)
 $([ "${REBEXIS_MODE}" == "ollama" ] && echo "║     → docker exec gaiverland-ollama ollama pull ${REBEXIS_LLM_MODEL}")
 ╠══════════════════════════════════════════════════════════════════╣
 ║  🎛 COMMANDES
@@ -1537,7 +1564,7 @@ echo ""
 echo "✅ Gaiverland Radio IA — setup terminé"
 echo ""
 echo "   Mode       : $( [[ "${AZ_EXISTING}" == "true" ]] && echo "addon (AzuraCast existant)" || echo "autonome (AzuraCast inclus)" )"
-echo "   Rebexis    : ${REBEXIS_MODE} | Kokoro ff_siwis"
+echo "   Rebexis    : ${REBEXIS_MODE} | XTTS v2 (Coqui)"
 echo "   Analyse    : Essentia + Discogs 400 genres"
 echo "   Playlist API : port ${API_PORT}"
 if [[ -z "${AZ_API_KEY}" ]]; then

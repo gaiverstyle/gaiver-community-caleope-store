@@ -1,10 +1,173 @@
 services:
-  gaiverland-placeholder:
+
+  # ── Base de données ─────────────────────────────────────────────────────
+  gw-db:
+    image: postgres:16-alpine
+    container_name: gaiverland-db
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/db.env
+    volumes:
+      - {{.BaseDir}}/app-data/gaiverland-radio/db:/var/lib/postgresql/data
+      - {{.BaseDir}}/app-config/gaiverland-radio/db-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gaiverland"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+
+  # ── Analyseur musical (Essentia + Discogs 400 genres) ───────────────────
+  gw-analyzer:
+    image: python:3.12-slim
+    container_name: gaiverland-analyzer
+    command: ["python", "-u", "/app/analyzer.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      - {{.BaseDir}}/app-data/gaiverland-radio/essentia-models:/essentia-models
+      - {{.BaseDir}}/app-data/azuracast/stations:/var/azuracast/stations:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
+  # ── Moteur de playlist IA (FastAPI :8080) ───────────────────────────────
+  gw-playlist:
+    image: python:3.12-slim
+    container_name: gaiverland-playlist
+    command: ["python", "-u", "/app/playlist.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    ports:
+      - "${API_PORT:-8099}:8080"
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - caleope-public
+
+  # ── Rebexis — animatrice IA (FastAPI :8081) ─────────────────────────────
+  gw-rebexis:
+    image: python:3.12-slim
+    container_name: gaiverland-rebexis
+    command: ["python", "-u", "/app/rebexis.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/rebexis.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      - {{.BaseDir}}/app-config/gaiverland-radio/rebexis-templates.json:/app/templates.json:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+
+  # ── TTS Worker — XTTS v2 Coqui (FastAPI :8082) ──────────────────────────
+  gw-tts:
+    image: python:3.12-slim
+    container_name: gaiverland-tts
+    command: ["python", "-u", "/app/tts_worker.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
+      - {{.BaseDir}}/app-config/gaiverland-radio:/rebexis-config:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
+  # ── Scheduler principal ──────────────────────────────────────────────────
+  gw-scheduler:
+    image: python:3.12-slim
+    container_name: gaiverland-scheduler
+    command: ["python", "-u", "/app/scheduler.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
+  # ── Ollama (mode rebexis=ollama seulement) ───────────────────────────────
+  gaiverland-ollama:
+    image: ollama/ollama:latest
+    container_name: gaiverland-ollama
+    volumes:
+      - {{.BaseDir}}/app-data/gaiverland-radio/ollama:/root/.ollama
+    profiles:
+      - with-ollama
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+
+  # ── Bootstrap AzuraCast one-shot (mode autonome) ────────────────────────
+  gw-bootstrap:
     image: alpine:3.19
-    container_name: gaiverland-placeholder
+    container_name: gaiverland-bootstrap
+    command: ["/bin/sh", "-c", "apk add --no-cache curl jq -q && sh /bootstrap/bootstrap.sh"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio:/bootstrap:ro
+    profiles:
+      - with-azuracast
     restart: "no"
-    command: echo "placeholder"
+    networks:
+      - azuracast-internal
+    depends_on:
+      - azuracast
+
+  # ── AzuraCast 0.23.4 (mode autonome uniquement) ──────────────────────────
+  azuracast:
+    image: ghcr.io/azuracast/azuracast:0.23.4
+    container_name: azuracast
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
+    volumes:
+      - {{.BaseDir}}/app-data/azuracast/stations:/var/azuracast/stations
+      - {{.BaseDir}}/app-data/gaiverland-radio/backups:/var/azuracast/backups
+    ports:
+      - "${WEB_PORT:-8099}:80"
+      - "${SFTP_PORT:-2022}:2022"
+      - "${ICECAST_PORT:-8000}:8000"
+    profiles:
+      - with-azuracast
+    restart: unless-stopped
+    networks:
+      - azuracast-internal
+      - caleope-public
 
 networks:
+  # Réseau interne gaiverland (inter-services)
+  gaiverland-internal:
+    name: gaiverland-internal
+    driver: bridge
+  # Réseau AzuraCast — external=true si AzuraCast déjà présent, false si déployé ici
+  azuracast-internal:
+    external: ${AZURACAST_NETWORK_EXTERNAL:-true}
+    name: ${AZURACAST_NETWORK_NAME:-azuracast-internal}
+  # Réseau Caleope pour reverse proxy
   caleope-public:
     external: true
