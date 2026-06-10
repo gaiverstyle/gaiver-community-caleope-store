@@ -10,22 +10,10 @@
     "docker_socket": false,
     "privileged": false
   },
-  "network": { "public": true, "internal": true },
-  "ports": [
-    { "name": "web",     "container": 80,   "dynamic": true },
-    { "name": "sftp",    "container": 2022,  "dynamic": true },
-    { "name": "icecast", "container": 8500,  "dynamic": true },
-    { "name": "api",     "container": 8080,  "dynamic": true }
-  ],
+  "network": { "public": true, "internal": false },
+  "ports": [{ "name": "web", "container": 80, "dynamic": true }],
   "volumes": [
-    { "source": "app-data/azuracast/stations",         "target": "/var/azuracast/stations" },
-    { "source": "app-data/azuracast/geoip",            "target": "/var/azuracast/geoip" },
-    { "source": "app-data/azuracast/backups",          "target": "/var/azuracast/backups" },
-    { "source": "app-data/azuracast/acme",             "target": "/var/azuracast/acme" },
-    { "source": "app-data/gaiverland-radio/db",        "target": "/var/lib/postgresql/data" },
-    { "source": "app-data/gaiverland-radio/tts-cache", "target": "/tts-cache" },
-    { "source": "app-data/gaiverland-radio/ollama",    "target": "/root/.ollama" },
-    { "source": "app-data/gaiverland-radio/essentia-models", "target": "/essentia-models" }
+    { "source": "app-data/gaiverland-radio/db", "target": "/var/lib/postgresql/data" }
   ],
   "backup": { "enabled": true }
 }
