@@ -73,14 +73,13 @@ services:
     networks:
       - gaiverland-internal
 
-  # ── TTS Worker — XTTS v2 Coqui (FastAPI :8082) ──────────────────────────
+  # ── TTS Worker — edge-tts Microsoft Neural (FastAPI :8082) ──────────────
   gw-tts:
-    image: python:3.11-slim
+    image: python:3.12-slim
     container_name: gaiverland-tts
     command: ["python", "-u", "/app/tts_worker.py"]
     environment:
-      - COQUI_TOS_AGREED=1
-      - TTS_HOME=/tts-cache
+      - TTS_VOICE=fr-FR-DeniseNeural
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
