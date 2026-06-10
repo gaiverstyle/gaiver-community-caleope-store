@@ -1,0 +1,25 @@
+{
+  "id": "gaiverland-radio",
+  "name": "Gaiverland Radio IA",
+  "category": "media",
+  "channel": "community",
+  "repository": "community",
+  "description": "Couche IA pour AzuraCast existant : moteur de playlist intelligent + animatrice Rebexis (TTS + LLM) + analyseur musical. Se connecte à ton AzuraCast via API. Aucun GPU requis.",
+  "requires": [],
+  "capabilities": {
+    "reverse_proxy": false,
+    "gpu": false,
+    "docker_socket": false,
+    "privileged": false
+  },
+  "network": { "public": false, "internal": true },
+  "ports": [
+    { "name": "api", "container": 8080, "dynamic": true }
+  ],
+  "volumes": [
+    { "source": "app-data/gaiverland-radio/db",        "target": "/var/lib/postgresql/data" },
+    { "source": "app-data/gaiverland-radio/tts-cache",  "target": "/tts-cache"              },
+    { "source": "app-data/gaiverland-radio/ollama",     "target": "/root/.ollama"            }
+  ],
+  "backup": { "enabled": true }
+}

@@ -1,0 +1,103 @@
+[
+  {
+    "id": "AZURACAST_URL",
+    "label": "URL de ton AzuraCast (interne Docker)",
+    "description": "URL interne du container AzuraCast existant. Ex: http://azuracast:80 si déployé via le package Caleope officiel.",
+    "type": "string",
+    "required": true,
+    "default": "http://azuracast:80"
+  },
+  {
+    "id": "AZURACAST_API_KEY",
+    "label": "Clé API AzuraCast",
+    "description": "Créer dans AzuraCast → Administration → API Keys. Permissions Read + Write.",
+    "type": "secret",
+    "required": true,
+    "default": ""
+  },
+  {
+    "id": "AZURACAST_STATION_ID",
+    "label": "ID de la station AzuraCast",
+    "description": "Visible dans AzuraCast → Stations → URL (ex: /station/1). Généralement 1 pour la première station.",
+    "type": "number",
+    "required": false,
+    "default": 1
+  },
+  {
+    "id": "AZURACAST_STATIONS_PATH",
+    "label": "Chemin des données AzuraCast sur l'hôte",
+    "description": "Chemin vers le dossier stations d'AzuraCast sur l'hôte. Utilisé par l'analyseur musical. Ex: /opt/caleope/app-data/azuracast/stations",
+    "type": "string",
+    "required": false,
+    "default": "/opt/caleope/app-data/azuracast/stations"
+  },
+  {
+    "id": "REBEXIS_MODE",
+    "label": "Mode de génération de Rebexis",
+    "description": "template = interventions pré-écrites avec variation (rapide, sans LLM) | ollama = LLM local Ollama (CPU, consomme plus de RAM) | api = LLM externe via API (nécessite une clé)",
+    "type": "select",
+    "options": ["template", "ollama", "api"],
+    "required": false,
+    "default": "template"
+  },
+  {
+    "id": "REBEXIS_LLM_MODEL",
+    "label": "Modèle Ollama pour Rebexis",
+    "description": "Ex: llama3.2:3b, qwen2.5:3b. Modèles légers recommandés pour CPU.",
+    "type": "string",
+    "required": false,
+    "default": "llama3.2:3b",
+    "when": "REBEXIS_MODE=ollama"
+  },
+  {
+    "id": "REBEXIS_API_KEY",
+    "label": "Clé API LLM externe",
+    "description": "Clé OpenAI ou Anthropic pour la génération de Rebexis.",
+    "type": "secret",
+    "required": false,
+    "default": "",
+    "when": "REBEXIS_MODE=api"
+  },
+  {
+    "id": "REBEXIS_API_BASE",
+    "label": "URL de base de l'API LLM",
+    "description": "Ex: https://api.openai.com/v1",
+    "type": "string",
+    "required": false,
+    "default": "https://api.openai.com/v1",
+    "when": "REBEXIS_MODE=api"
+  },
+  {
+    "id": "TTS_VOICE",
+    "label": "Voix TTS pour Rebexis (Piper)",
+    "description": "Voix françaises disponibles : fr_FR-upmc-medium, fr_FR-gilles-low, fr_FR-mls-medium",
+    "type": "select",
+    "options": ["fr_FR-upmc-medium", "fr_FR-gilles-low", "fr_FR-mls-medium"],
+    "required": false,
+    "default": "fr_FR-upmc-medium"
+  },
+  {
+    "id": "DISCOVERY_RATIO",
+    "label": "Ratio de découverte musicale (%)",
+    "description": "Pourcentage de titres issus de la découverte. Entre 15 et 30.",
+    "type": "number",
+    "required": false,
+    "default": 20
+  },
+  {
+    "id": "REBEXIS_INTERVAL_MIN",
+    "label": "Intervalle minimum entre interventions Rebexis (minutes)",
+    "description": "Rebexis ne parlera pas plus souvent que cet intervalle.",
+    "type": "number",
+    "required": false,
+    "default": 15
+  },
+  {
+    "id": "REBEXIS_INTERVAL_MAX",
+    "label": "Intervalle maximum entre interventions Rebexis (minutes)",
+    "description": "Rebexis ne dépassera pas cet intervalle sans parler.",
+    "type": "number",
+    "required": false,
+    "default": 30
+  }
+]
