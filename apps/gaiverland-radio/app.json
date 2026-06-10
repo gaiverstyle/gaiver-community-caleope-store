@@ -4,7 +4,7 @@
   "category": "media",
   "channel": "community",
   "repository": "community",
-  "description": "Radio électro autonome avec IA : analyse genre précise (Essentia + Discogs 400 classes), moteur de playlist intelligent, animatrice Rebexis (Kokoro TTS, voix radio féminine). Se connecte à AzuraCast existant ou le déploie automatiquement. Aucun GPU requis.",
+  "description": "Radio électro autonome avec IA : analyse genre précise (Essentia + Discogs 400 classes), moteur de playlist intelligent, animatrice Rebexis (XTTS v2, voix féminine quasi-humaine, clonage vocal optionnel). Se connecte à AzuraCast existant ou le déploie automatiquement. Aucun GPU requis.",
   "capabilities": {
     "reverse_proxy": true,
     "gpu": false,

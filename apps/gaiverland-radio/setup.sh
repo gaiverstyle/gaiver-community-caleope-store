@@ -144,6 +144,7 @@ REBEXIS_INTERVAL_MIN=${REBEXIS_INTERVAL_MIN}
 REBEXIS_INTERVAL_MAX=${REBEXIS_INTERVAL_MAX}
 DISCOVERY_RATIO=${DISCOVERY_RATIO}
 TTS_CACHE_DIR=/tts-cache
+TTS_HOME=/tts-cache
 ESSENTIA_MODELS_DIR=/essentia-models
 OLLAMA_URL=http://gaiverland-ollama:11434
 OLLAMA_MODEL=${REBEXIS_LLM_MODEL}
@@ -1017,84 +1018,93 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8081)
 PYEOF
 
-# ── tts_worker.py — Kokoro TTS + post-traitement radio ────────────────
+# ── tts_worker.py — XTTS v2 (Coqui) + post-traitement radio ──────────
 cat > "${SCRIPTS_DIR}/tts_worker.py" <<'PYEOF'
 """
-TTS Worker — Kokoro TTS (voix française ff_siwis) + chaîne de post-traitement radio.
-Compression dynamique, EQ présence voix, loudnorm EBU R128.
-Upload automatique dans AzuraCast et assignation à la playlist Rebexis.
+TTS Worker — XTTS v2 (Coqui TTS) + chaîne de post-traitement radio.
+Qualité quasi-humaine, support clonage vocal (WAV de référence optionnel).
+Pré-génération asynchrone : 2-3 min/clip sur CPU, jamais en temps réel.
+Upload automatique dans AzuraCast, assignation playlist Rebexis.
 """
 import os, sys, subprocess, hashlib, pathlib
 
+TTS_CACHE = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
+TTS_CACHE.mkdir(parents=True, exist_ok=True)
+# Coqui stocke le modèle XTTS v2 (~2.4 Go) dans TTS_HOME → volume NAS tts-cache
+os.environ.setdefault("TTS_HOME", str(TTS_CACHE))
+
+
 def install_deps():
-    # kokoro >= 1.0 pour support multilangue français
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "kokoro>=1.0.0", "soundfile", "numpy",
+                    "TTS>=0.22.0", "numpy",
                     "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
-    # ffmpeg (nécessaire pour post-traitement audio)
     subprocess.run(["apt-get", "update", "-qq"], check=True)
     subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
 
+
 try:
-    import kokoro, soundfile, fastapi, uvicorn, psycopg2, httpx
+    from TTS.api import TTS as CoquiTTS
+    import fastapi, uvicorn, psycopg2, httpx
 except ImportError:
-    print("→ Installation Kokoro TTS + ffmpeg...")
+    print("→ Installation XTTS v2 (Coqui TTS) + ffmpeg...")
     install_deps()
-    import kokoro, soundfile, fastapi, uvicorn, psycopg2, httpx
+    from TTS.api import TTS as CoquiTTS
+    import fastapi, uvicorn, psycopg2, httpx
 
 from fastapi import FastAPI
-from kokoro import KPipeline
-import numpy as np
 import psycopg2.extras
-import sys
 sys.path.insert(0, "/app")
 from az_utils import upload_file
 
 DB_URL     = os.environ["DATABASE_URL"]
-TTS_CACHE  = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
-TTS_CACHE.mkdir(parents=True, exist_ok=True)
 AZ_KEY     = os.environ.get("AZURACAST_API_KEY", "")
 AZ_URL     = os.environ.get("AZURACAST_URL", "http://azuracast:80")
 AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
 
-# Voix Kokoro française — ff_siwis (SIWIS corpus, voix féminine expressive)
-KOKORO_VOICE = "ff_siwis"
-KOKORO_LANG  = "f"   # French
-KOKORO_SPEED = 1.12  # plus rapide = livraison plus punchy, style DJ radio
+# Clonage vocal optionnel — mettre un WAV de 6–30s dans :
+#   app-config/gaiverland-radio/rebexis-voice.wav
+# Sans fichier → locuteur XTTS v2 intégré (Ana Florence, bonne diction en fr)
+_VOICE_REF = pathlib.Path("/rebexis-config/rebexis-voice.wav")
+USE_VOICE_CLONING = _VOICE_REF.exists() and _VOICE_REF.stat().st_size > 10_000
+VOICE_REF_PATH    = str(_VOICE_REF) if USE_VOICE_CLONING else None
+XTTS_DEFAULT_SPEAKER = "Ana Florence"
 
-# Pipeline TTS (chargé une fois)
-_pipeline = None
-
+_tts = None
 app = FastAPI(title="TTS Worker")
 
 
-def get_pipeline():
-    global _pipeline
-    if _pipeline is None:
-        print("→ Initialisation Kokoro TTS (premier démarrage)...")
-        _pipeline = KPipeline(lang_code=KOKORO_LANG)
-        print("  ✓ Kokoro TTS prêt")
-    return _pipeline
+def get_tts():
+    global _tts
+    if _tts is None:
+        print("→ Chargement XTTS v2 (téléchargement modèle ~2.4 Go si premier démarrage)...")
+        _tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
+        print("  ✓ XTTS v2 prêt")
+    return _tts
 
 
 def synthesize_raw(text: str) -> pathlib.Path:
-    """Kokoro TTS → WAV 24kHz."""
-    h = hashlib.sha256(f"kokoro:{KOKORO_VOICE}:{text}".encode()).hexdigest()[:16]
+    """XTTS v2 → WAV 24kHz. 2-3 min sur Ryzen 5 3600 CPU-only (pré-génération)."""
+    ref_key = "clone" if USE_VOICE_CLONING else XTTS_DEFAULT_SPEAKER
+    h = hashlib.sha256(f"xtts2:{ref_key}:{text}".encode()).hexdigest()[:16]
     wav_path = TTS_CACHE / f"raw_{h}.wav"
     if wav_path.exists():
         return wav_path
 
-    pipeline = get_pipeline()
-    audio_chunks = []
-    for _, _, audio in pipeline(text, voice=KOKORO_VOICE, speed=KOKORO_SPEED):
-        if audio is not None:
-            audio_chunks.append(audio)
-
-    if not audio_chunks:
-        raise RuntimeError("Kokoro n'a produit aucun audio")
-
-    audio_full = np.concatenate(audio_chunks)
-    soundfile.write(str(wav_path), audio_full, 24000)
+    engine = get_tts()
+    if USE_VOICE_CLONING:
+        engine.tts_to_file(
+            text=text,
+            speaker_wav=VOICE_REF_PATH,
+            language="fr",
+            file_path=str(wav_path),
+        )
+    else:
+        engine.tts_to_file(
+            text=text,
+            speaker=XTTS_DEFAULT_SPEAKER,
+            language="fr",
+            file_path=str(wav_path),
+        )
     return wav_path
 
 
@@ -1110,13 +1120,12 @@ FFMPEG_RADIO_CHAIN = ",".join([
     # 4. Boost air (10kHz) — brillance, réduit l'aspect synthétique
     "equalizer=f=10000:width_type=o:width=2:g=3",
     # 5. Compresseur agressif style festival radio (ratio élevé, makeup fort)
-    #    Attack rapide = claque sur les consonnes, release lent = sustain
     "acompressor=threshold=-22dB:ratio=6:attack=2:release=120:makeup=7",
-    # 6. Saturation harmonique légère — ajoute de la chaleur et de l'agressivité
+    # 6. Saturation harmonique légère — chaleur et agressivité
     "aexciter=level_in=1:level_out=1:amount=2:drive=3",
-    # 7. Limiteur brick-wall (0.92 = marge sécurité broadcast)
+    # 7. Limiteur brick-wall
     "alimiter=limit=0.92:attack=0.5:release=3",
-    # 8. Loudnorm EBU R128 — -13 LUFS (légèrement plus fort que streaming std)
+    # 8. Loudnorm EBU R128 (-13 LUFS, légèrement plus fort que streaming std)
     "loudnorm=I=-13:LRA=5:TP=-1.0",
 ])
 
@@ -1155,23 +1164,22 @@ def get_rebexis_playlist_id(conn) -> int:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "voice": KOKORO_VOICE, "engine": "kokoro"}
+    mode = "voice-cloning" if USE_VOICE_CLONING else f"speaker:{XTTS_DEFAULT_SPEAKER}"
+    return {"status": "ok", "engine": "xtts-v2", "mode": mode}
 
 
 @app.post("/synthesize")
 def synthesize_endpoint(session_id: int, text: str):
     try:
-        wav   = synthesize_raw(text)
-        mp3   = apply_radio_processing(wav)
+        wav = synthesize_raw(text)
+        mp3 = apply_radio_processing(wav)
 
-        # Upload dans AzuraCast
         az_file_id = None
         rb_pl_id   = get_rebexis_playlist_id(get_conn())
 
         az_result = upload_file(str(mp3), f"Rebexis #{session_id}")
         if az_result:
             az_file_id = az_result.get("id")
-            # Assigner à la playlist Rebexis
             if rb_pl_id and az_file_id:
                 from az_utils import batch_assign_playlist
                 batch_assign_playlist([az_file_id], [rb_pl_id])
@@ -1202,8 +1210,9 @@ def list_pending():
 
 
 if __name__ == "__main__":
-    get_pipeline()  # préchauffage au démarrage
-    print(f"🔊 TTS Worker — Kokoro/{KOKORO_VOICE} | Cache: {TTS_CACHE}")
+    get_tts()  # téléchargement modèle + préchauffage au démarrage
+    mode = "clonage vocal" if USE_VOICE_CLONING else f"locuteur: {XTTS_DEFAULT_SPEAKER}"
+    print(f"🔊 TTS Worker — XTTS v2 | Mode: {mode} | Cache: {TTS_CACHE}")
     uvicorn.run(app, host="0.0.0.0", port=8082)
 PYEOF
 

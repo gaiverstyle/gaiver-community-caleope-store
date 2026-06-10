@@ -60,17 +60,22 @@
 
 ---
 
-## Synthèse vocale (Kokoro TTS)
+## Synthèse vocale (XTTS v2 — Coqui TTS)
 
-- [x] Moteur : **Kokoro TTS** (voix française `ff_siwis` — expressive, non robotique)
+- [x] Moteur : **XTTS v2** (Coqui TTS) — qualité quasi-humaine, non robotique
+- [x] Modèle `tts_models/multilingual/multi-dataset/xtts_v2` (~2.4 Go, stocké sur NAS)
+- [x] Mode **locuteur intégré** (défaut) : voix féminine "Ana Florence", excellent français
+- [x] Mode **clonage vocal** (optionnel) : déposer un WAV de 6–30s dans  
+  `app-config/gaiverland-radio/rebexis-voice.wav` pour cloner la voix voulue
 - [x] Post-traitement radio automatique via ffmpeg :
-  - Highpass 80Hz (nettoyage basses inutiles)
-  - EQ -2dB @ 200Hz (anti-nasillard), +4dB @ 2.5kHz (présence voix), +2dB @ 10kHz (air)
-  - Compresseur broadcast (threshold -20dB, ratio 4:1, makeup +5dB)
-  - Limiteur de crête (0.95)
-  - Loudnorm EBU R128 (-14 LUFS, TP -1.5dB — standard streaming)
+  - Highpass 90Hz (nettoyage basses inutiles)
+  - EQ -3dB @ 180Hz (anti-nasillard), +5dB @ 2.5kHz (présence voix), +3dB @ 10kHz (air)
+  - Compresseur broadcast agressif (threshold -22dB, ratio 6:1, makeup +7dB)
+  - Saturation harmonique (aexciter — chaleur + agressivité festival)
+  - Limiteur brick-wall (0.92)
+  - Loudnorm EBU R128 (-13 LUFS, TP -1.0dB)
 - [x] Cache des fichiers audio (pas de re-génération si texte identique)
-- [x] Pré-génération à l'avance — jamais en temps réel (charge CPU stable)
+- [x] Pré-génération à l'avance — jamais en temps réel (~2-3 min/clip CPU, acceptable)
 
 ---
 
@@ -88,7 +93,7 @@
 | Ressource | Minimum | Recommandé |
 |-----------|---------|------------|
 | CPU       | 4 cœurs x86-64 | Ryzen 5 3600+ |
-| RAM       | 4 Go | 8 Go (12 Go si Ollama) |
+| RAM       | 8 Go | 12 Go (16 Go si Ollama) |
 | Stockage  | 2 Go (cache + DB) | 10 Go+ (bibliothèque musicale) |
 | GPU       | Non requis | Non requis |
 

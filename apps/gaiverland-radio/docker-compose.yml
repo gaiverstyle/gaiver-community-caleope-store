@@ -10,7 +10,7 @@
 ##   gw-analyzer    → Essentia + Discogs 400 genres → mood précis + sync AzuraCast
 ##   gw-playlist    → Moteur de playlist IA (FastAPI)
 ##   gw-rebexis     → Animatrice Rebexis (template / Ollama / API externe)
-##   gw-tts         → Kokoro TTS + post-traitement radio (compression, loudnorm)
+##   gw-tts         → XTTS v2 (Coqui) + post-traitement radio (compression, loudnorm)
 ##   gw-scheduler   → Orchestrateur (gère les playlists AzuraCast 0.23+)
 ##   ollama         → LLM local optionnel (profil "ollama")
 ##
@@ -180,6 +180,8 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/tts_worker.py:/app/tts_worker.py:ro
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/az_utils.py:/app/az_utils.py:ro
       - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
+      # Clonage vocal optionnel — dépose rebexis-voice.wav ici pour activer
+      - {{.BaseDir}}/app-config/gaiverland-radio:/rebexis-config:ro
     depends_on:
       gw-db:
         condition: service_healthy
