@@ -309,6 +309,7 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
   }
 }
 JSON
+cp "${CONFIG_DIR}/rebexis-templates.json" "${SCRIPTS_DIR}/templates.json"
 echo "  ✓ Templates Rebexis créés"
 
 # ════════════════════════════════════════════════════════════════════════
@@ -582,18 +583,23 @@ def analyze_file(path: str) -> dict:
         audio_16k = loader16()
 
         # ── Extracteur BPM, énergie, tonalité ────────────────────────
-        extractor = es.MusicExtractor(lowlevelSilenceRate60dBRMS=0.9,
-                                       lowlevelSilenceRate30dBRMS=0.9,
-                                       lowlevelFrameSize=2048,
-                                       lowlevelHopSize=1024)
+        extractor = es.MusicExtractor()
         features, _ = extractor(path)
 
         bpm          = float(features["rhythm.bpm"])
         energy       = float(features["lowlevel.average_loudness"])
         energy_norm  = min(1.0, max(0.0, (energy + 1.0) / 2.0))
         danceability = float(features["rhythm.danceability"])
-        key_note     = str(features["tonal.key_key"])
-        key_scale    = str(features["tonal.key_scale"])
+        # tonal keys: variantes selon version Essentia
+        try:
+            key_note  = str(features["tonal.key_temperley.key"])
+            key_scale = str(features["tonal.key_temperley.scale"])
+        except Exception:
+            try:
+                key_note  = str(features["tonal.key_edma.key"])
+                key_scale = str(features["tonal.key_edma.scale"])
+            except Exception:
+                key_note, key_scale = "", ""
 
         # Détection vocaux (énergie mid vs low)
         spec = np.abs(es.Spectrum()(audio_44k[:44100]))
@@ -665,7 +671,8 @@ def get_conn():
 
 
 def save_track(conn, data: dict):
-    cols = [k for k in data if k != "genre_scores" or True]
+    if not data.get("analyzed"):
+        return None
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO tracks
