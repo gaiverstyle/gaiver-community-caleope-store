@@ -1,24 +1,86 @@
 ##
-## GAIVERLAND RADIO IA — Couche IA pour AzuraCast existant
+## GAIVERLAND RADIO IA
 ##
-## Ce package NE déploie PAS AzuraCast.
-## Il se connecte à ton instance AzuraCast existante via son API HTTP.
+## Deux modes selon détection automatique dans setup.sh :
+##   • Mode addon      → AzuraCast déjà présent, on s'y connecte
+##   • Mode autonome   → AzuraCast absent, on le déploie (profil "with-azuracast")
 ##
-## Services :
-##   gw-db          → PostgreSQL (métadonnées musicales, historique)
-##   gw-analyzer    → analyse BPM/énergie/style lors de l'ajout de musique
-##   gw-playlist    → moteur de playlist IA (API FastAPI — port dynamique)
-##   gw-rebexis     → moteur Rebexis (génération texte animatrice)
-##   gw-tts         → moteur TTS Piper (texte → fichiers audio MP3)
-##   gw-scheduler   → orchestrateur (coordonne playlist + Rebexis + TTS)
-##   ollama         → LLM local (optionnel — profil "ollama")
+## Services IA (toujours déployés) :
+##   gw-db          → PostgreSQL (métadonnées, historique, sessions Rebexis)
+##   gw-analyzer    → Essentia + Discogs 400 genres → mood précis + sync AzuraCast
+##   gw-playlist    → Moteur de playlist IA (FastAPI)
+##   gw-rebexis     → Animatrice Rebexis (template / Ollama / API externe)
+##   gw-tts         → Kokoro TTS + post-traitement radio (compression, loudnorm)
+##   gw-scheduler   → Orchestrateur (gère les playlists AzuraCast 0.23+)
+##   ollama         → LLM local optionnel (profil "ollama")
 ##
-## Prérequis : package "azuracast" Caleope déjà installé et fonctionnel.
+## Services AzuraCast (profil "with-azuracast" — si absent au setup) :
+##   azuracast      → Serveur radio (diffusion, bibliothèque, stats)
+##   gw-bootstrap   → Configuration initiale AzuraCast + création playlists IA
 ##
 
 services:
 
-  # ── BASE DE DONNÉES MÉTADONNÉES ────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════
+  # AZURACAST — profil "with-azuracast" (déployé seulement si absent)
+  # ════════════════════════════════════════════════════════════════════
+
+  azuracast:
+    profiles: [with-azuracast]
+    image: ghcr.io/azuracast/azuracast:${AZURACAST_VERSION:-0.23.4}
+    container_name: azuracast
+    restart: unless-stopped
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
+    volumes:
+      - {{.BaseDir}}/app-data/azuracast/stations:/var/azuracast/stations
+      - {{.BaseDir}}/app-data/azuracast/geoip:/var/azuracast/geoip
+      - {{.BaseDir}}/app-data/azuracast/backups:/var/azuracast/backups
+      - {{.BaseDir}}/app-data/azuracast/acme:/var/azuracast/acme
+    ports:
+      {{- range .Ports}}
+      {{- if eq .Name "web"}}
+      - "{{.Host}}:80"
+      {{- else if eq .Name "sftp"}}
+      - "{{.Host}}:2022"
+      {{- else if eq .Name "icecast"}}
+      - "{{.Host}}:{{.Host}}"
+      {{- end}}
+      {{- end}}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gaiverland-az.rule=Host(`{{.Domain}}`)"
+      - "traefik.http.routers.gaiverland-az.entrypoints=web"
+      - "traefik.http.services.gaiverland-az.loadbalancer.server.port=80"
+      - "traefik.docker.network=caleope-public"
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+    networks:
+      - caleope-public
+      - azuracast-internal
+
+  gw-bootstrap:
+    profiles: [with-azuracast]
+    image: alpine:3.19
+    container_name: gaiverland-bootstrap
+    restart: "no"
+    command: ["/bin/sh", "-c", "apk add --no-cache curl bash jq >/dev/null 2>&1 && bash /bootstrap.sh"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/bootstrap.sh:/bootstrap.sh:ro
+    depends_on:
+      - azuracast
+    networks:
+      - azuracast-internal
+
+  # ════════════════════════════════════════════════════════════════════
+  # SERVICES IA — toujours déployés
+  # ════════════════════════════════════════════════════════════════════
+
   gw-db:
     image: postgres:16-alpine
     container_name: gaiverland-db
@@ -34,15 +96,10 @@ services:
       timeout: 5s
       retries: 5
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
 
-  # ── ANALYSEUR MUSICAL ──────────────────────────────────────────────
-  # Analyse BPM, énergie, durée, présence vocale lors de l'ajout d'un fichier.
-  # Surveille en lecture seule le dossier stations d'AzuraCast.
   gw-analyzer:
     image: python:3.12-slim
     container_name: gaiverland-analyzer
@@ -52,21 +109,19 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/analyzer.py:/app/analyzer.py:ro
-      # Lecture seule du dossier stations AzuraCast existant
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts/az_utils.py:/app/az_utils.py:ro
+      # Chemin du dossier stations AzuraCast (existant ou déployé ici)
       - ${AZURACAST_STATIONS_PATH:-/opt/caleope/app-data/azuracast/stations}:/var/azuracast/stations:ro
+      - {{.BaseDir}}/app-data/gaiverland-radio/essentia-models:/essentia-models
     depends_on:
       gw-db:
         condition: service_healthy
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
-      # Rejoindre le réseau interne AzuraCast pour accéder à l'API via http://azuracast:80
       - azuracast-internal
 
-  # ── MOTEUR DE PLAYLIST ─────────────────────────────────────────────
   gw-playlist:
     image: python:3.12-slim
     container_name: gaiverland-playlist
@@ -76,28 +131,25 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/playlist.py:/app/playlist.py:ro
-    depends_on:
-      gw-db:
-        condition: service_healthy
     ports:
       {{- range .Ports}}
       {{- if eq .Name "api"}}
       - "{{.Host}}:8080"
       {{- end}}
       {{- end}}
+    depends_on:
+      gw-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
 
-  # ── REBEXIS ENGINE ─────────────────────────────────────────────────
   gw-rebexis:
     image: python:3.12-slim
     container_name: gaiverland-rebexis
@@ -113,15 +165,10 @@ services:
       gw-db:
         condition: service_healthy
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
 
-  # ── TTS ENGINE (PIPER) ─────────────────────────────────────────────
-  # Génère les fichiers audio MP3 de Rebexis.
-  # Les fichiers sont ensuite uploadés dans AzuraCast via son API.
   gw-tts:
     image: python:3.12-slim
     container_name: gaiverland-tts
@@ -131,19 +178,17 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/tts_worker.py:/app/tts_worker.py:ro
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts/az_utils.py:/app/az_utils.py:ro
       - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
     depends_on:
       gw-db:
         condition: service_healthy
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
       - azuracast-internal
 
-  # ── SCHEDULER / ORCHESTRATEUR ──────────────────────────────────────
   gw-scheduler:
     image: python:3.12-slim
     container_name: gaiverland-scheduler
@@ -153,7 +198,7 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts/scheduler.py:/app/scheduler.py:ro
-      - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts/az_utils.py:/app/az_utils.py:ro
     depends_on:
       gw-playlist:
         condition: service_healthy
@@ -162,35 +207,31 @@ services:
       gw-tts:
         condition: service_started
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
       - azuracast-internal
 
-  # ── OLLAMA (optionnel — profil "ollama") ───────────────────────────
   ollama:
+    profiles: [ollama]
     image: ollama/ollama:latest
     container_name: gaiverland-ollama
     restart: unless-stopped
-    profiles:
-      - ollama
     volumes:
       - {{.BaseDir}}/app-data/gaiverland-radio/ollama:/root/.ollama
     environment:
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_MAX_LOADED_MODELS=1
     logging:
-      options:
-        max-size: "5m"
-        max-file: "2"
+      options: { max-size: "5m", max-file: "2" }
     networks:
       - gaiverland-internal
 
 networks:
   gaiverland-internal:
     driver: bridge
-  # Réseau existant du package azuracast — permet d'accéder à http://azuracast:80
+  # Réseau AzuraCast — externe si instance existante, créé ici si mode autonome
   azuracast-internal:
+    external: ${AZURACAST_NETWORK_EXTERNAL:-true}
+  caleope-public:
     external: true

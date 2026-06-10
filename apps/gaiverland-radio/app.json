@@ -4,22 +4,29 @@
   "category": "media",
   "channel": "community",
   "repository": "community",
-  "description": "Couche IA pour AzuraCast existant : moteur de playlist intelligent + animatrice Rebexis (TTS + LLM) + analyseur musical. Se connecte à ton AzuraCast via API. Aucun GPU requis.",
-  "requires": [],
+  "description": "Radio électro autonome avec IA : analyse genre précise (Essentia + Discogs 400 classes), moteur de playlist intelligent, animatrice Rebexis (Kokoro TTS, voix radio féminine). Se connecte à AzuraCast existant ou le déploie automatiquement. Aucun GPU requis.",
   "capabilities": {
-    "reverse_proxy": false,
+    "reverse_proxy": true,
     "gpu": false,
     "docker_socket": false,
     "privileged": false
   },
-  "network": { "public": false, "internal": true },
+  "network": { "public": true, "internal": true },
   "ports": [
-    { "name": "api", "container": 8080, "dynamic": true }
+    { "name": "web",     "container": 80,   "dynamic": true },
+    { "name": "sftp",    "container": 2022,  "dynamic": true },
+    { "name": "icecast", "container": 8500,  "dynamic": true },
+    { "name": "api",     "container": 8080,  "dynamic": true }
   ],
   "volumes": [
-    { "source": "app-data/gaiverland-radio/db",        "target": "/var/lib/postgresql/data" },
-    { "source": "app-data/gaiverland-radio/tts-cache",  "target": "/tts-cache"              },
-    { "source": "app-data/gaiverland-radio/ollama",     "target": "/root/.ollama"            }
+    { "source": "app-data/azuracast/stations",              "target": "/var/azuracast/stations" },
+    { "source": "app-data/azuracast/geoip",                 "target": "/var/azuracast/geoip" },
+    { "source": "app-data/azuracast/backups",               "target": "/var/azuracast/backups" },
+    { "source": "app-data/azuracast/acme",                  "target": "/var/azuracast/acme" },
+    { "source": "app-data/gaiverland-radio/db",             "target": "/var/lib/postgresql/data" },
+    { "source": "app-data/gaiverland-radio/tts-cache",      "target": "/tts-cache" },
+    { "source": "app-data/gaiverland-radio/ollama",         "target": "/root/.ollama" },
+    { "source": "app-data/gaiverland-radio/essentia-models","target": "/essentia-models" }
   ],
   "backup": { "enabled": true }
 }

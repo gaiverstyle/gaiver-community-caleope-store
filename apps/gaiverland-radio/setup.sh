@@ -1,113 +1,156 @@
 #!/bin/bash
 set -euo pipefail
-
-trap 'echo "❌ setup.sh : erreur ligne ${LINENO} — ${BASH_COMMAND}" >&2' ERR
+trap 'echo "❌ setup.sh erreur ligne ${LINENO} — ${BASH_COMMAND}" >&2' ERR
 
 APP_ID="gaiverland-radio"
 CONFIG_DIR="${CALEOPE_BASE_DIR}/app-config/${APP_ID}"
 DATA_DIR="${CALEOPE_BASE_DIR}/app-data/${APP_ID}"
 SCRIPTS_DIR="${CONFIG_DIR}/scripts"
 
-mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}"
+mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}" \
+         "${DATA_DIR}/db" "${DATA_DIR}/tts-cache" \
+         "${DATA_DIR}/ollama" "${DATA_DIR}/essentia-models"
 
-# ── Nettoyage containers défaillants ──────────────────────────────────
+# ── Nettoyage containers ───────────────────────────────────────────────
 for _ct in gaiverland-db gaiverland-analyzer gaiverland-playlist \
-           gaiverland-rebexis gaiverland-tts gaiverland-scheduler gaiverland-ollama; do
+           gaiverland-rebexis gaiverland-tts gaiverland-scheduler \
+           gaiverland-ollama gaiverland-bootstrap; do
     if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${_ct}$"; then
-        echo "→ Nettoyage container '${_ct}'..."
         docker stop "${_ct}" 2>/dev/null || true
         docker rm   "${_ct}" 2>/dev/null || true
     fi
 done
 
-# ── Vérifier qu'AzuraCast tourne déjà ────────────────────────────────
-echo "→ Vérification d'AzuraCast..."
-if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^azuracast$"; then
-    echo ""
-    echo "  ⚠  ATTENTION : le container 'azuracast' n'est pas en cours d'exécution."
-    echo "     Ce package nécessite que le package 'azuracast' Caleope soit déjà installé."
-    echo "     Lance d'abord : caleope install azuracast"
-    echo ""
-    # On continue quand même (l'utilisateur pourrait le démarrer après)
+# ════════════════════════════════════════════════════════════════════════
+# AUTO-DÉTECTION AZURACAST
+# ════════════════════════════════════════════════════════════════════════
+echo ""
+echo "┌─────────────────────────────────────────────────────────────────┐"
+echo "│  🔍 Détection AzuraCast                                         │"
+echo "└─────────────────────────────────────────────────────────────────┘"
+
+AZ_EXISTING=false
+AZ_NETWORK_EXTERNAL=true
+
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^azuracast$"; then
+    AZ_EXISTING=true
+    echo "  ✓ Container 'azuracast' détecté — mode addon (connexion à l'instance existante)"
+    AZ_NETWORK_EXTERNAL=true
+    COMPOSE_PROFILES_VALUE=""
+else
+    echo "  ℹ AzuraCast absent — mode autonome (AzuraCast sera déployé avec ce package)"
+    AZ_NETWORK_EXTERNAL=false
+    COMPOSE_PROFILES_VALUE="with-azuracast"
+    # Créer le réseau avant que compose le déclare en external
+    docker network create azuracast-internal 2>/dev/null || true
+    docker network create caleope-public 2>/dev/null || true
+    # Nettoyer l'azuracast si orphelin
+    docker stop azuracast 2>/dev/null || true
+    docker rm   azuracast 2>/dev/null || true
 fi
 
-# Vérifier que le réseau azuracast-internal existe
-if ! docker network ls --format '{{.Name}}' 2>/dev/null | grep -q "^azuracast-internal$"; then
-    echo "  ⚠  Réseau 'azuracast-internal' introuvable — il sera créé par AzuraCast au démarrage."
-fi
-echo "  ✓ Vérification terminée"
+# Écrire le .env Docker Compose (lu automatiquement par docker compose)
+cat > "${CONFIG_DIR}/.env" <<EOF
+COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}
+AZURACAST_NETWORK_EXTERNAL=${AZ_NETWORK_EXTERNAL}
+AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
+EOF
 
-# ── Dossiers de données ───────────────────────────────────────────────
-echo "→ Création des dossiers..."
-mkdir -p "${DATA_DIR}/db" \
-         "${DATA_DIR}/tts-cache" \
-         "${DATA_DIR}/ollama"
-chmod -R 755 "${DATA_DIR}/tts-cache"
-echo "  ✓ Dossiers créés"
-
-# ── Lecture des paramètres ────────────────────────────────────────────
-AZURACAST_URL="${CALEOPE_PARAM_AZURACAST_URL:-http://azuracast:80}"
-AZURACAST_API_KEY="${CALEOPE_PARAM_AZURACAST_API_KEY:-__CONFIGURE__}"
-AZURACAST_STATION_ID="${CALEOPE_PARAM_AZURACAST_STATION_ID:-1}"
-AZURACAST_STATIONS_PATH="${CALEOPE_PARAM_AZURACAST_STATIONS_PATH:-${CALEOPE_BASE_DIR}/app-data/azuracast/stations}"
+# ── Paramètres ────────────────────────────────────────────────────────
+AZ_URL="${CALEOPE_PARAM_AZURACAST_URL:-http://azuracast:80}"
+AZ_API_KEY="${CALEOPE_PARAM_AZURACAST_API_KEY:-}"
+AZ_STATION_ID="${CALEOPE_PARAM_AZURACAST_STATION_ID:-1}"
+STATION_NAME="${CALEOPE_PARAM_STATION_NAME:-Gaiverland Radio}"
+STATION_SHORT=$(echo "${STATION_NAME}" | tr '[:upper:]' '[:lower:]' \
+    | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null \
+    | sed 's/[^a-z0-9]//g' | cut -c1-16) || STATION_SHORT="gaiverland"
+[[ -z "${STATION_SHORT}" ]] && STATION_SHORT="gaiverland"
 
 REBEXIS_MODE="${CALEOPE_PARAM_REBEXIS_MODE:-template}"
 REBEXIS_LLM_MODEL="${CALEOPE_PARAM_REBEXIS_LLM_MODEL:-llama3.2:3b}"
 REBEXIS_API_KEY="${CALEOPE_PARAM_REBEXIS_API_KEY:-}"
 REBEXIS_API_BASE="${CALEOPE_PARAM_REBEXIS_API_BASE:-https://api.openai.com/v1}"
-TTS_VOICE="${CALEOPE_PARAM_TTS_VOICE:-fr_FR-upmc-medium}"
-DISCOVERY_RATIO="${CALEOPE_PARAM_DISCOVERY_RATIO:-20}"
 REBEXIS_INTERVAL_MIN="${CALEOPE_PARAM_REBEXIS_INTERVAL_MIN:-15}"
 REBEXIS_INTERVAL_MAX="${CALEOPE_PARAM_REBEXIS_INTERVAL_MAX:-30}"
+DISCOVERY_RATIO="${CALEOPE_PARAM_DISCOVERY_RATIO:-20}"
 
+WEB_PORT="${CALEOPE_PORT_WEB:-8099}"
+SFTP_PORT="${CALEOPE_PORT_SFTP:-2022}"
+ICECAST_PORT="${CALEOPE_PORT_ICECAST:-8500}"
 API_PORT="${CALEOPE_PORT_API:-8080}"
 
-# ── Secrets DB ────────────────────────────────────────────────────────
-echo "→ Génération des secrets..."
+# ── Secrets DB ─────────────────────────────────────────────────────────
 DB_PASSWORD=$(openssl rand -hex 20)
-DB_USER="gaiverland"
-DB_NAME="gaiverland"
+
+# ── Secrets AzuraCast (mode autonome seulement) ────────────────────────
+AZ_ADMIN_EMAIL="admin@azuracast.local"
+AZ_ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | cut -c1-16)
+AZ_MYSQL_ROOT=$(openssl rand -hex 24)
+AZ_MYSQL_PWD=$(openssl rand -hex 20)
+
+if [[ "${AZ_EXISTING}" == "true" ]]; then
+    AZ_BASE_URL="${AZ_URL}"
+else
+    INTERACTIVE=false; [ -t 0 ] && INTERACTIVE=true
+    if [[ -n "${CALEOPE_DOMAIN:-}" ]]; then
+        AZ_BASE_URL="https://${CALEOPE_DOMAIN}"
+    elif [[ "${INTERACTIVE}" == "true" ]]; then
+        read -rp "  IP ou domaine du serveur : " _HOST || _HOST="localhost"
+        AZ_BASE_URL="http://${_HOST}:${WEB_PORT}"
+    else
+        AZ_BASE_URL="http://localhost:${WEB_PORT}"
+    fi
+fi
+
+# ── azuracast.env (mode autonome) ──────────────────────────────────────
+cat > "${CONFIG_DIR}/azuracast.env" <<EOF
+APPLICATION_ENV=production
+AZURACAST_VERSION=0.23.4
+AZURACAST_HTTP_PORT=80
+AZURACAST_HTTPS_PORT=443
+AZURACAST_SFTP_PORT=2022
+CALEOPE_PORT_ICECAST=${ICECAST_PORT}
+AZURACAST_BASE_URL=${AZ_BASE_URL}
+MYSQL_ROOT_PASSWORD=${AZ_MYSQL_ROOT}
+MYSQL_USER=azuracast
+MYSQL_PASSWORD=${AZ_MYSQL_PWD}
+MYSQL_DATABASE=azuracast
+AZURACAST_ADMIN_EMAIL=${AZ_ADMIN_EMAIL}
+AZURACAST_ADMIN_PASSWORD=${AZ_ADMIN_PASSWORD}
+AZURACAST_STATION_NAME=${STATION_NAME}
+AZURACAST_STATION_SHORT=${STATION_SHORT}
+EOF
+chmod 600 "${CONFIG_DIR}/azuracast.env"
 
 # ── db.env ────────────────────────────────────────────────────────────
 cat > "${CONFIG_DIR}/db.env" <<EOF
-POSTGRES_USER=${DB_USER}
+POSTGRES_USER=gaiverland
 POSTGRES_PASSWORD=${DB_PASSWORD}
-POSTGRES_DB=${DB_NAME}
+POSTGRES_DB=gaiverland
 EOF
 chmod 600 "${CONFIG_DIR}/db.env"
 
-# ── services.env ─────────────────────────────────────────────────────
+# ── services.env ──────────────────────────────────────────────────────
 cat > "${CONFIG_DIR}/services.env" <<EOF
-# Base de données
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@gw-db:5432/${DB_NAME}
-
-# AzuraCast existant
-AZURACAST_URL=${AZURACAST_URL}
-AZURACAST_API_KEY=${AZURACAST_API_KEY}
-AZURACAST_STATION_ID=${AZURACAST_STATION_ID}
-
-# Chemin stations sur l'hôte (pour l'analyseur)
-AZURACAST_STATIONS_PATH=${AZURACAST_STATIONS_PATH}
-
-# Rebexis
+DATABASE_URL=postgresql://gaiverland:${DB_PASSWORD}@gw-db:5432/gaiverland
+AZURACAST_URL=${AZ_URL}
+AZURACAST_API_KEY=${AZ_API_KEY}
+AZURACAST_STATION_ID=${AZ_STATION_ID}
+AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
+AZURACAST_GW_PLAYLIST_ID=
+AZURACAST_REBEXIS_PLAYLIST_ID=
 REBEXIS_MODE=${REBEXIS_MODE}
 REBEXIS_INTERVAL_MIN=${REBEXIS_INTERVAL_MIN}
 REBEXIS_INTERVAL_MAX=${REBEXIS_INTERVAL_MAX}
-
-# Playlist
 DISCOVERY_RATIO=${DISCOVERY_RATIO}
-
-# TTS
-TTS_VOICE=${TTS_VOICE}
 TTS_CACHE_DIR=/tts-cache
-
-# Ollama (si mode=ollama)
+ESSENTIA_MODELS_DIR=/essentia-models
 OLLAMA_URL=http://gaiverland-ollama:11434
 OLLAMA_MODEL=${REBEXIS_LLM_MODEL}
 EOF
 chmod 600 "${CONFIG_DIR}/services.env"
 
-# ── rebexis.env ───────────────────────────────────────────────────────
+# ── rebexis.env ────────────────────────────────────────────────────────
 cat > "${CONFIG_DIR}/rebexis.env" <<EOF
 REBEXIS_API_KEY=${REBEXIS_API_KEY}
 REBEXIS_API_BASE=${REBEXIS_API_BASE}
@@ -115,21 +158,29 @@ EOF
 chmod 600 "${CONFIG_DIR}/rebexis.env"
 echo "  ✓ Fichiers de config créés"
 
-# ── Schéma base de données ────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# SCHÉMA BASE DE DONNÉES
+# ════════════════════════════════════════════════════════════════════════
 cat > "${CONFIG_DIR}/db-init.sql" <<'SQL'
 CREATE TABLE IF NOT EXISTS tracks (
     id          SERIAL PRIMARY KEY,
     az_id       INTEGER UNIQUE,
-    file_path   TEXT NOT NULL,
+    file_path   TEXT NOT NULL UNIQUE,
     title       TEXT,
     artist      TEXT,
     album       TEXT,
     duration    FLOAT,
     bpm         FLOAT,
-    energy      FLOAT,
+    energy      FLOAT,          -- 0.0 à 1.0 (loudness normalisé)
+    danceability FLOAT,         -- 0.0 à 1.0 (Essentia)
     has_vocals  BOOLEAN DEFAULT FALSE,
-    mood        TEXT,
-    genre_tags  TEXT[],
+    key_note    TEXT,           -- C, C#, D… (Essentia tonal)
+    key_scale   TEXT,           -- major / minor
+    mood        TEXT,           -- festival | intense | energique | melodique | nocturne
+    genre_top1  TEXT,           -- genre Discogs #1
+    genre_top2  TEXT,           -- genre Discogs #2
+    genre_scores JSONB,         -- {genre: score, ...} top 10
+    az_playlist_assigned BOOLEAN DEFAULT FALSE,
     analyzed    BOOLEAN DEFAULT FALSE,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
@@ -148,27 +199,33 @@ CREATE TABLE IF NOT EXISTS rebexis_sessions (
     mood_trigger    TEXT,
     context_track   TEXT,
     audio_file      TEXT,
+    az_file_id      INTEGER,
     played_at       TIMESTAMPTZ,
     generated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS radio_state (
-    id          INTEGER PRIMARY KEY DEFAULT 1,
-    mood        TEXT DEFAULT 'energique',
-    energy_avg  FLOAT DEFAULT 0.6,
-    last_rebexis TIMESTAMPTZ,
-    updated_at  TIMESTAMPTZ DEFAULT NOW()
+    id              INTEGER PRIMARY KEY DEFAULT 1,
+    mood            TEXT DEFAULT 'energique',
+    energy_avg      FLOAT DEFAULT 0.6,
+    last_rebexis    TIMESTAMPTZ,
+    az_gw_playlist  INTEGER,        -- ID playlist "Gaiverland IA" dans AzuraCast
+    az_rb_playlist  INTEGER,        -- ID playlist "Rebexis" dans AzuraCast
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-INSERT INTO radio_state (id, mood) VALUES (1, 'energique') ON CONFLICT DO NOTHING;
+INSERT INTO radio_state (id) VALUES (1) ON CONFLICT DO NOTHING;
 
-CREATE INDEX IF NOT EXISTS idx_tracks_mood ON tracks(mood);
-CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
-CREATE INDEX IF NOT EXISTS idx_play_history_time ON play_history(played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tracks_mood      ON tracks(mood);
+CREATE INDEX IF NOT EXISTS idx_tracks_bpm       ON tracks(bpm);
+CREATE INDEX IF NOT EXISTS idx_tracks_az        ON tracks(az_id);
+CREATE INDEX IF NOT EXISTS idx_history_time     ON play_history(played_at DESC);
 SQL
-echo "  ✓ Schéma DB préparé"
+echo "  ✓ Schéma DB créé"
 
-# ── Templates Rebexis ─────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════
+# TEMPLATES REBEXIS
+# ════════════════════════════════════════════════════════════════════════
 cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
 {
   "modes": {
@@ -177,37 +234,47 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
         "Ce morceau est exactement ce qu'il fallait là.",
         "Je vais rester discrète et laisser ça tourner.",
         "C'est bien. Continuons.",
-        "Aucune raison d'interrompre ça."
+        "Aucune raison d'interrompre ça.",
+        "Parfait pour ce moment."
       ]
     },
     "hype": {
-      "triggers": ["festival", "edm", "big_room"],
+      "triggers": ["festival", "energique"],
       "templates": [
         "Ok… là ça commence sérieusement à accélérer.",
         "On est clairement dans la montée. Bonne chance aux voisins.",
         "On reste dans l'énergie festival et franchement, ça me va très bien.",
         "Quelqu'un a commandé de l'énergie ? Livraison en cours.",
-        "Je crois que les enceintes viennent de demander une augmentation."
+        "Je crois que les enceintes viennent de demander une augmentation.",
+        "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
+        "La transition était parfaite. Je ne dis rien. Je profite.",
+        "On monte. On monte encore. Et puis on monte un peu plus."
       ]
     },
     "peak": {
-      "triggers": ["hardstyle", "rawstyle"],
+      "triggers": ["intense"],
       "templates": [
         "Bon… celui-là, il n'est clairement pas venu pour être discret.",
         "Je vais faire semblant d'être surprise par ce drop.",
         "C'est loud. C'est voulu. C'est bien.",
         "On est au sommet. Profitez-en.",
-        "Ça c'est le genre de track qui fait changer d'avis sur la vie."
+        "Ça c'est le genre de track qui fait changer d'avis sur la vie.",
+        "Hardstyle activé. Tout le reste peut attendre.",
+        "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
+        "Je ne sais pas ce que tu fais là mais j'espère que c'est physique."
       ]
     },
     "flow": {
-      "triggers": ["melodique", "nocturne", "progressive"],
+      "triggers": ["melodique", "nocturne"],
       "templates": [
         "On glisse vers quelque chose de plus profond. C'est agréable.",
         "Ce changement de rythme était exactement ce qu'il fallait.",
         "Melodic techno à cette heure. Les choix sont défendables.",
         "On descend en douceur. Sans perdre l'essentiel.",
-        "Miss Monique approuverait probablement."
+        "Miss Monique approuverait probablement.",
+        "Progressive. Le mot dit tout.",
+        "C'est le genre de moment où on réalise que la nuit commence vraiment.",
+        "Moins fort. Mais toujours là. C'est ça la profondeur."
       ]
     }
   }
@@ -215,114 +282,421 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
 JSON
 echo "  ✓ Templates Rebexis créés"
 
-# ── Scripts Python ────────────────────────────────────────────────────
-# (identiques à la version précédente — copiés depuis le package)
+# ════════════════════════════════════════════════════════════════════════
+# SCRIPTS PYTHON
+# ════════════════════════════════════════════════════════════════════════
 
+# ── az_utils.py — client AzuraCast 0.23.x partagé ────────────────────
+cat > "${SCRIPTS_DIR}/az_utils.py" <<'PYEOF'
+"""
+Client AzuraCast 0.23.x — utilisé par analyzer, tts_worker, scheduler.
+"""
+import os, httpx
+from typing import Optional
+
+AZ_URL = os.environ.get("AZURACAST_URL", "http://azuracast:80")
+AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
+AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+_TIMEOUT = 15
+
+
+def _headers():
+    return {"X-API-Key": AZ_KEY, "Content-Type": "application/json"}
+
+
+def _ok():
+    return bool(AZ_KEY) and AZ_KEY not in ("", "__CONFIGURE__")
+
+
+def get_station() -> Optional[dict]:
+    if not _ok():
+        return None
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}", headers=_headers(), timeout=_TIMEOUT)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def list_playlists() -> list:
+    if not _ok():
+        return []
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/playlists", headers=_headers(), timeout=_TIMEOUT)
+        return r.json() if r.status_code == 200 else []
+    except Exception:
+        return []
+
+
+def create_playlist(name: str, pl_type: str = "default", weight: int = 3,
+                    play_per_songs: int = 0) -> Optional[dict]:
+    """Crée une playlist AzuraCast et retourne son objet."""
+    if not _ok():
+        return None
+    body = {"name": name, "type": pl_type, "weight": weight, "is_enabled": True}
+    if pl_type == "once_per_x_songs":
+        body["play_per_songs"] = play_per_songs
+    try:
+        r = httpx.post(f"{AZ_URL}/api/station/{AZ_STATION}/playlists",
+                       headers=_headers(), json=body, timeout=_TIMEOUT)
+        return r.json() if r.status_code in (200, 201) else None
+    except Exception:
+        return None
+
+
+def get_or_create_playlist(name: str, **kwargs) -> Optional[int]:
+    """Retourne l'ID d'une playlist existante ou la crée."""
+    for pl in list_playlists():
+        if pl.get("name") == name:
+            return pl["id"]
+    pl = create_playlist(name, **kwargs)
+    return pl["id"] if pl else None
+
+
+def set_playlist_order(playlist_id: int, file_ids: list) -> bool:
+    """Définit l'ordre de lecture d'une playlist (AzuraCast 0.20+)."""
+    if not _ok() or not file_ids:
+        return False
+    try:
+        r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/playlist/{playlist_id}/order",
+                      headers=_headers(), json={"order": file_ids}, timeout=30)
+        return r.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+def batch_assign_playlist(file_ids: list, playlist_ids: list) -> bool:
+    """Assigne des fichiers à des playlists en batch (AzuraCast 0.20+)."""
+    if not _ok() or not file_ids:
+        return False
+    try:
+        r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
+                      headers=_headers(),
+                      json={"files": file_ids, "playlists": playlist_ids},
+                      timeout=30)
+        return r.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+def find_file_by_path(path: str) -> Optional[dict]:
+    """Cherche un fichier AzuraCast par son nom."""
+    if not _ok():
+        return None
+    name = os.path.basename(path)
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/files",
+                      headers=_headers(),
+                      params={"searchPhrase": name, "pageSize": 5},
+                      timeout=_TIMEOUT)
+        data = r.json() if r.status_code == 200 else {}
+        rows = data.get("rows", data) if isinstance(data, dict) else data
+        if rows:
+            return rows[0]
+        return None
+    except Exception:
+        return None
+
+
+def upload_file(local_path: str, title: str) -> Optional[dict]:
+    """Upload un fichier audio dans AzuraCast, retourne l'objet créé."""
+    if not _ok():
+        return None
+    try:
+        with open(local_path, "rb") as f:
+            r = httpx.post(
+                f"{AZ_URL}/api/station/{AZ_STATION}/files",
+                headers={"X-API-Key": AZ_KEY},
+                files={"file": (os.path.basename(local_path), f, "audio/mpeg")},
+                data={"title": title},
+                timeout=60,
+            )
+        return r.json() if r.status_code in (200, 201) else None
+    except Exception as e:
+        print(f"  ⚠ Upload AzuraCast: {e}")
+        return None
+
+
+def now_playing() -> Optional[dict]:
+    """Retourne les infos du morceau en cours."""
+    try:
+        r = httpx.get(f"{AZ_URL}/api/nowplaying/{AZ_STATION}", timeout=5)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+PYEOF
+
+# ── analyzer.py — Essentia + Discogs 400 genres ───────────────────────
 cat > "${SCRIPTS_DIR}/analyzer.py" <<'PYEOF'
 """
-Analyseur musical — surveille les nouveaux fichiers AzuraCast
-et extrait BPM, énergie, présence vocale via librosa/mutagen.
+Analyseur musical — Essentia + modèle Discogs EffNet (400 genres).
+Extrait BPM précis, énergie, danceability, tonalité, genre électronique.
+Mappe sur les moods Gaiverland et synchronise les az_id avec AzuraCast.
 """
-import os, sys, subprocess, time
+import os, sys, subprocess, time, pathlib, json
+
+MODELS_DIR = pathlib.Path(os.environ.get("ESSENTIA_MODELS_DIR", "/essentia-models"))
+
+DISCOGS_MODELS = {
+    "effnet_embed": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb",
+    "genre_multi":  "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs_multi_embeddings-effnet-1.pb",
+    "genre_labels": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs_multi_embeddings-effnet-1.json",
+}
+
+# Mapping genres Discogs → moods Gaiverland
+GENRE_TO_MOOD = {
+    # Intense
+    "Hardstyle": "intense", "Hardcore": "intense", "Gabber": "intense",
+    "Hard Techno": "intense", "Industrial": "intense", "Speedcore": "intense",
+    "UK Hardcore": "intense", "Frenchcore": "intense",
+    # Festival / Big energy
+    "Trance": "festival", "Euro House": "festival", "Happy Hardcore": "festival",
+    "Jumpstyle": "festival", "Electro House": "festival", "Big Room": "festival",
+    "Dance": "festival", "Eurodance": "festival", "Hi NRG": "festival",
+    # Energique
+    "Techno": "energique", "Tech House": "energique", "Minimal": "energique",
+    "Electroclash": "energique", "EBM": "energique", "Electro": "energique",
+    "Acid Techno": "energique", "Detroit Techno": "energique",
+    # Melodique
+    "Progressive House": "melodique", "Progressive Trance": "melodique",
+    "Melodic Techno": "melodique", "Deep House": "melodique",
+    "Melodic House": "melodique", "Electronica": "melodique",
+    "Italo House": "melodique", "Dream House": "melodique",
+    # Nocturne
+    "Ambient": "nocturne", "Downtempo": "nocturne", "Chillout": "nocturne",
+    "Dark Ambient": "nocturne", "Drone": "nocturne", "New Age": "nocturne",
+}
+
+AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a"}
+
 
 def install_deps():
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "librosa", "mutagen", "psycopg2-binary", "inotify-simple"], check=True)
+    pkgs = ["essentia-tensorflow", "psycopg2-binary", "inotify-simple", "httpx", "mutagen"]
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet"] + pkgs, check=True)
+
 
 try:
-    import librosa, mutagen, psycopg2, inotify_simple
+    import essentia, essentia.standard as es, psycopg2, inotify_simple, httpx, mutagen
 except ImportError:
-    print("→ Installation des dépendances analyzer...")
+    print("→ Installation dépendances analyzer (essentia-tensorflow, ~500Mo)...")
     install_deps()
-    import librosa, mutagen, psycopg2, inotify_simple
+    import essentia, essentia.standard as es, psycopg2, inotify_simple, httpx, mutagen
 
 import numpy as np
+import sys
+sys.path.insert(0, "/app")
+from az_utils import find_file_by_path, batch_assign_playlist
 
 DB_URL = os.environ["DATABASE_URL"]
+AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
 WATCH_DIR = "/var/azuracast/stations"
-AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a"}
+
+_genre_labels = []
+_effnet_model = None
+_genre_model = None
+
+
+def download_models():
+    global _genre_labels
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    for name, url in DISCOGS_MODELS.items():
+        dest = MODELS_DIR / pathlib.Path(url).name
+        if not dest.exists():
+            print(f"  → Téléchargement modèle Essentia : {dest.name} (~{40 if 'effnet' in name else 2}Mo)...")
+            subprocess.run(["wget", "-q", "--show-progress", "-O", str(dest), url], check=True)
+            print(f"  ✓ {dest.name}")
+    # Charger les labels genre
+    labels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_labels"]).name
+    if labels_path.exists():
+        with open(labels_path) as f:
+            meta = json.load(f)
+        _genre_labels = meta.get("classes", [])
+    print(f"  ✓ {len(_genre_labels)} classes de genres chargées")
+
+
+def load_models():
+    global _effnet_model, _genre_model
+    effnet_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["effnet_embed"]).name
+    genre_path  = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_multi"]).name
+    _effnet_model = es.TensorflowPredictEffnetDiscogs(
+        graphFilename=str(effnet_path), output="PartitionedCall:1"
+    )
+    _genre_model = es.TensorflowPredict2D(
+        graphFilename=str(genre_path),
+        input="serving_default_model_Placeholder:0",
+        output="PartitionedCall:0"
+    )
+    print("  ✓ Modèles Essentia chargés en mémoire")
+
+
+def infer_mood_from_bpm_energy(bpm: float, energy: float) -> str:
+    """Fallback si pas de genre détecté."""
+    if bpm > 155 and energy > 0.65:
+        return "intense"
+    elif bpm > 145 and energy > 0.55:
+        return "festival"
+    elif bpm > 128:
+        return "energique" if energy > 0.4 else "melodique"
+    elif bpm > 110:
+        return "melodique"
+    return "nocturne"
+
+
+def analyze_file(path: str) -> dict:
+    try:
+        # ── Chargement audio ─────────────────────────────────────────
+        loader = es.MonoLoader(filename=path, sampleRate=44100)
+        audio_44k = loader()
+
+        # Pour les modèles Essentia (16kHz)
+        loader16 = es.MonoLoader(filename=path, sampleRate=16000)
+        audio_16k = loader16()
+
+        # ── Extracteur BPM, énergie, tonalité ────────────────────────
+        extractor = es.MusicExtractor(lowlevelSilenceRate60dBRMS=0.9,
+                                       lowlevelSilenceRate30dBRMS=0.9,
+                                       lowlevelFrameSize=2048,
+                                       lowlevelHopSize=1024)
+        features, _ = extractor(path)
+
+        bpm          = float(features["rhythm.bpm"])
+        energy       = float(features["lowlevel.average_loudness"])
+        energy_norm  = min(1.0, max(0.0, (energy + 1.0) / 2.0))
+        danceability = float(features["rhythm.danceability"])
+        key_note     = str(features["tonal.key_key"])
+        key_scale    = str(features["tonal.key_scale"])
+
+        # Détection vocaux (énergie mid vs low)
+        spec = np.abs(es.Spectrum()(audio_44k[:44100]))
+        freqs = np.linspace(0, 22050, len(spec))
+        vocal_e = float(np.mean(spec[(freqs > 300) & (freqs < 3400)])) + 1e-9
+        low_e   = float(np.mean(spec[freqs <= 300])) + 1e-9
+        has_vocals = (vocal_e / low_e) > 0.25
+
+        # ── Genre Discogs (Essentia ML) ───────────────────────────────
+        genre_top1 = genre_top2 = ""
+        genre_scores = {}
+        mood = "energique"  # default
+
+        if _effnet_model and _genre_model and _genre_labels:
+            try:
+                embeddings   = _effnet_model(audio_16k)
+                predictions  = _genre_model(embeddings)
+                mean_scores  = np.mean(predictions, axis=0)
+
+                # Top 10 genres par score
+                top_idx = np.argsort(mean_scores)[::-1][:10]
+                for i in top_idx:
+                    if i < len(_genre_labels) and float(mean_scores[i]) > 0.05:
+                        label = _genre_labels[i].split("---")[-1].strip()
+                        genre_scores[label] = round(float(mean_scores[i]), 4)
+
+                # Genres principaux
+                sorted_genres = sorted(genre_scores.items(), key=lambda x: -x[1])
+                if sorted_genres:
+                    genre_top1 = sorted_genres[0][0]
+                if len(sorted_genres) > 1:
+                    genre_top2 = sorted_genres[1][0]
+
+                # Mood : premier genre reconnu dans le mapping
+                for label, _ in sorted_genres:
+                    if label in GENRE_TO_MOOD:
+                        mood = GENRE_TO_MOOD[label]
+                        break
+                else:
+                    mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+            except Exception as eg:
+                print(f"  ⚠ Genre detection: {eg} — fallback BPM")
+                mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+        else:
+            mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+
+        # ── Métadonnées ID3/tags ──────────────────────────────────────
+        meta = mutagen.File(path, easy=True) or {}
+        title    = str(meta.get("title",  [""])[0]) or os.path.basename(path)
+        artist   = str(meta.get("artist", [""])[0]) or "Inconnu"
+        album    = str(meta.get("album",  [""])[0]) or ""
+        duration = float(features["metadata.audio_properties.length"])
+
+        return {
+            "file_path": path, "title": title, "artist": artist, "album": album,
+            "duration": round(duration, 1), "bpm": round(bpm, 1),
+            "energy": round(energy_norm, 3), "danceability": round(danceability, 3),
+            "has_vocals": has_vocals, "key_note": key_note, "key_scale": key_scale,
+            "mood": mood, "genre_top1": genre_top1, "genre_top2": genre_top2,
+            "genre_scores": json.dumps(genre_scores), "analyzed": True,
+        }
+    except Exception as exc:
+        print(f"  ⚠ Analyse échouée {os.path.basename(path)}: {exc}")
+        return {"file_path": path, "analyzed": False}
 
 
 def get_conn():
     return psycopg2.connect(DB_URL)
 
 
-def analyze_file(path: str) -> dict:
-    try:
-        y, sr = librosa.load(path, sr=22050, mono=True, duration=120)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        energy = float(np.mean(librosa.feature.rms(y=y)))
-        energy_norm = min(1.0, energy * 100)
-
-        spec = np.abs(librosa.stft(y))
-        freq_bins = librosa.fft_frequencies(sr=sr)
-        vocal_mask = (freq_bins > 300) & (freq_bins < 3400)
-        low_mask = freq_bins <= 300
-        vocal_energy = float(np.mean(spec[vocal_mask]))
-        low_energy = float(np.mean(spec[low_mask])) + 1e-6
-        has_vocals = (vocal_energy / low_energy) > 0.3
-
-        bpm = float(tempo[0]) if hasattr(tempo, "__len__") else float(tempo)
-        if bpm > 155:
-            mood = "festival" if energy_norm > 0.7 else "intense"
-        elif bpm > 128:
-            mood = "energique" if energy_norm > 0.5 else "melodique"
-        elif bpm > 110:
-            mood = "melodique"
-        else:
-            mood = "nocturne"
-
-        meta = mutagen.File(path, easy=True) or {}
-        title = str(meta.get("title", [""])[0]) if meta.get("title") else os.path.basename(path)
-        artist = str(meta.get("artist", [""])[0]) if meta.get("artist") else "Inconnu"
-        album = str(meta.get("album", [""])[0]) if meta.get("album") else ""
-        duration = librosa.get_duration(y=y, sr=sr)
-
-        return {
-            "file_path": path, "title": title, "artist": artist, "album": album,
-            "duration": duration, "bpm": round(bpm, 1), "energy": round(energy_norm, 3),
-            "has_vocals": has_vocals, "mood": mood, "analyzed": True,
-        }
-    except Exception as exc:
-        print(f"  ⚠ Analyse échouée pour {path}: {exc}")
-        return {"file_path": path, "analyzed": False}
-
-
 def save_track(conn, data: dict):
+    cols = [k for k in data if k != "genre_scores" or True]
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO tracks (file_path, title, artist, album, duration, bpm, energy,
-                                has_vocals, mood, analyzed)
-            VALUES (%(file_path)s, %(title)s, %(artist)s, %(album)s, %(duration)s,
-                    %(bpm)s, %(energy)s, %(has_vocals)s, %(mood)s, %(analyzed)s)
+            INSERT INTO tracks
+              (file_path, title, artist, album, duration, bpm, energy, danceability,
+               has_vocals, key_note, key_scale, mood, genre_top1, genre_top2, genre_scores, analyzed)
+            VALUES
+              (%(file_path)s, %(title)s, %(artist)s, %(album)s, %(duration)s, %(bpm)s,
+               %(energy)s, %(danceability)s, %(has_vocals)s, %(key_note)s, %(key_scale)s,
+               %(mood)s, %(genre_top1)s, %(genre_top2)s, %(genre_scores)s::jsonb, %(analyzed)s)
             ON CONFLICT (file_path) DO UPDATE SET
-                bpm=EXCLUDED.bpm, energy=EXCLUDED.energy, has_vocals=EXCLUDED.has_vocals,
-                mood=EXCLUDED.mood, analyzed=EXCLUDED.analyzed, updated_at=NOW()
-            """, data)
+              bpm=EXCLUDED.bpm, energy=EXCLUDED.energy, danceability=EXCLUDED.danceability,
+              has_vocals=EXCLUDED.has_vocals, mood=EXCLUDED.mood,
+              genre_top1=EXCLUDED.genre_top1, genre_top2=EXCLUDED.genre_top2,
+              genre_scores=EXCLUDED.genre_scores::jsonb, analyzed=EXCLUDED.analyzed,
+              key_note=EXCLUDED.key_note, key_scale=EXCLUDED.key_scale, updated_at=NOW()
+            RETURNING id
+        """, {**data, "genre_scores": data.get("genre_scores", "{}")})
+        track_id = cur.fetchone()[0]
     conn.commit()
+
+    # Sync az_id depuis AzuraCast
+    if data.get("analyzed") and AZ_KEY:
+        az_file = find_file_by_path(data["file_path"])
+        if az_file:
+            az_id = az_file.get("id")
+            with conn.cursor() as cur:
+                cur.execute("UPDATE tracks SET az_id=%s WHERE id=%s", (az_id, track_id))
+            conn.commit()
+
+    return track_id
 
 
 def main():
-    print("🎵 Analyzer démarré — surveillance de", WATCH_DIR)
-    conn = get_conn()
+    print("🎵 Analyzer Gaiverland démarré")
+    download_models()
+    load_models()
 
+    conn = get_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
         known = {r[0] for r in cur.fetchall()}
 
+    # Scan initial
+    count = 0
     for root, _, files in os.walk(WATCH_DIR):
         for f in files:
             if os.path.splitext(f)[1].lower() in AUDIO_EXTS:
                 fp = os.path.join(root, f)
                 if fp not in known:
-                    print(f"  → Analyse : {fp}")
+                    print(f"  → {os.path.basename(fp)}")
                     save_track(conn, analyze_file(fp))
+                    count += 1
+    print(f"  ✓ {count} fichiers analysés au démarrage")
 
+    # Surveillance inotify
     inotify = inotify_simple.INotify()
-    for root, dirs, _ in os.walk(WATCH_DIR):
+    for root, _, _ in os.walk(WATCH_DIR):
         inotify.add_watch(root, inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO)
+    print("  ✓ Surveillance temps réel active")
 
-    print("  ✓ Surveillance active")
     while True:
         events = inotify.read(timeout=5000)
         for event in events:
@@ -333,19 +707,24 @@ def main():
                 except Exception:
                     conn = get_conn()
                 fp = os.path.join(WATCH_DIR, name)
-                print(f"  → Nouveau fichier : {fp}")
+                print(f"  → Nouveau : {name}")
                 time.sleep(1)
                 save_track(conn, analyze_file(fp))
+                print(f"  ✓ Analysé : {name}")
+
 
 if __name__ == "__main__":
     main()
 PYEOF
 
+# ── playlist.py — identique mais avec danceability + genre_scores ──────
 cat > "${SCRIPTS_DIR}/playlist.py" <<'PYEOF'
 """
-Moteur de playlist — API FastAPI générant des playlists pour AzuraCast.
+Moteur de playlist Gaiverland — API FastAPI.
+Cohérence énergétique, transitions de mood, anti-répétition artiste,
+danceability, découverte.
 """
-import os, sys, subprocess, random
+import os, sys, subprocess, random, json
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
@@ -354,7 +733,6 @@ def install_deps():
 try:
     import fastapi, uvicorn, psycopg2
 except ImportError:
-    print("→ Installation des dépendances playlist...")
     install_deps()
     import fastapi, uvicorn, psycopg2
 
@@ -371,7 +749,6 @@ MOOD_TRANSITIONS = {
     "energique":  ["energique", "festival", "melodique"],
     "festival":   ["festival", "intense", "energique"],
     "intense":    ["intense", "festival", "energique"],
-    "euphorique": ["euphorique", "festival", "energique"],
 }
 
 app = FastAPI(title="Gaiverland Playlist Engine")
@@ -390,9 +767,9 @@ def health():
 def get_state():
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM radio_state WHERE id=1")
+        cur.execute("SELECT mood, energy_avg, az_gw_playlist, az_rb_playlist FROM radio_state WHERE id=1")
         state = cur.fetchone()
-    return dict(state) if state else {"mood": "energique", "energy_avg": 0.6}
+    return dict(state) if state else {}
 
 
 @app.post("/state/mood")
@@ -405,13 +782,13 @@ def set_mood(mood: str):
 
 
 @app.get("/playlist/next")
-def generate_playlist(count: int = 10, mood: Optional[str] = None):
+def generate_playlist(count: int = 20, mood: Optional[str] = None):
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT mood, energy_avg FROM radio_state WHERE id=1")
-        state = cur.fetchone() or {"mood": "energique", "energy_avg": 0.6}
+        state = cur.fetchone() or {}
 
-    current_mood = mood or state["mood"]
+    current_mood   = mood or state.get("mood", "energique")
     current_energy = float(state.get("energy_avg") or 0.6)
 
     with conn.cursor() as cur:
@@ -419,21 +796,25 @@ def generate_playlist(count: int = 10, mood: Optional[str] = None):
             SELECT track_id FROM play_history
             WHERE played_at > NOW() - INTERVAL '2 hours'
         """)
-        recent_ids = {r["track_id"] for r in cur.fetchall()}
+        recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
 
-    candidate_moods = [current_mood] + MOOD_TRANSITIONS.get(current_mood, [current_mood])
+    candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
 
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT id, title, artist, bpm, energy, mood, az_id
-            FROM tracks WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
+            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
+            FROM tracks
+            WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, list(recent_ids) or [0], count * 3))
+        """, (candidate_moods, recent_ids, count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, title, artist, bpm, energy, mood, az_id FROM tracks WHERE analyzed=TRUE ORDER BY RANDOM() LIMIT %s", (count * 2,))
+            cur.execute("""
+                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
+                FROM tracks WHERE analyzed=TRUE ORDER BY RANDOM() LIMIT %s
+            """, (count * 2,))
             candidates = list(cur.fetchall())
 
     selected = []
@@ -443,22 +824,25 @@ def generate_playlist(count: int = 10, mood: Optional[str] = None):
     for track in candidates:
         if len(selected) >= count:
             break
+        # Anti-répétition artiste sur les 3 derniers titres
         if track["artist"] in {t["artist"] for t in selected[-3:]}:
             continue
         e = float(track.get("energy") or 0.5)
         if abs(e - target_energy) > 0.35 and len(selected) < main_count:
             continue
         selected.append(dict(track))
-        target_energy = target_energy * 0.8 + e * 0.2
+        target_energy = target_energy * 0.75 + e * 0.25  # glissement progressif
 
-    remaining = [c for c in candidates if c not in selected]
-    while len(selected) < count and remaining:
-        selected.append(dict(remaining.pop()))
+    # Compléter
+    rest = [c for c in candidates if c not in selected]
+    while len(selected) < count and rest:
+        selected.append(dict(rest.pop()))
 
     if selected:
         avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)
         with conn.cursor() as cur:
-            cur.execute("UPDATE radio_state SET energy_avg=%s, updated_at=NOW() WHERE id=1", (round(avg_e, 3),))
+            cur.execute("UPDATE radio_state SET energy_avg=%s, updated_at=NOW() WHERE id=1",
+                        (round(avg_e, 3),))
         conn.commit()
 
     return {"mood": current_mood, "tracks": selected, "count": len(selected)}
@@ -468,7 +852,8 @@ def generate_playlist(count: int = 10, mood: Optional[str] = None):
 def record_play(track_id: int, mood_state: Optional[str] = None):
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO play_history (track_id, mood_state) VALUES (%s, %s)", (track_id, mood_state))
+        cur.execute("INSERT INTO play_history (track_id, mood_state) VALUES (%s, %s)",
+                    (track_id, mood_state))
     conn.commit()
     return {"ok": True}
 
@@ -477,6 +862,7 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
 PYEOF
 
+# ── rebexis.py — inchangé (déjà bon) ─────────────────────────────────
 cat > "${SCRIPTS_DIR}/rebexis.py" <<'PYEOF'
 """
 Rebexis Engine — génère les textes d'intervention de l'animatrice.
@@ -491,34 +877,33 @@ def install_deps():
 try:
     import fastapi, uvicorn, psycopg2, httpx
 except ImportError:
-    print("→ Installation des dépendances rebexis...")
     install_deps()
     import fastapi, uvicorn, psycopg2, httpx
 
 from fastapi import FastAPI
 import psycopg2.extras
 
-DB_URL = os.environ["DATABASE_URL"]
-REBEXIS_MODE = os.environ.get("REBEXIS_MODE", "template")
-INTERVAL_MIN = int(os.environ.get("REBEXIS_INTERVAL_MIN", "15")) * 60
-INTERVAL_MAX = int(os.environ.get("REBEXIS_INTERVAL_MAX", "30")) * 60
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://gaiverland-ollama:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-API_KEY = os.environ.get("REBEXIS_API_KEY", "")
-API_BASE = os.environ.get("REBEXIS_API_BASE", "https://api.openai.com/v1")
+DB_URL      = os.environ["DATABASE_URL"]
+MODE        = os.environ.get("REBEXIS_MODE", "template")
+INT_MIN     = int(os.environ.get("REBEXIS_INTERVAL_MIN", "15")) * 60
+INT_MAX     = int(os.environ.get("REBEXIS_INTERVAL_MAX", "30")) * 60
+OLLAMA_URL  = os.environ.get("OLLAMA_URL", "http://gaiverland-ollama:11434")
+OLLAMA_MDL  = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+API_KEY     = os.environ.get("REBEXIS_API_KEY", "")
+API_BASE    = os.environ.get("REBEXIS_API_BASE", "https://api.openai.com/v1")
 
 templates = {}
 app = FastAPI(title="Rebexis Engine")
 
-SYSTEM_PROMPT = """Tu es Rebexis, animatrice de Gaiverland Radio, radio électro.
-Tu n'es pas une assistante IA. Tu es une animatrice passionnée d'électro.
-Tu réagis à la musique comme une présence vivante. Jamais comme un robot.
-Règles : 5 à 20 secondes max (≈ 15 à 60 mots). Tu NE décris PAS la musique.
-Tu RÉAGIS à ce qu'elle fait ressentir. Humour léger OK. Pas de blagues longues.
-Une ou deux phrases naturelles, radio-friendly, en français."""
+SYSTEM = """Tu es Rebexis, animatrice de Gaiverland Radio — une radio électro autonome.
+Tu n'es pas une IA. Tu es une présence radio vivante et passionnée.
+Style : énergie de festival, légèrement sarcastique, surprenante, jamais robotique.
+Format OBLIGATOIRE : 1 à 2 phrases maximum. 15 à 60 mots. Radio-friendly. Français naturel.
+Tu NE décris JAMAIS la musique — tu RÉAGIS à ce qu'elle fait ressentir.
+Humour léger OK. Pas de blagues longues. Jamais répétitif."""
 
 
-def load_templates():
+def load_tpl():
     global templates
     try:
         with open("/app/templates.json") as f:
@@ -540,54 +925,54 @@ def should_intervene(conn) -> bool:
         return True
     import datetime
     elapsed = (datetime.datetime.now(datetime.timezone.utc) - row["last_rebexis"]).total_seconds()
-    return elapsed >= random.randint(INTERVAL_MIN, INTERVAL_MAX)
+    return elapsed >= random.randint(INT_MIN, INT_MAX)
 
 
-def generate_template(mood: str) -> str:
-    key = "hype" if mood in ("festival", "euphorique") else \
+def gen_template(mood: str) -> str:
+    key = "hype" if mood in ("festival", "energique") else \
           "peak" if mood == "intense" else \
           "flow" if mood in ("nocturne", "melodique") else "normal"
     t = templates.get("modes", {}).get(key, {}).get("templates", ["La radio continue."])
     return random.choice(t)
 
 
-def generate_ollama(mood: str, context: str, recent: list) -> str:
+def gen_ollama(mood: str, context: str, recent: list) -> str:
     prompt = f"Génère UNE intervention courte de Rebexis. Morceau: {context}. Ambiance: {mood}."
     if recent:
-        prompt += f" Évite de répéter: {' / '.join(recent[:3])}"
+        prompt += f" Phrases à éviter: {' / '.join(recent[:2])}"
     try:
-        resp = httpx.post(f"{OLLAMA_URL}/api/generate",
-                          json={"model": OLLAMA_MODEL, "prompt": f"{SYSTEM_PROMPT}\n\n{prompt}", "stream": False},
-                          timeout=30)
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+        r = httpx.post(f"{OLLAMA_URL}/api/generate",
+                       json={"model": OLLAMA_MDL, "prompt": f"{SYSTEM}\n\n{prompt}", "stream": False},
+                       timeout=30)
+        r.raise_for_status()
+        return r.json().get("response", "").strip()
     except Exception as e:
         print(f"⚠ Ollama: {e}")
-        return generate_template(mood)
+        return gen_template(mood)
 
 
-def generate_api(mood: str, context: str, recent: list) -> str:
-    user = f"Morceau: {context}. Ambiance: {mood}."
+def gen_api(mood: str, context: str, recent: list) -> str:
+    user = f"Morceau en cours : {context}. Ambiance : {mood}."
     if recent:
-        user += f" Évite: {' / '.join(recent[:3])}"
+        user += f" Évite: {' / '.join(recent[:2])}"
     try:
-        resp = httpx.post(f"{API_BASE}/chat/completions",
-                          headers={"Authorization": f"Bearer {API_KEY}"},
-                          json={"model": "gpt-4o-mini",
-                                "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                                             {"role": "user", "content": user}],
-                                "max_tokens": 80, "temperature": 0.9},
-                          timeout=15)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        r = httpx.post(f"{API_BASE}/chat/completions",
+                       headers={"Authorization": f"Bearer {API_KEY}"},
+                       json={"model": "gpt-4o-mini",
+                             "messages": [{"role": "system", "content": SYSTEM},
+                                          {"role": "user", "content": user}],
+                             "max_tokens": 70, "temperature": 1.0},
+                       timeout=15)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"⚠ API: {e}")
-        return generate_template(mood)
+        print(f"⚠ API LLM: {e}")
+        return gen_template(mood)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "mode": REBEXIS_MODE}
+    return {"status": "ok", "mode": MODE}
 
 
 @app.post("/generate")
@@ -600,138 +985,193 @@ def generate(mood: str = "energique", context_track: str = "", force: bool = Fal
         cur.execute("SELECT intervention FROM rebexis_sessions ORDER BY generated_at DESC LIMIT 5")
         recent = [r["intervention"] for r in cur.fetchall()]
 
-    if REBEXIS_MODE == "ollama":
-        text = generate_ollama(mood, context_track, recent)
-    elif REBEXIS_MODE == "api":
-        text = generate_api(mood, context_track, recent)
-    else:
-        text = generate_template(mood)
+    text = gen_ollama(mood, context_track, recent) if MODE == "ollama" else \
+           gen_api(mood, context_track, recent)    if MODE == "api"    else \
+           gen_template(mood)
 
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO rebexis_sessions (intervention, mood_trigger, context_track) VALUES (%s,%s,%s) RETURNING id",
-                    (text, mood, context_track))
-        session_id = cur.fetchone()["id"]
+        cur.execute("""
+            INSERT INTO rebexis_sessions (intervention, mood_trigger, context_track)
+            VALUES (%s,%s,%s) RETURNING id
+        """, (text, mood, context_track))
+        sid = cur.fetchone()["id"]
         cur.execute("UPDATE radio_state SET last_rebexis=NOW() WHERE id=1")
     conn.commit()
 
-    return {"intervention": text, "session_id": session_id, "mode": REBEXIS_MODE}
+    return {"intervention": text, "session_id": sid, "mode": MODE}
 
 
 if __name__ == "__main__":
-    load_templates()
-    print(f"🎙 Rebexis Engine — mode: {REBEXIS_MODE}")
+    load_tpl()
+    print(f"🎙 Rebexis Engine — mode: {MODE}")
     uvicorn.run(app, host="0.0.0.0", port=8081)
 PYEOF
 
+# ── tts_worker.py — Kokoro TTS + post-traitement radio ────────────────
 cat > "${SCRIPTS_DIR}/tts_worker.py" <<'PYEOF'
 """
-TTS Worker — convertit les textes Rebexis en fichiers audio MP3 via Piper TTS,
-puis les uploade dans AzuraCast via son API.
+TTS Worker — Kokoro TTS (voix française ff_siwis) + chaîne de post-traitement radio.
+Compression dynamique, EQ présence voix, loudnorm EBU R128.
+Upload automatique dans AzuraCast et assignation à la playlist Rebexis.
 """
 import os, sys, subprocess, hashlib, pathlib
 
 def install_deps():
+    # kokoro >= 1.0 pour support multilangue français
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "piper-tts", "httpx"], check=True)
+                    "kokoro>=1.0.0", "soundfile", "numpy",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+    # ffmpeg (nécessaire pour post-traitement audio)
+    subprocess.run(["apt-get", "update", "-qq"], check=True)
+    subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
 
 try:
-    import fastapi, uvicorn, psycopg2, httpx
+    import kokoro, soundfile, fastapi, uvicorn, psycopg2, httpx
 except ImportError:
-    print("→ Installation des dépendances TTS...")
+    print("→ Installation Kokoro TTS + ffmpeg...")
     install_deps()
-    import fastapi, uvicorn, psycopg2, httpx
+    import kokoro, soundfile, fastapi, uvicorn, psycopg2, httpx
 
 from fastapi import FastAPI
+from kokoro import KPipeline
+import numpy as np
 import psycopg2.extras
+import sys
+sys.path.insert(0, "/app")
+from az_utils import upload_file
 
-DB_URL = os.environ["DATABASE_URL"]
-TTS_VOICE = os.environ.get("TTS_VOICE", "fr_FR-upmc-medium")
-TTS_CACHE = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
+DB_URL     = os.environ["DATABASE_URL"]
+TTS_CACHE  = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
-MODELS_DIR = TTS_CACHE / "models"
-MODELS_DIR.mkdir(exist_ok=True)
-
-AZ_URL = os.environ.get("AZURACAST_URL", "http://azuracast:80")
-AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
+AZ_KEY     = os.environ.get("AZURACAST_API_KEY", "")
+AZ_URL     = os.environ.get("AZURACAST_URL", "http://azuracast:80")
 AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+
+# Voix Kokoro française — ff_siwis (SIWIS corpus, voix féminine expressive)
+KOKORO_VOICE = "ff_siwis"
+KOKORO_LANG  = "f"   # French
+KOKORO_SPEED = 1.05  # légèrement plus rapide = plus punchy pour la radio
+
+# Pipeline TTS (chargé une fois)
+_pipeline = None
 
 app = FastAPI(title="TTS Worker")
 
 
-def get_model_path():
-    model_file = MODELS_DIR / f"{TTS_VOICE}.onnx"
-    config_file = MODELS_DIR / f"{TTS_VOICE}.onnx.json"
-    if not model_file.exists():
-        print(f"  → Téléchargement modèle Piper {TTS_VOICE}...")
-        lang = TTS_VOICE[:5].replace("_", "-")
-        name = TTS_VOICE[6:]
-        base = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{lang}/{TTS_VOICE}"
-        for fname, fpath in [(f"{TTS_VOICE}.onnx", model_file), (f"{TTS_VOICE}.onnx.json", config_file)]:
-            subprocess.run(["wget", "-q", "-O", str(fpath), f"{base}/{fname}"], check=True)
-        print("  ✓ Modèle téléchargé")
-    return str(model_file), str(config_file)
+def get_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        print("→ Initialisation Kokoro TTS (premier démarrage)...")
+        _pipeline = KPipeline(lang_code=KOKORO_LANG)
+        print("  ✓ Kokoro TTS prêt")
+    return _pipeline
 
 
-def synthesize(text: str) -> pathlib.Path:
-    h = hashlib.sha256(f"{TTS_VOICE}:{text}".encode()).hexdigest()[:16]
+def synthesize_raw(text: str) -> pathlib.Path:
+    """Kokoro TTS → WAV 24kHz."""
+    h = hashlib.sha256(f"kokoro:{KOKORO_VOICE}:{text}".encode()).hexdigest()[:16]
+    wav_path = TTS_CACHE / f"raw_{h}.wav"
+    if wav_path.exists():
+        return wav_path
+
+    pipeline = get_pipeline()
+    audio_chunks = []
+    for _, _, audio in pipeline(text, voice=KOKORO_VOICE, speed=KOKORO_SPEED):
+        if audio is not None:
+            audio_chunks.append(audio)
+
+    if not audio_chunks:
+        raise RuntimeError("Kokoro n'a produit aucun audio")
+
+    audio_full = np.concatenate(audio_chunks)
+    soundfile.write(str(wav_path), audio_full, 24000)
+    return wav_path
+
+
+# Chaîne ffmpeg radio — inspirée des processeurs broadcast (Orban, Optimod)
+FFMPEG_RADIO_CHAIN = ",".join([
+    # 1. Nettoyage fréquences basses (80Hz et moins — inutiles en voix radio)
+    "highpass=f=80",
+    # 2. Légère coupure basse-mid (200Hz) — réduit l'aspect "nasillard"
+    "equalizer=f=200:width_type=o:width=2:g=-2",
+    # 3. Boost présence voix (2-3kHz) — intelligibilité radio
+    "equalizer=f=2500:width_type=o:width=1.5:g=4",
+    # 4. Air haute fréquence (10kHz) — brillance, moins robotique
+    "equalizer=f=10000:width_type=o:width=2:g=2",
+    # 5. Compresseur dynamique — style DJ radio (compression serrée)
+    "acompressor=threshold=-20dB:ratio=4:attack=3:release=80:makeup=5",
+    # 6. Limiteur de crête (évite les clips)
+    "alimiter=limit=0.95:attack=1:release=5",
+    # 7. Loudnorm EBU R128 (-14 LUFS streaming, TP=-1.5)
+    "loudnorm=I=-14:LRA=7:TP=-1.5",
+])
+
+
+def apply_radio_processing(wav_path: pathlib.Path) -> pathlib.Path:
+    """Applique la chaîne radio et exporte en MP3 192kbps."""
+    h = wav_path.stem.replace("raw_", "")
     mp3_path = TTS_CACHE / f"rebexis_{h}.mp3"
     if mp3_path.exists():
         return mp3_path
 
-    wav_path = TTS_CACHE / f"rebexis_{h}.wav"
-    model_path, config_path = get_model_path()
+    result = subprocess.run([
+        "ffmpeg", "-y", "-i", str(wav_path),
+        "-af", FFMPEG_RADIO_CHAIN,
+        "-b:a", "192k", "-ar", "44100",
+        str(mp3_path)
+    ], capture_output=True)
 
-    result = subprocess.run(
-        ["python", "-m", "piper", "--model", model_path, "--config", config_path, "--output_file", str(wav_path)],
-        input=text.encode(), capture_output=True,
-    )
     if result.returncode != 0:
-        raise RuntimeError(f"Piper: {result.stderr.decode()}")
+        raise RuntimeError(f"ffmpeg: {result.stderr.decode()[:300]}")
 
-    subprocess.run(["ffmpeg", "-y", "-i", str(wav_path), "-b:a", "192k", str(mp3_path)],
-                   capture_output=True, check=True)
     wav_path.unlink(missing_ok=True)
     return mp3_path
-
-
-def upload_to_azuracast(mp3_path: pathlib.Path, title: str) -> dict:
-    """Upload le fichier audio dans AzuraCast comme jingle de la station."""
-    if not AZ_KEY or AZ_KEY == "__CONFIGURE__":
-        return {"ok": False, "reason": "clé API non configurée"}
-    try:
-        with open(mp3_path, "rb") as f:
-            resp = httpx.post(
-                f"{AZ_URL}/api/station/{AZ_STATION}/files",
-                headers={"X-API-Key": AZ_KEY},
-                files={"file": (mp3_path.name, f, "audio/mpeg")},
-                data={"title": title, "is_jingle": "true"},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return {"ok": True, "az_id": resp.json().get("id")}
-    except Exception as e:
-        return {"ok": False, "reason": str(e)}
 
 
 def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+def get_rebexis_playlist_id(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT az_rb_playlist FROM radio_state WHERE id=1")
+        row = cur.fetchone()
+    return (row["az_rb_playlist"] or 0) if row else 0
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "voice": TTS_VOICE}
+    return {"status": "ok", "voice": KOKORO_VOICE, "engine": "kokoro"}
 
 
 @app.post("/synthesize")
 def synthesize_endpoint(session_id: int, text: str):
     try:
-        mp3_path = synthesize(text)
-        upload_result = upload_to_azuracast(mp3_path, f"Rebexis #{session_id}")
+        wav   = synthesize_raw(text)
+        mp3   = apply_radio_processing(wav)
+
+        # Upload dans AzuraCast
+        az_file_id = None
+        rb_pl_id   = get_rebexis_playlist_id(get_conn())
+
+        az_result = upload_file(str(mp3), f"Rebexis #{session_id}")
+        if az_result:
+            az_file_id = az_result.get("id")
+            # Assigner à la playlist Rebexis
+            if rb_pl_id and az_file_id:
+                from az_utils import batch_assign_playlist
+                batch_assign_playlist([az_file_id], [rb_pl_id])
+
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("UPDATE rebexis_sessions SET audio_file=%s WHERE id=%s", (str(mp3_path), session_id))
+            cur.execute("""
+                UPDATE rebexis_sessions
+                SET audio_file=%s, az_file_id=%s
+                WHERE id=%s
+            """, (str(mp3), az_file_id, session_id))
         conn.commit()
-        return {"ok": True, "audio_file": str(mp3_path), "upload": upload_result}
+
+        return {"ok": True, "audio_file": str(mp3), "az_file_id": az_file_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -742,23 +1182,28 @@ def list_pending():
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, intervention, mood_trigger FROM rebexis_sessions
-            WHERE audio_file IS NULL AND played_at IS NULL ORDER BY generated_at
+            WHERE audio_file IS NULL ORDER BY generated_at LIMIT 10
         """)
         return {"sessions": list(cur.fetchall())}
 
 
 if __name__ == "__main__":
-    print(f"🔊 TTS Worker — voix: {TTS_VOICE} | AzuraCast: {AZ_URL}")
+    get_pipeline()  # préchauffage au démarrage
+    print(f"🔊 TTS Worker — Kokoro/{KOKORO_VOICE} | Cache: {TTS_CACHE}")
     uvicorn.run(app, host="0.0.0.0", port=8082)
 PYEOF
 
+# ── scheduler.py — playlists AzuraCast 0.23.4 ─────────────────────────
 cat > "${SCRIPTS_DIR}/scheduler.py" <<'PYEOF'
 """
 Scheduler Gaiverland — orchestre playlist + Rebexis + TTS.
-Se connecte à AzuraCast existant via API.
-Charge CPU stable — aucun pic à la diffusion.
+Gère les playlists AzuraCast 0.23.4 directement via API.
+
+Stratégie playlist :
+  - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 5 min
+  - "Rebexis"       (once_per_x_songs)  : jingles de Rebexis générés à l'avance
 """
-import os, sys, subprocess, time, json
+import os, sys, subprocess, time
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
@@ -767,20 +1212,28 @@ def install_deps():
 try:
     import httpx, psycopg2
 except ImportError:
-    print("→ Installation dépendances scheduler...")
     install_deps()
     import httpx, psycopg2
 
 import psycopg2.extras
+import sys
+sys.path.insert(0, "/app")
+from az_utils import (get_or_create_playlist, batch_assign_playlist,
+                      set_playlist_order, get_station, now_playing)
 
-DB_URL = os.environ["DATABASE_URL"]
-AZ_URL = os.environ.get("AZURACAST_URL", "http://azuracast:80")
-AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
-AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
-REBEXIS_URL = "http://gaiverland-rebexis:8081"
-TTS_URL = "http://gaiverland-tts:8082"
-CYCLE_SECONDS = 300
+REBEXIS_URL  = "http://gaiverland-rebexis:8081"
+TTS_URL      = "http://gaiverland-tts:8082"
+CYCLE_SEC    = 300  # 5 minutes
+AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
+
+# Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
+REBEXIS_SONGS_INTERVAL = 8
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def wait_for(url: str, name: str, retries: int = 30):
@@ -791,146 +1244,280 @@ def wait_for(url: str, name: str, retries: int = 30):
                 return True
         except Exception:
             pass
-        print(f"  ⏳ Attente {name}... ({i+1}/{retries})")
+        print(f"  ⏳ {name}... ({i+1}/{retries})")
         time.sleep(10)
     print(f"  ⚠ {name} non disponible")
     return False
 
 
-def check_azuracast():
-    """Vérifie la connexion à l'AzuraCast existant."""
+def setup_playlists(conn):
+    """Crée ou retrouve les playlists Gaiverland dans AzuraCast."""
+    print("  → Vérification playlists AzuraCast...")
+
+    gw_id = get_or_create_playlist("Gaiverland IA", pl_type="default", weight=3)
+    rb_id = get_or_create_playlist("Rebexis",
+                                    pl_type="once_per_x_songs",
+                                    weight=1,
+                                    play_per_songs=REBEXIS_SONGS_INTERVAL)
+
+    if gw_id or rb_id:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE radio_state
+                SET az_gw_playlist=COALESCE(%s, az_gw_playlist),
+                    az_rb_playlist=COALESCE(%s, az_rb_playlist),
+                    updated_at=NOW()
+                WHERE id=1
+            """, (gw_id, rb_id))
+        conn.commit()
+        print(f"  ✓ Playlist 'Gaiverland IA' : ID {gw_id}")
+        print(f"  ✓ Playlist 'Rebexis'       : ID {rb_id} (1 jingle/{REBEXIS_SONGS_INTERVAL} morceaux)")
+    else:
+        print("  ⚠ Playlists AzuraCast non configurées (clé API manquante ?)")
+
+    return gw_id, rb_id
+
+
+def update_gaiverland_playlist(conn, gw_playlist_id: int):
+    """Met à jour la playlist 'Gaiverland IA' avec les titres mood-appropriés."""
+    if not gw_playlist_id:
+        return
+
     try:
-        resp = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}", headers={"X-API-Key": AZ_KEY}, timeout=5)
-        if resp.status_code == 200:
-            name = resp.json().get("name", "?")
-            print(f"  ✓ AzuraCast connecté — station : {name}")
-            return True
+        # Récupérer la playlist suggérée par le moteur IA
+        resp = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 25}, timeout=15)
+        data = resp.json()
+        tracks = data.get("tracks", [])
+        mood   = data.get("mood", "?")
+
+        # Extraire les az_id valides
+        az_ids = [t["az_id"] for t in tracks if t.get("az_id")]
+        if not az_ids:
+            print(f"  ℹ Playlist [{mood}] — aucun az_id disponible (analyzer pas encore synchro ?)")
+            return
+
+        # Assigner les titres à la playlist en batch
+        # D'abord vider les anciens (batch avec playlist vide), puis ajouter les nouveaux
+        # Note : batch_assign remplace les playlists du fichier, pas juste pour cette playlist.
+        # On utilise set_playlist_order qui réordonne sans modifier les autres playlists.
+        ok = set_playlist_order(gw_playlist_id, az_ids)
+        if ok:
+            print(f"  📻 Playlist [{mood}] mise à jour — {len(az_ids)} titres")
         else:
-            print(f"  ⚠ AzuraCast répond {resp.status_code} — vérifier URL et clé API dans services.env")
-            return False
+            print(f"  ⚠ Mise à jour playlist échouée")
     except Exception as e:
-        print(f"  ⚠ AzuraCast inaccessible : {e}")
-        return False
+        print(f"  ⚠ update_playlist: {e}")
 
 
-def process_pending_tts():
+def process_tts_queue():
+    """Convertit en audio les interventions Rebexis en attente."""
     try:
-        sessions = httpx.get(f"{TTS_URL}/pending", timeout=10).json().get("sessions", [])
-        for s in sessions[:2]:
-            print(f"  → TTS session {s['id']}: {s['intervention'][:50]}...")
+        pending = httpx.get(f"{TTS_URL}/pending", timeout=10).json().get("sessions", [])
+        for s in pending[:2]:  # max 2 par cycle — charge CPU stable
+            print(f"  → TTS session {s['id']}: {s['intervention'][:50]}…")
             httpx.post(f"{TTS_URL}/synthesize",
                        params={"session_id": s["id"], "text": s["intervention"]},
-                       timeout=90)
+                       timeout=120)
     except Exception as e:
-        print(f"  ⚠ TTS: {e}")
+        print(f"  ⚠ TTS queue: {e}")
 
 
-def maybe_rebexis():
+def maybe_generate_rebexis():
+    """Déclenche la génération d'une intervention Rebexis si le timing le permet."""
     try:
         state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
-        mood = state.get("mood", "energique")
-        resp = httpx.post(f"{REBEXIS_URL}/generate", params={"mood": mood}, timeout=30)
+        mood  = state.get("mood", "energique")
+
+        # Récupérer le titre en cours depuis AzuraCast
+        np_data = now_playing()
+        context = ""
+        if np_data:
+            song = np_data.get("now_playing", {}).get("song", {})
+            context = f"{song.get('artist', '')} — {song.get('title', '')}".strip(" —")
+
+        resp = httpx.post(f"{REBEXIS_URL}/generate",
+                          params={"mood": mood, "context_track": context},
+                          timeout=30)
         data = resp.json()
         if data.get("intervention"):
-            print(f"  🎙 Rebexis [{mood}]: {data['intervention'][:60]}...")
+            print(f"  🎙 Rebexis [{mood}] : {data['intervention'][:60]}…")
     except Exception as e:
         print(f"  ⚠ Rebexis: {e}")
-
-
-def sync_playlist_with_azuracast():
-    """Récupère la prochaine playlist et la soumet à AzuraCast."""
-    if not AZ_KEY or AZ_KEY in ("__CONFIGURE__", ""):
-        print("  ℹ Clé API AzuraCast non configurée — sync playlist désactivée")
-        return
-    try:
-        state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
-        playlist = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 5}, timeout=15).json()
-        tracks = playlist.get("tracks", [])
-        print(f"  📻 {len(tracks)} titres préparés [{state.get('mood', '?')}]")
-        # Les titres avec az_id peuvent être mis en file dans AzuraCast
-        # via /api/station/{id}/queue (AzuraCast ≥ 0.19)
-        for t in tracks:
-            if t.get("az_id"):
-                try:
-                    httpx.post(f"{AZ_URL}/api/station/{AZ_STATION}/queue",
-                               headers={"X-API-Key": AZ_KEY},
-                               json={"song_id": t["az_id"]}, timeout=5)
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"  ⚠ Sync playlist: {e}")
 
 
 def main():
     print("⚙  Scheduler Gaiverland démarré")
     wait_for(PLAYLIST_URL, "Playlist Engine")
-    wait_for(REBEXIS_URL, "Rebexis Engine")
-    wait_for(TTS_URL, "TTS Worker")
-    check_azuracast()
+    wait_for(REBEXIS_URL,  "Rebexis Engine")
+    wait_for(TTS_URL,      "TTS Worker")
+
+    # Vérifier la connexion AzuraCast
+    station = get_station()
+    if station:
+        print(f"  ✓ AzuraCast connecté — station : {station.get('name', '?')}")
+    else:
+        print("  ⚠ AzuraCast non joignable — scheduler en mode dégradé (Rebexis + TTS actifs)")
+
+    conn = get_conn()
+    gw_id, rb_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
     cycle = 0
     while True:
         cycle += 1
-        print(f"\n── Cycle #{cycle} ────────────────────────────────")
-        process_pending_tts()
-        maybe_rebexis()
-        sync_playlist_with_azuracast()
-        time.sleep(CYCLE_SECONDS)
+        print(f"\n── Cycle #{cycle} ─────────────────────────────────")
+
+        # 1. Traitement TTS en attente (priorité : audio prêt avant diffusion)
+        process_tts_queue()
+
+        # 2. Générer Rebexis si intervalle atteint
+        maybe_generate_rebexis()
+
+        # 3. Mettre à jour la playlist Gaiverland IA dans AzuraCast
+        if gw_id:
+            conn = get_conn()
+            update_gaiverland_playlist(conn, gw_id)
+
+        time.sleep(CYCLE_SEC)
 
 
 if __name__ == "__main__":
     main()
 PYEOF
 
-echo "  ✓ Scripts Python créés"
+echo "  ✓ Scripts Python créés (Essentia + Kokoro TTS + playlists 0.23.4)"
+
+# ════════════════════════════════════════════════════════════════════════
+# BOOTSTRAP AZURACAST (mode autonome uniquement)
+# ════════════════════════════════════════════════════════════════════════
+cat > "${CONFIG_DIR}/bootstrap.sh" <<'BOOTSTRAP'
+#!/bin/bash
+set -euo pipefail
+
+AZ_URL="http://azuracast:80"
+EMAIL="${AZURACAST_ADMIN_EMAIL:-admin@azuracast.local}"
+PASS="${AZURACAST_ADMIN_PASSWORD:-changeme}"
+STATION="${AZURACAST_STATION_NAME:-Gaiverland Radio}"
+SHORT="${AZURACAST_STATION_SHORT:-gaiverland}"
+ICECAST="${CALEOPE_PORT_ICECAST:-8500}"
+AZ_STATION_ID="${AZURACAST_STATION_ID:-1}"
+
+echo ""
+echo "╔═══════════════════════════════════════════════════════╗"
+echo "║  🎙 Gaiverland Radio — Bootstrap AzuraCast            ║"
+echo "╚═══════════════════════════════════════════════════════╝"
+
+echo "  ⏳ Attente AzuraCast (peut prendre 5 min)..."
+STATUS="000"
+for i in $(seq 1 60); do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${AZ_URL}/" 2>/dev/null) || STATUS="000"
+    [[ "${STATUS}" != "000" && "${STATUS}" != "502" && "${STATUS}" != "503" ]] && break
+    echo "  ⏳ (${i}/60)..."
+    sleep 10
+done
+
+[[ "${STATUS}" == "000" ]] && echo "  ⚠ AzuraCast non joignable — skip" && exit 0
+
+sleep 3
+REDIR=$(curl -sf -o /dev/null -w "%{redirect_url}" "${AZ_URL}/" 2>/dev/null) || REDIR=""
+if echo "${REDIR}" | grep -q "/setup"; then
+    RESP=$(curl -sf -X POST "${AZ_URL}/api/frontend/setup/registration" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"Admin\",\"email\":\"${EMAIL}\",\"password\":\"${PASS}\",\"password_confirm\":\"${PASS}\"}" \
+        2>/dev/null) || RESP=""
+    [[ -n "${RESP}" ]] && echo "  ✓ Compte admin créé" || echo "  ⚠ Compte à créer manuellement"
+fi
+
+sleep 2
+TOKEN=$(curl -sf -X POST "${AZ_URL}/api/user/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"${EMAIL}\",\"password\":\"${PASS}\"}" 2>/dev/null \
+    | jq -r '.api_key // empty') || TOKEN=""
+
+[[ -z "${TOKEN}" ]] && echo "  ⚠ Auth API échouée — configuration manuelle requise" && exit 0
+echo "  ✓ Auth API OK"
+
+# Créer la station si absente
+EXISTING=$(curl -sf "${AZ_URL}/api/stations" -H "X-API-Key: ${TOKEN}" 2>/dev/null | jq 'length') || EXISTING=0
+if [[ "${EXISTING}" -eq 0 ]]; then
+    RESP=$(curl -sf -X POST "${AZ_URL}/api/admin/stations" \
+        -H "Content-Type: application/json" -H "X-API-Key: ${TOKEN}" \
+        -d "{\"name\":\"${STATION}\",\"short_name\":\"${SHORT}\",\"frontend_type\":\"icecast\",\"backend_type\":\"liquidsoap\",\"frontend_config\":{\"port\":${ICECAST}},\"is_public\":false,\"enable_requests\":true}" \
+        2>/dev/null) || RESP=""
+    [[ -n "${RESP}" ]] && echo "  ✓ Station '${STATION}' créée" || echo "  ⚠ Création station échouée"
+fi
+
+# Créer les playlists IA
+for PL_NAME in "Gaiverland IA" "Rebexis"; do
+    TYPE="default"; WEIGHT=3; PER_SONGS=0
+    [[ "${PL_NAME}" == "Rebexis" ]] && TYPE="once_per_x_songs" && WEIGHT=1 && PER_SONGS=8
+
+    BODY="{\"name\":\"${PL_NAME}\",\"type\":\"${TYPE}\",\"weight\":${WEIGHT},\"is_enabled\":true"
+    [[ "${PER_SONGS}" -gt 0 ]] && BODY="${BODY},\"play_per_songs\":${PER_SONGS}"
+    BODY="${BODY}}"
+
+    PL_RESP=$(curl -sf -X POST "${AZ_URL}/api/station/${AZ_STATION_ID}/playlists" \
+        -H "Content-Type: application/json" -H "X-API-Key: ${TOKEN}" \
+        -d "${BODY}" 2>/dev/null) || PL_RESP=""
+    [[ -n "${PL_RESP}" ]] && echo "  ✓ Playlist '${PL_NAME}' créée" || echo "  ℹ Playlist '${PL_NAME}' peut déjà exister"
+done
+
+echo ""
+echo "╔═══════════════════════════════════════════════════════╗"
+echo "║  ✅ Bootstrap terminé                                  ║"
+echo "╚═══════════════════════════════════════════════════════╝"
+BOOTSTRAP
+chmod +x "${CONFIG_DIR}/bootstrap.sh"
 
 # ── post-install.txt ──────────────────────────────────────────────────
+MODE_LINE=""
+if [[ "${AZ_EXISTING}" == "true" ]]; then
+    MODE_LINE="  Mode         : addon (AzuraCast existant connecté)"
+else
+    MODE_LINE="  Mode         : autonome (AzuraCast déployé ici)"
+fi
+
 cat > "${CONFIG_DIR}/post-install.txt" <<EOF
 ╔══════════════════════════════════════════════════════════════════╗
 ║           🎙 Gaiverland Radio IA — Post-installation             ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Ce package est maintenant connecté à ton AzuraCast existant.   ║
-║                                                                  ║
-║  AzuraCast URL  : ${AZURACAST_URL}
-║  Station ID     : ${AZURACAST_STATION_ID}
-║  Playlist API   : http://<IP-serveur>:${API_PORT}
+║  ${MODE_LINE}
 ╠══════════════════════════════════════════════════════════════════╣
-║  ⚙  CONFIGURATION OBLIGATOIRE (si clé API non fournie)          ║
-║                                                                  ║
-║  1. Dans AzuraCast → Administration → API Keys                  ║
-║     → Créer une clé Read + Write                                 ║
-║                                                                  ║
-║  2. Éditer : ${CONFIG_DIR}/services.env                         ║
-║     → AZURACAST_API_KEY=<ta-clé>                                 ║
-║                                                                  ║
-║  3. docker restart gaiverland-scheduler gaiverland-tts           ║
+$([ "${AZ_EXISTING}" == "false" ] && echo "║  AzuraCast URL  : ${AZ_BASE_URL}")
+$([ "${AZ_EXISTING}" == "false" ] && echo "║  Login admin    : ${AZ_ADMIN_EMAIL}")
+$([ "${AZ_EXISTING}" == "false" ] && echo "║  Mot de passe   : ${AZ_ADMIN_PASSWORD}")
 ╠══════════════════════════════════════════════════════════════════╣
-$([ "${REBEXIS_MODE}" == "ollama" ] && echo "║  🤖 MODE OLLAMA — télécharger le modèle :                        ║" || echo "")
-$([ "${REBEXIS_MODE}" == "ollama" ] && echo "║  docker exec gaiverland-ollama ollama pull ${REBEXIS_LLM_MODEL}" || echo "")
-║  🔊 Voix TTS    : ${TTS_VOICE}
-║  🎙 Rebexis     : mode ${REBEXIS_MODE}
+║  ⚙  CONFIGURATION REQUISE
+║
+$([ -z "${AZ_API_KEY}" ] && echo "║  1. Créer une clé API dans AzuraCast → Admin → API Keys")
+$([ -z "${AZ_API_KEY}" ] && echo "║     Écrire dans : ${CONFIG_DIR}/services.env")
+$([ -z "${AZ_API_KEY}" ] && echo "║     → AZURACAST_API_KEY=<ta-clé>")
+$([ -z "${AZ_API_KEY}" ] && echo "║     Puis : docker restart gaiverland-scheduler gaiverland-tts gaiverland-analyzer")
 ╠══════════════════════════════════════════════════════════════════╣
-║  🎛 COMMANDES UTILES                                            ║
-║                                                                  ║
-║  État radio     : curl http://localhost:${API_PORT}/state        ║
-║  Logs analyzer  : docker logs gaiverland-analyzer -f            ║
-║  Logs rebexis   : docker logs gaiverland-rebexis -f             ║
-║  Logs scheduler : docker logs gaiverland-scheduler -f           ║
-║  Forcer Rebexis : curl -X POST http://localhost:8081/generate?force=true
+║  🎵 ANALYSE MUSICALE
+║     Essentia + Discogs 400 genres (téléchargement ~50Mo au 1er démarrage)
+║     → logs : docker logs gaiverland-analyzer -f
+║
+║  🎙 REBEXIS : mode ${REBEXIS_MODE} | voix Kokoro ff_siwis
+$([ "${REBEXIS_MODE}" == "ollama" ] && echo "║     → docker exec gaiverland-ollama ollama pull ${REBEXIS_LLM_MODEL}")
+╠══════════════════════════════════════════════════════════════════╣
+║  🎛 COMMANDES
+║
+║  État radio   : curl http://localhost:${API_PORT}/state
+║  Forcer mood  : curl -X POST http://localhost:${API_PORT}/state/mood?mood=festival
+║  Forcer Reb.  : curl -X POST http://localhost:8081/generate?force=true
+║  Logs sched.  : docker logs gaiverland-scheduler -f
 ╚══════════════════════════════════════════════════════════════════╝
 EOF
 
 echo ""
-echo "✅ Gaiverland Radio IA configuré !"
+echo "✅ Gaiverland Radio IA — setup terminé"
 echo ""
-echo "   AzuraCast cible : ${AZURACAST_URL} (station ${AZURACAST_STATION_ID})"
-echo "   Rebexis mode    : ${REBEXIS_MODE} | voix ${TTS_VOICE}"
-echo "   Playlist API    : port ${API_PORT}"
-echo ""
-if [[ "${AZURACAST_API_KEY}" == "__CONFIGURE__" || -z "${AZURACAST_API_KEY}" ]]; then
-    echo "   ⚠  Clé API AzuraCast manquante — configure services.env puis redémarre."
-fi
-if [[ "${REBEXIS_MODE}" == "ollama" ]]; then
-    echo "   ℹ  Ollama : lance 'docker exec gaiverland-ollama ollama pull ${REBEXIS_LLM_MODEL}' après démarrage."
+echo "   Mode       : $( [[ "${AZ_EXISTING}" == "true" ]] && echo "addon (AzuraCast existant)" || echo "autonome (AzuraCast inclus)" )"
+echo "   Rebexis    : ${REBEXIS_MODE} | Kokoro ff_siwis"
+echo "   Analyse    : Essentia + Discogs 400 genres"
+echo "   Playlist API : port ${API_PORT}"
+if [[ -z "${AZ_API_KEY}" ]]; then
+    echo ""
+    echo "   ⚠  Clé API AzuraCast manquante — à configurer dans services.env"
 fi
