@@ -78,6 +78,9 @@ services:
     image: python:3.11-slim
     container_name: gaiverland-tts
     command: ["python", "-u", "/app/tts_worker.py"]
+    environment:
+      - COQUI_TOS_AGREED=1
+      - TTS_HOME=/tts-cache
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
