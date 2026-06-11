@@ -397,16 +397,33 @@ def set_playlist_order(playlist_id: int, file_ids: list) -> bool:
 
 
 def batch_assign_playlist(file_ids: list, playlist_ids: list) -> bool:
-    """Assigne des fichiers à des playlists en batch (AzuraCast 0.20+)."""
+    """Assigne des fichiers (az_id) à des playlists (AzuraCast 0.23+).
+    Le batch endpoint attend des chemins de fichiers, pas des IDs."""
     if not _ok() or not file_ids:
         return False
     try:
-        r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
-                      headers=_headers(),
-                      json={"files": file_ids, "playlists": playlist_ids},
-                      timeout=30)
-        return r.status_code in (200, 204)
-    except Exception:
+        # 1. Récupérer les chemins correspondant aux IDs
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/files",
+                      headers=_headers(), params={"rowsPerPage": 500}, timeout=30)
+        if r.status_code != 200:
+            return False
+        rows = r.json()
+        if isinstance(rows, dict):
+            rows = rows.get("rows", [])
+        id_to_path = {row["id"]: row["path"] for row in rows if "id" in row and "path" in row}
+        paths = [id_to_path[fid] for fid in file_ids if fid in id_to_path]
+        if not paths:
+            return False
+        # 2. Batch assign avec chemins + do=playlist
+        r2 = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
+                       headers=_headers(),
+                       json={"do": "playlist", "files": paths,
+                             "playlists": [str(pid) for pid in playlist_ids]},
+                       timeout=30)
+        d = r2.json() if r2.status_code in (200, 201) else {}
+        return bool(d.get("success", False))
+    except Exception as e:
+        print(f"  ⚠ batch_assign_playlist: {e}")
         return False
 
 
@@ -430,18 +447,20 @@ def find_file_by_path(path: str) -> Optional[dict]:
 
 
 def upload_file(local_path: str, title: str) -> Optional[dict]:
-    """Upload un fichier audio dans AzuraCast, retourne l'objet créé."""
+    """Upload un fichier audio dans AzuraCast (format JSON base64), retourne l'objet créé."""
     if not _ok():
         return None
     try:
+        import base64
         with open(local_path, "rb") as f:
-            r = httpx.post(
-                f"{AZ_URL}/api/station/{AZ_STATION}/files",
-                headers={"X-API-Key": AZ_KEY},
-                files={"file": (os.path.basename(local_path), f, "audio/mpeg")},
-                data={"title": title},
-                timeout=60,
-            )
+            content_b64 = base64.b64encode(f.read()).decode()
+        dest_path = f"gaiverland/{os.path.basename(local_path)}"
+        r = httpx.post(
+            f"{AZ_URL}/api/station/{AZ_STATION}/files",
+            headers={"X-API-Key": AZ_KEY, "Content-Type": "application/json"},
+            json={"path": dest_path, "file": content_b64},
+            timeout=120,
+        )
         return r.json() if r.status_code in (200, 201) else None
     except Exception as e:
         print(f"  ⚠ Upload AzuraCast: {e}")
@@ -1315,11 +1334,9 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
             print(f"  ℹ Playlist [{mood}] — aucun az_id disponible (analyzer pas encore synchro ?)")
             return
 
-        # Assigner les titres à la playlist en batch
-        # D'abord vider les anciens (batch avec playlist vide), puis ajouter les nouveaux
-        # Note : batch_assign remplace les playlists du fichier, pas juste pour cette playlist.
-        # On utilise set_playlist_order qui réordonne sans modifier les autres playlists.
-        ok = set_playlist_order(gw_playlist_id, az_ids)
+        # Assigner les titres à la playlist Gaiverland IA (type shuffle)
+        # batch_assign_playlist récupère les paths AzuraCast et utilise do=playlist
+        ok = batch_assign_playlist(az_ids, [gw_playlist_id])
         if ok:
             print(f"  📻 Playlist [{mood}] mise à jour — {len(az_ids)} titres")
         else:
