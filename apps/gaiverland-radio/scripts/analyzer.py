@@ -1,0 +1,316 @@
+"""
+Analyseur musical — Essentia + modèle Discogs EffNet (400 genres).
+Extrait BPM précis, énergie, danceability, tonalité, genre électronique.
+Mappe sur les moods Gaiverland et synchronise les az_id avec AzuraCast.
+"""
+import os, sys, subprocess, time, pathlib, json
+
+MODELS_DIR = pathlib.Path(os.environ.get("ESSENTIA_MODELS_DIR", "/essentia-models"))
+
+DISCOGS_MODELS = {
+    "effnet_embed": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb",
+    
+    "genre_labels": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.json",
+}
+
+# Mapping genres Discogs → moods Gaiverland
+GENRE_TO_MOOD = {
+    # Intense
+    "Hardstyle": "intense", "Hardcore": "intense", "Gabber": "intense",
+    "Hard Techno": "intense", "Industrial": "intense", "Speedcore": "intense",
+    "UK Hardcore": "intense", "Frenchcore": "intense",
+    # Festival / Big energy
+    "Trance": "festival", "Euro House": "festival", "Happy Hardcore": "festival",
+    "Jumpstyle": "festival", "Electro House": "festival", "Big Room": "festival",
+    "Dance": "festival", "Eurodance": "festival", "Hi NRG": "festival",
+    # Energique
+    "Techno": "energique", "Tech House": "energique", "Minimal": "energique",
+    "Electroclash": "energique", "EBM": "energique", "Electro": "energique",
+    "Acid Techno": "energique", "Detroit Techno": "energique",
+    # Melodique
+    "Progressive House": "melodique", "Progressive Trance": "melodique",
+    "Melodic Techno": "melodique", "Deep House": "melodique",
+    "Melodic House": "melodique", "Electronica": "melodique",
+    "Italo House": "melodique", "Dream House": "melodique",
+    # Nocturne
+    "Ambient": "nocturne", "Downtempo": "nocturne", "Chillout": "nocturne",
+    "Dark Ambient": "nocturne", "Drone": "nocturne", "New Age": "nocturne",
+}
+
+AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a"}
+
+# Préfixes de fichiers à exclure de l'analyse (jingles, TTS, etc.)
+SKIP_PREFIXES = ("rebexis_",)
+
+
+def install_deps():
+    pkgs = ["essentia-tensorflow", "psycopg2-binary", "inotify-simple", "httpx", "mutagen"]
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet"] + pkgs, check=True)
+
+
+try:
+    import essentia, essentia.standard as es, psycopg2, inotify_simple, httpx, mutagen
+except ImportError:
+    print("→ Installation dépendances analyzer (essentia-tensorflow, ~500Mo)...")
+    install_deps()
+    import essentia, essentia.standard as es, psycopg2, inotify_simple, httpx, mutagen
+
+import numpy as np
+import sys
+sys.path.insert(0, "/app")
+from az_utils import find_file_by_path, batch_assign_playlist
+
+DB_URL = os.environ["DATABASE_URL"]
+AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
+WATCH_DIR = "/var/azuracast/stations"
+
+_genre_labels = []
+_effnet_model = None
+_genre_model = None
+
+
+def download_models():
+    global _genre_labels
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    for name, url in DISCOGS_MODELS.items():
+        dest = MODELS_DIR / pathlib.Path(url).name
+        if not dest.exists():
+            print(f"  → Téléchargement modèle Essentia : {dest.name} (~{40 if 'effnet' in name else 2}Mo)...")
+            import urllib.request; print(f"  → download {url}"); urllib.request.urlretrieve(url, str(dest))
+            print(f"  ✓ {dest.name}")
+    # Charger les labels genre
+    labels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_labels"]).name
+    if labels_path.exists():
+        with open(labels_path) as f:
+            meta = json.load(f)
+        _genre_labels = meta.get("classes", [])
+    print(f"  ✓ {len(_genre_labels)} classes de genres chargées")
+
+
+def load_models():
+    global _effnet_model, _genre_model
+    effnet_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["effnet_embed"]).name
+    # Utiliser le même modèle effnet pour la classification directe (PartitionedCall:0)
+    _effnet_model = es.TensorflowPredictEffnetDiscogs(
+        graphFilename=str(effnet_path), output="PartitionedCall:0"
+    )
+    _genre_model = _effnet_model  # Alias — même modèle, output direct
+    print("  ✓ Modèles Essentia chargés en mémoire")
+
+
+def infer_mood_from_bpm_energy(bpm: float, energy: float) -> str:
+    """Fallback si pas de genre détecté."""
+    if bpm > 155 and energy > 0.65:
+        return "intense"
+    elif bpm > 145 and energy > 0.55:
+        return "festival"
+    elif bpm > 128:
+        return "energique" if energy > 0.4 else "melodique"
+    elif bpm > 110:
+        return "melodique"
+    return "nocturne"
+
+
+def apply_bpm_guard(mood: str, bpm: float) -> str:
+    """Corrige les incohérences flagrantes BPM/mood après classification genre.
+    Évite ex: Happy Hardcore 161 BPM → festival, ou House 104 BPM → festival.
+    """
+    if mood in ("festival", "energique", "intense") and bpm < 112:
+        return "melodique"
+    if mood in ("festival", "energique") and bpm > 155:
+        return "intense"
+    if mood == "intense" and bpm < 115:
+        return "festival"
+    if mood in ("nocturne", "melodique") and bpm > 165:
+        return "intense"  # double-tempo probable mais safe fallback
+    return mood
+
+
+def analyze_file(path: str) -> dict:
+    try:
+        # ── Chargement audio ─────────────────────────────────────────
+        loader = es.MonoLoader(filename=path, sampleRate=44100)
+        audio_44k = loader()
+
+        # Pour les modèles Essentia (16kHz)
+        loader16 = es.MonoLoader(filename=path, sampleRate=16000)
+        audio_16k = loader16()
+
+        # ── Extracteur BPM, énergie, tonalité ────────────────────────
+        extractor = es.MusicExtractor()
+        features, _ = extractor(path)
+
+        bpm          = float(features["rhythm.bpm"])
+        energy       = float(features["lowlevel.average_loudness"])
+        energy_norm  = min(1.0, max(0.0, (energy + 1.0) / 2.0))
+        danceability = float(features["rhythm.danceability"])
+        # tonal keys: variantes selon version Essentia
+        try:
+            key_note  = str(features["tonal.key_temperley.key"])
+            key_scale = str(features["tonal.key_temperley.scale"])
+        except Exception:
+            try:
+                key_note  = str(features["tonal.key_edma.key"])
+                key_scale = str(features["tonal.key_edma.scale"])
+            except Exception:
+                key_note, key_scale = "", ""
+
+        # Détection vocaux (énergie mid vs low)
+        spec = np.abs(es.Spectrum()(audio_44k[:44100]))
+        freqs = np.linspace(0, 22050, len(spec))
+        vocal_e = float(np.mean(spec[(freqs > 300) & (freqs < 3400)])) + 1e-9
+        low_e   = float(np.mean(spec[freqs <= 300])) + 1e-9
+        has_vocals = (vocal_e / low_e) > 0.25
+
+        # ── Genre Discogs (Essentia ML) ───────────────────────────────
+        genre_top1 = genre_top2 = ""
+        genre_scores = {}
+        mood = "energique"  # default
+
+        if _effnet_model and _genre_labels:
+            try:
+                predictions  = _effnet_model(audio_16k)
+                mean_scores  = np.mean(predictions, axis=0)
+
+                # Top 10 genres par score
+                top_idx = np.argsort(mean_scores)[::-1][:10]
+                for i in top_idx:
+                    if i < len(_genre_labels) and float(mean_scores[i]) > 0.05:
+                        label = _genre_labels[i].split("---")[-1].strip()
+                        genre_scores[label] = round(float(mean_scores[i]), 4)
+
+                # Genres principaux
+                sorted_genres = sorted(genre_scores.items(), key=lambda x: -x[1])
+                if sorted_genres:
+                    genre_top1 = sorted_genres[0][0]
+                if len(sorted_genres) > 1:
+                    genre_top2 = sorted_genres[1][0]
+
+                # Mood : premier genre reconnu dans le mapping
+                for label, _ in sorted_genres:
+                    if label in GENRE_TO_MOOD:
+                        mood = GENRE_TO_MOOD[label]
+                        break
+                else:
+                    mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+            except Exception as eg:
+                print(f"  ⚠ Genre detection: {eg} — fallback BPM")
+                mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+        else:
+            mood = infer_mood_from_bpm_energy(bpm, energy_norm)
+
+        # Garde BPM : corrige les incohérences flagrantes genre/BPM
+        mood = apply_bpm_guard(mood, bpm)
+
+        # ── Métadonnées ID3/tags ──────────────────────────────────────
+        meta = mutagen.File(path, easy=True) or {}
+        title    = str(meta.get("title",  [""])[0]) or os.path.basename(path)
+        artist   = str(meta.get("artist", [""])[0]) or "Inconnu"
+        album    = str(meta.get("album",  [""])[0]) or ""
+        duration = float(features["metadata.audio_properties.length"])
+
+        return {
+            "file_path": path, "title": title, "artist": artist, "album": album,
+            "duration": round(duration, 1), "bpm": round(bpm, 1),
+            "energy": round(energy_norm, 3), "danceability": round(danceability, 3),
+            "has_vocals": has_vocals, "key_note": key_note, "key_scale": key_scale,
+            "mood": mood, "genre_top1": genre_top1, "genre_top2": genre_top2,
+            "genre_scores": json.dumps(genre_scores), "analyzed": True,
+        }
+    except Exception as exc:
+        print(f"  ⚠ Analyse échouée {os.path.basename(path)}: {exc}")
+        return {"file_path": path, "analyzed": False}
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL)
+
+
+def save_track(conn, data: dict):
+    if not data.get("analyzed"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO tracks
+              (file_path, title, artist, album, duration, bpm, energy, danceability,
+               has_vocals, key_note, key_scale, mood, genre_top1, genre_top2, genre_scores, analyzed)
+            VALUES
+              (%(file_path)s, %(title)s, %(artist)s, %(album)s, %(duration)s, %(bpm)s,
+               %(energy)s, %(danceability)s, %(has_vocals)s, %(key_note)s, %(key_scale)s,
+               %(mood)s, %(genre_top1)s, %(genre_top2)s, %(genre_scores)s::jsonb, %(analyzed)s)
+            ON CONFLICT (file_path) DO UPDATE SET
+              bpm=EXCLUDED.bpm, energy=EXCLUDED.energy, danceability=EXCLUDED.danceability,
+              has_vocals=EXCLUDED.has_vocals, mood=EXCLUDED.mood,
+              genre_top1=EXCLUDED.genre_top1, genre_top2=EXCLUDED.genre_top2,
+              genre_scores=EXCLUDED.genre_scores::jsonb, analyzed=EXCLUDED.analyzed,
+              key_note=EXCLUDED.key_note, key_scale=EXCLUDED.key_scale, updated_at=NOW()
+            RETURNING id
+        """, {**data, "genre_scores": data.get("genre_scores", "{}")})
+        track_id = cur.fetchone()[0]
+    conn.commit()
+
+    # Sync az_id depuis AzuraCast
+    if data.get("analyzed") and AZ_KEY:
+        az_file = find_file_by_path(data["file_path"])
+        if az_file:
+            az_id = az_file.get("id")
+            with conn.cursor() as cur:
+                cur.execute("UPDATE tracks SET az_id=%s WHERE id=%s", (az_id, track_id))
+            conn.commit()
+
+    return track_id
+
+
+def main():
+    print("🎵 Analyzer Gaiverland démarré")
+    download_models()
+    load_models()
+
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
+        known = {r[0] for r in cur.fetchall()}
+
+    def should_skip(filename: str) -> bool:
+        return filename.startswith(SKIP_PREFIXES)
+
+    # Scan initial
+    count = 0
+    for root, _, files in os.walk(WATCH_DIR):
+        for f in files:
+            if os.path.splitext(f)[1].lower() in AUDIO_EXTS and not should_skip(f):
+                fp = os.path.join(root, f)
+                if fp not in known:
+                    print(f"  → {os.path.basename(fp)}")
+                    save_track(conn, analyze_file(fp))
+                    count += 1
+    print(f"  ✓ {count} fichiers analysés au démarrage")
+
+    # Surveillance inotify — dict wd→dossier pour reconstituer le chemin complet
+    inotify = inotify_simple.INotify()
+    wd_to_dir = {}
+    for root, _, _ in os.walk(WATCH_DIR):
+        wd = inotify.add_watch(root, inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO)
+        wd_to_dir[wd] = root
+    print("  ✓ Surveillance temps réel active")
+
+    while True:
+        events = inotify.read(timeout=5000)
+        for event in events:
+            name = event.name.decode() if isinstance(event.name, bytes) else event.name
+            if os.path.splitext(name)[1].lower() in AUDIO_EXTS and not should_skip(name):
+                try:
+                    conn.cursor().execute("SELECT 1")
+                except Exception:
+                    conn = get_conn()
+                # Reconstruire le chemin complet avec le dossier de l'event
+                event_dir = wd_to_dir.get(event.wd, WATCH_DIR)
+                fp = os.path.join(event_dir, name)
+                print(f"  → Nouveau : {fp}")
+                time.sleep(1)
+                save_track(conn, analyze_file(fp))
+                print(f"  ✓ Analysé : {name}")
+
+
+if __name__ == "__main__":
+    main()

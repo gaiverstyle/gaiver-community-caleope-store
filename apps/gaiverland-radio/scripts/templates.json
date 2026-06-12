@@ -1,0 +1,108 @@
+{
+  "_note": "Formatage : majuscules = emphase ElevenLabs v3, '...' = pause, {next} = prochain artiste/titre",
+  "modes": {
+    "normal": {
+      "templates": [
+        "Ce morceau... exactement ce qu'il fallait.",
+        "Je reste discrète. La musique, elle, ne l'est pas.",
+        "C'est BIEN. Continuons.",
+        "Aucune raison d'interrompre ça. Aucune.",
+        "Parfait... pour ce moment précis."
+      ]
+    },
+    "hype": {
+      "triggers": ["festival", "energique"],
+      "templates_no_next": [
+        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+        "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
+        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
+        "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
+        "Je crois que les enceintes viennent de demander une augmentation.",
+        "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
+        "Transition PARFAITE. Je ne dis rien. Je profite.",
+        "On monte... on monte encore... et puis on monte UN PEU PLUS.",
+        "Gaiverland Radio, toujours dans les bons mouvements. On s'arrête pas, on accélère.",
+        "Ce set-là... il n'a pas l'intention de ralentir. Et moi non plus."
+      ],
+      "templates_with_next": [
+        "Et voilà, on souffle... deux secondes seulement. Parce que {next} débarque, et j'espère que vous êtes PRÊTS.",
+        "Ce train-là, il ralentit pas. {next} prend le relais et je vous garantis que le volume, lui, il augmente.",
+        "Gaiverland Radio continue sans pause... {next} arrive et je vous conseille d'accrocher vos ceintures.",
+        "Allez, j'espère que vous êtes bien attaché... parce que là {next} débarque et ça va DÉCHIRER.",
+        "On reste dans la bonne direction. {next} prend le relais et le festival... il continue.",
+        "Je passe le micro... enfin, les basses. {next} arrive. C'est PAS fait pour être assis.",
+        "Et le train de la dance repart ! {next} en cabine, et moi je monte le son.",
+        "Ok on repart. {next} en approche, altitude maximale, personne ne dort ici."
+      ],
+      "templates": [
+        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+        "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
+        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
+        "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
+        "Je crois que les enceintes viennent de demander une augmentation.",
+        "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
+        "Transition PARFAITE. Je ne dis rien. Je profite.",
+        "On monte... on monte encore... et puis on monte UN PEU PLUS."
+      ]
+    },
+    "peak": {
+      "triggers": ["intense"],
+      "templates_no_next": [
+        "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
+        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
+        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "On est au sommet. PROFITEZ-EN.",
+        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Hardstyle activé. Tout le reste... peut attendre.",
+        "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
+        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
+      ],
+      "templates_with_next": [
+        "Je croyais qu'on avait atteint le plafond... et puis {next} arrive. Le plafond, il vient de s'envoler.",
+        "Là c'est {next}. Moi je recule de quelques pas. Par précaution. Bonne chance à vous.",
+        "Vous croyiez que c'était fini ? {next} dit NON. Et franchement, {next} a raison.",
+        "Alerte niveau CRITIQUE. {next} entre dans la salle. Je déconseille formellement de rester assis.",
+        "C'est pas une radio... c'est une catapulte. Et là {next} appuie sur le bouton.",
+        "Gaiverland Radio, on n'excuse pas le volume. {next} arrive et c'est VOULU.",
+        "Le Hardstyle, il ne demande pas la permission. {next} non plus. Vous voilà PRÉVENUS."
+      ],
+      "templates": [
+        "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
+        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
+        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "On est au sommet. PROFITEZ-EN.",
+        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Hardstyle activé. Tout le reste... peut attendre.",
+        "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
+        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
+      ]
+    },
+    "flow": {
+      "triggers": ["melodique", "nocturne"],
+      "templates_no_next": [
+        "On glisse... vers quelque chose de plus profond. C'est agréable.",
+        "Ce changement de rythme... exactement ce qu'il fallait.",
+        "Melodic à cette heure. Les choix sont DÉFENDABLES.",
+        "On descend en douceur. Sans perdre l'essentiel.",
+        "Progressive. Le mot dit tout.",
+        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
+        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
+      ],
+      "templates_with_next": [
+        "On laisse la nuit avancer... et {next} accompagne parfaitement ce moment. Restez là.",
+        "Douceur et profondeur. C'est ce que {next} apporte à cette heure-ci, et c'est exactement ce qu'il faut.",
+        "Le set prend de la hauteur... {next} entre dans la pièce et la nuit... elle commence vraiment.",
+        "Moins de bruit, plus de sens. {next} arrive et ça, ça méritait qu'on le dise."
+      ],
+      "templates": [
+        "On glisse... vers quelque chose de plus profond. C'est agréable.",
+        "Ce changement de rythme... exactement ce qu'il fallait.",
+        "Melodic à cette heure. Les choix sont DÉFENDABLES.",
+        "On descend en douceur. Sans perdre l'essentiel.",
+        "Progressive. Le mot dit tout.",
+        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
+        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
+      ]
+    }
+  }
+}
