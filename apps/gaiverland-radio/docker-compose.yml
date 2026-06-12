@@ -73,19 +73,17 @@ services:
     networks:
       - gaiverland-internal
 
-  # ── TTS Worker — edge-tts Microsoft Neural (FastAPI :8082) ──────────────
+  # ── TTS Worker — ElevenLabs API (FastAPI :8082) ─────────────────────────
   gw-tts:
     image: python:3.12-slim
     container_name: gaiverland-tts
     command: ["python", "-u", "/app/tts_worker.py"]
-    environment:
-      - TTS_VOICE=fr-FR-DeniseNeural
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
       - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
-      - {{.BaseDir}}/app-config/gaiverland-radio:/rebexis-config:ro
     depends_on:
       gw-db:
         condition: service_healthy
@@ -111,6 +109,23 @@ services:
       - gaiverland-internal
       - azuracast-internal
 
+  # ── YouTube Live Streamer ────────────────────────────────────────────────
+  gw-youtube:
+    image: python:3.12-slim
+    container_name: gaiverland-youtube
+    command: ["python", "-u", "/app/youtube_streamer.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/youtube.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    profiles:
+      - with-youtube
+    restart: unless-stopped
+    networks:
+      - azuracast-internal
+      - gaiverland-internal
+
   # ── Ollama (mode rebexis=ollama seulement) ───────────────────────────────
   gaiverland-ollama:
     image: ollama/ollama:latest
@@ -131,7 +146,7 @@ services:
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
     volumes:
-      - {{.BaseDir}}/app-config/gaiverland-radio:/bootstrap:ro
+      - {{.BaseDir}}/app-config/gaiverland-radio:/bootstrap
     profiles:
       - with-azuracast
     restart: "no"
@@ -146,6 +161,12 @@ services:
     container_name: azuracast
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=caleope-public"
+      - "traefik.http.routers.gaiverland-radio.rule=Host(`${RADIO_DOMAIN:-radio.localhost}`)"
+      - "traefik.http.routers.gaiverland-radio.entrypoints=web"
+      - "traefik.http.services.gaiverland-radio.loadbalancer.server.port=80"
     volumes:
       - {{.BaseDir}}/app-data/azuracast/stations:/var/azuracast/stations
       - {{.BaseDir}}/app-data/gaiverland-radio/backups:/var/azuracast/backups
