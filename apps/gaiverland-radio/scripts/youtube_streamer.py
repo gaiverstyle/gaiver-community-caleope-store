@@ -133,15 +133,26 @@ class BackgroundManager:
         for uuid_short, url in all_urls:
             dest = self.cache_dir / f"bg_{uuid_short}.jpg"
             if dest.exists():
-                self.photos.append(dest)
-                continue
+                # Valider : taille min 50KB (évite images blanches/corrompues ~11KB)
+                if dest.stat().st_size < 50_000:
+                    print(f"    ⚠ BG {uuid_short}: fichier trop petit ({dest.stat().st_size}B), ignoré")
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        pass
+                    # Re-télécharger
+                else:
+                    self.photos.append(dest)
+                    continue
             try:
                 r = httpx.get(url, timeout=30, follow_redirects=True,
                               headers={"User-Agent": self.UA})
-                if r.status_code == 200:
+                if r.status_code == 200 and len(r.content) > 50_000:
                     dest.write_bytes(r.content)
                     self.photos.append(dest)
                     downloaded += 1
+                else:
+                    print(f"    ⚠ DL {uuid_short}: réponse invalide (status={r.status_code}, size={len(r.content)}B)")
             except Exception as e:
                 print(f"    ⚠ DL {uuid_short}: {e}")
 
@@ -396,7 +407,7 @@ def dry_run():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    global _bg_manager
+    global _bg_manager, _frame
     print("📺 YouTube Streamer — Gaiverland Radio")
     print(f"   Icecast : {ICECAST_URL}")
     print(f"   YouTube : {(YT_RTMP[:50]+'…') if YT_RTMP else '⚠ NON CONFIGURÉ (dry-run)'}")
