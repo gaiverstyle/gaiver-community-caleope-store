@@ -311,11 +311,18 @@ def cover_updater():
             if sid != _song_id:
                 print(f"  🎵 {artist} — {title}")
                 cover    = fetch_cover(art)
+                print(f"    cover={'ok '+str(cover.size) if cover else 'None (pas de cover)'}")
                 bg_photo = _bg_manager.get_random() if _bg_manager else None
-                frame    = make_frame(bg_photo, cover, title, artist)
-                with _frame_lock:
-                    _frame   = frame
-                    _song_id = sid
+                print(f"    bg={'ok' if bg_photo else 'None'}")
+                try:
+                    frame = make_frame(bg_photo, cover, title, artist)
+                    frame_sz = len(frame)
+                    with _frame_lock:
+                        _frame   = frame
+                        _song_id = sid
+                    print(f"    ✓ _frame mis à jour ({frame_sz} bytes, cover={'oui' if cover else 'non'})")
+                except Exception as ef:
+                    print(f"    ✗ make_frame ERREUR: {ef}")
         except Exception as e:
             print(f"  ⚠ cover_updater: {e}")
         time.sleep(POLL_SEC)

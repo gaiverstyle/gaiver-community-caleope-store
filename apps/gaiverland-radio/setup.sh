@@ -76,6 +76,7 @@ WEB_PORT=${CALEOPE_PORT_WEB:-8099}
 SFTP_PORT=${CALEOPE_PORT_SFTP:-2022}
 ICECAST_PORT=${CALEOPE_PORT_ICECAST:-8000}
 API_PORT=${CALEOPE_PORT_API:-8080}
+RADIO_DOMAIN=${CALEOPE_DOMAIN:+radio.${CALEOPE_DOMAIN}}
 EOF
 
 # Copier .env dans le répertoire du compose (Docker Compose v2 le lit depuis là)
@@ -171,8 +172,6 @@ REBEXIS_INTERVAL_MIN=${REBEXIS_INTERVAL_MIN}
 REBEXIS_INTERVAL_MAX=${REBEXIS_INTERVAL_MAX}
 DISCOVERY_RATIO=${DISCOVERY_RATIO}
 TTS_CACHE_DIR=/tts-cache
-TTS_HOME=/tts-cache
-COQUI_TOS_AGREED=1
 ESSENTIA_MODELS_DIR=/essentia-models
 OLLAMA_URL=http://gaiverland-ollama:11434
 OLLAMA_MODEL=${REBEXIS_LLM_MODEL}
@@ -1072,107 +1071,365 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8081)
 PYEOF
 
-# ── tts_worker.py — edge-tts (Microsoft Neural) + post-traitement radio ─
+# ── elevenlabs.env — variables API ElevenLabs ────────────────────────────
+cat > "${CONFIG_DIR}/elevenlabs.env" <<'ENVEOF'
+# Clé API ElevenLabs (https://elevenlabs.io → Profile → API Keys)
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+# ID de la voix Rebexis (ElevenLabs → Voices → ta voix → ID)
+ELEVENLABS_VOICE_ID=your_voice_id_here
+# Modèle recommandé pour le français expressif
+ELEVENLABS_MODEL=eleven_v3
+# Limite mensuelle en caractères (plan gratuit = 10000)
+EL_CHARS_LIMIT=10000
+ENVEOF
+echo "  ✓ elevenlabs.env (à remplir avec tes clés EL)"
+
+# ── tts_worker.py — ElevenLabs API + bibliothèque de phrases cachées ─────
 cat > "${SCRIPTS_DIR}/tts_worker.py" <<'PYEOF'
 """
-TTS Worker — edge-tts (Microsoft Neural TTS) + chaîne de post-traitement radio.
-Voix fr-FR-DeniseNeural : qualité neurale excellente, pas de modèle local.
-Upload automatique dans AzuraCast, assignation playlist Rebexis.
+TTS Worker — ElevenLabs API + bibliothèque de phrases cachées
+Stratégie :
+  - Chaque phrase générée est stockée en DB (tts_library) → jamais régénérée
+  - Quota mensuel : 10 000 chars/mois (paramétrable EL_CHARS_LIMIT)
+  - [playful] tag auto sur toutes les phrases pour expressivité radio
+  - Pré-génération des phrases statiques Cat3 au démarrage
+  - Dégradation gracieuse si quota épuisé : pioche dans la même catégorie en cache
 """
-import os, sys, subprocess, hashlib, pathlib, asyncio
+import os, sys, subprocess, hashlib, pathlib, threading, queue, time, re
 
-TTS_CACHE = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
-TTS_CACHE.mkdir(parents=True, exist_ok=True)
-
-
+# ── Deps bootstrap ────────────────────────────────────────────────────────────
 def install_deps():
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "edge-tts", "fastapi", "uvicorn[standard]",
-                    "psycopg2-binary", "httpx"], check=True)
     subprocess.run(["apt-get", "update", "-qq"], check=True)
     subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
-
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
 
 try:
-    import edge_tts
     import fastapi, uvicorn, psycopg2, httpx
 except ImportError:
-    print("→ Installation edge-tts + ffmpeg...")
     install_deps()
-    import edge_tts
     import fastapi, uvicorn, psycopg2, httpx
 
-from fastapi import FastAPI
 import psycopg2.extras
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+
 sys.path.insert(0, "/app")
 from az_utils import upload_file
 
-DB_URL     = os.environ["DATABASE_URL"]
-AZ_KEY     = os.environ.get("AZURACAST_API_KEY", "")
-AZ_URL     = os.environ.get("AZURACAST_URL", "http://azuracast:80")
-AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+# ── Config ────────────────────────────────────────────────────────────────────
+DB_URL          = os.environ["DATABASE_URL"]
+EL_API_KEY      = os.environ["ELEVENLABS_API_KEY"]
+EL_VOICE_ID     = os.environ["ELEVENLABS_VOICE_ID"]     # ID de la voix Rebexis sur EL
+EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
+EL_CHARS_LIMIT  = int(os.environ.get("EL_CHARS_LIMIT", "10000"))   # par mois
+TTS_CACHE       = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
+TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
-# Voix fr-FR-DeniseNeural : claire, présente, excellente intelligibilité
-# Alternatives : fr-FR-HenriNeural (masculin), fr-FR-EloiseNeural
-EDGE_TTS_VOICE = os.environ.get("TTS_VOICE", "fr-FR-DeniseNeural")
+# Paramètres voix ElevenLabs — validés : jeune, motivée, ton radio
+EL_VOICE_SETTINGS = {
+    "stability":         0.30,   # dynamique, moins contrôlé = plus naturel/jeune
+    "similarity_boost":  0.75,
+    "style":             0.75,   # expressivité radio affirmée
+    "use_speaker_boost": True,
+}
 
-app = FastAPI(title="TTS Worker")
+# ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
+# Cat3 : blocs musicaux (aucune variable, priorité absolue)
+STATIC_PHRASES = [
+    # --- Blocs musicaux ---
+    ("cat3_bloc", "Et maintenant, un maximum d'électro."),
+    ("cat3_bloc", "Retour à la musique."),
+    ("cat3_bloc", "On continue sans ralentir."),
+    ("cat3_bloc", "On garde cette énergie."),
+    ("cat3_bloc", "La nuit avance, la musique aussi."),
+    ("cat3_bloc", "On enchaîne, et on ne ralentit pas."),
+    ("cat3_bloc", "Gaiverland Radio — on reste en mode plein gaz."),
+    ("cat3_bloc", "Et voilà, on repart."),
+    # --- Nouveauté sans artiste ---
+    ("cat4_nouveaute", "Place à une nouveauté qui a attiré mon attention."),
+    ("cat4_nouveaute", "Un nouveau titre que je voulais vraiment partager avec vous ce soir."),
+]
 
+# Templates avec variables — générés à la demande, cachés à vie
+# {artist} ou {title} sont résolus dynamiquement
+TEMPLATES = {
+    # Catégorie 1 — lancement artiste
+    "cat1_artiste_1": "Et maintenant, {artist} sur Gaiverland Radio.",
+    "cat1_artiste_2": "Place à {artist}.",
+    "cat1_artiste_3": "On retrouve maintenant {artist}.",
+    # Catégorie 2 — lancement morceau
+    "cat2_morceau_1": "Et maintenant, {title}.",
+    "cat2_morceau_2": "Voici {title}.",
+    "cat2_morceau_3": "On s'écoute {title}.",
+    # Catégorie 4 — nouveauté avec artiste
+    "cat4_nouveaute_1": "Et maintenant une découverte signée {artist}.",
+}
 
-async def _edge_synthesize(text: str, mp3_path: pathlib.Path):
-    communicate = edge_tts.Communicate(text, EDGE_TTS_VOICE)
-    await communicate.save(str(mp3_path))
-
-
-def synthesize_raw(text: str) -> pathlib.Path:
-    """edge-tts → MP3 natif Microsoft Neural TTS."""
-    h = hashlib.sha256(f"edge:{EDGE_TTS_VOICE}:{text}".encode()).hexdigest()[:16]
-    mp3_path = TTS_CACHE / f"raw_{h}.mp3"
-    if mp3_path.exists():
-        return mp3_path
-    asyncio.run(_edge_synthesize(text, mp3_path))
-    return mp3_path
-
-
-# Chaîne ffmpeg radio — style festival/broadcast
-# Objectif : voix présente, punchy, qui "sort" des basses du mix électro
-FFMPEG_RADIO_CHAIN = ",".join([
+# ── Chaîne ffmpeg radio ───────────────────────────────────────────────────────
+FFMPEG_RADIO = ",".join([
     "highpass=f=90",
     "equalizer=f=180:width_type=o:width=2:g=-3",
-    "equalizer=f=2500:width_type=o:width=1.5:g=5",
+    "equalizer=f=2500:width_type=o:width=1.5:g=4",
     "equalizer=f=10000:width_type=o:width=2:g=3",
-    "acompressor=threshold=-22dB:ratio=6:attack=2:release=120:makeup=7",
-    "aexciter=level_in=1:level_out=1:amount=2:drive=3",
+    "acompressor=threshold=-22dB:ratio=4:attack=3:release=150:makeup=6",
+    "aexciter=level_in=1:level_out=1:amount=1.5:drive=2",
     "alimiter=limit=0.92:attack=0.5:release=3",
     "loudnorm=I=-13:LRA=5:TP=-1.0",
 ])
 
-
-def apply_radio_processing(raw_mp3: pathlib.Path) -> pathlib.Path:
-    """Applique la chaîne radio et exporte en MP3 192kbps."""
-    h = raw_mp3.stem.replace("raw_", "")
-    out_path = TTS_CACHE / f"rebexis_{h}.mp3"
-    if out_path.exists():
-        return out_path
-
-    result = subprocess.run([
-        "ffmpeg", "-y", "-i", str(raw_mp3),
-        "-af", FFMPEG_RADIO_CHAIN,
-        "-b:a", "192k", "-ar", "44100",
-        str(out_path)
-    ], capture_output=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg: {result.stderr.decode()[:300]}")
-
-    raw_mp3.unlink(missing_ok=True)
-    return out_path
+app = FastAPI(title="TTS Worker — ElevenLabs")
+_synth_queue: queue.Queue = queue.Queue()
+_current_job: dict | None = None
+_queue_lock = threading.Lock()
 
 
+# ── DB ────────────────────────────────────────────────────────────────────────
 def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+def init_db():
+    """Crée les tables tts_library et el_monthly_quota si elles n'existent pas."""
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tts_library (
+                id           SERIAL PRIMARY KEY,
+                text_hash    VARCHAR(64) UNIQUE NOT NULL,
+                text         TEXT NOT NULL,
+                category     VARCHAR(50) NOT NULL DEFAULT 'custom',
+                audio_file   TEXT,
+                az_file_id   INTEGER,
+                el_chars     INTEGER NOT NULL DEFAULT 0,
+                created_at   TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS el_monthly_quota (
+                month       CHAR(7) PRIMARY KEY,
+                chars_used  INTEGER NOT NULL DEFAULT 0,
+                chars_limit INTEGER NOT NULL DEFAULT 10000,
+                updated_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tts_lib_hash ON tts_library(text_hash)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tts_lib_cat  ON tts_library(category)")
+    conn.commit()
+    conn.close()
+    print("✓ DB tts_library + el_monthly_quota OK")
+
+
+# ── Quota ElevenLabs ──────────────────────────────────────────────────────────
+def current_month() -> str:
+    import datetime
+    return datetime.date.today().strftime("%Y-%m")
+
+
+def quota_used(conn) -> int:
+    month = current_month()
+    with conn.cursor() as cur:
+        cur.execute("SELECT chars_used FROM el_monthly_quota WHERE month=%s", (month,))
+        row = cur.fetchone()
+    return row["chars_used"] if row else 0
+
+
+def quota_remaining(conn) -> int:
+    return max(0, EL_CHARS_LIMIT - quota_used(conn))
+
+
+def quota_add(conn, chars: int):
+    month = current_month()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO el_monthly_quota (month, chars_used, chars_limit)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (month) DO UPDATE
+               SET chars_used  = el_monthly_quota.chars_used + EXCLUDED.chars_used,
+                   chars_limit = EXCLUDED.chars_limit,
+                   updated_at  = NOW()
+        """, (month, chars, EL_CHARS_LIMIT))
+    conn.commit()
+
+
+# ── Cache bibliothèque ────────────────────────────────────────────────────────
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
+
+
+def library_get(conn, text: str) -> dict | None:
+    """Retourne l'entrée de bibliothèque si le texte existe déjà."""
+    h = text_hash(text)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM tts_library WHERE text_hash=%s AND audio_file IS NOT NULL",
+            (h,)
+        )
+        return cur.fetchone()
+
+
+def library_random_fallback(conn, category: str) -> dict | None:
+    """Phrase aléatoire de la même catégorie (fallback quota épuisé)."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT * FROM tts_library
+            WHERE category=%s AND audio_file IS NOT NULL
+            ORDER BY RANDOM() LIMIT 1
+        """, (category,))
+        return cur.fetchone()
+
+
+def library_save(conn, text: str, category: str, audio_file: str,
+                 az_file_id: int | None, el_chars: int):
+    h = text_hash(text)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO tts_library (text_hash, text, category, audio_file, az_file_id, el_chars)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (text_hash) DO UPDATE
+               SET audio_file = EXCLUDED.audio_file,
+                   az_file_id = EXCLUDED.az_file_id,
+                   el_chars   = EXCLUDED.el_chars
+        """, (h, text, category, audio_file, az_file_id, el_chars))
+    conn.commit()
+
+
+# ── ElevenLabs API ────────────────────────────────────────────────────────────
+def el_add_playful(text: str) -> str:
+    """Ajoute [playful] si pas déjà présent."""
+    if text.startswith("["):
+        return text
+    return f"[playful] {text}"
+
+
+def el_synthesize(text: str) -> bytes:
+    """Appelle l'API ElevenLabs et retourne les bytes MP3."""
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}"
+    resp = httpx.post(
+        url,
+        headers={"xi-api-key": EL_API_KEY, "Content-Type": "application/json"},
+        json={
+            "text": text,
+            "model_id": EL_MODEL,
+            "voice_settings": EL_VOICE_SETTINGS,
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"ElevenLabs HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.content
+
+
+def apply_radio(mp3_bytes: bytes, label: str) -> pathlib.Path:
+    """Applique la chaîne radio ffmpeg sur les bytes MP3 EL → fichier final."""
+    h = hashlib.sha256(label.encode()).hexdigest()[:16]
+    raw_path = TTS_CACHE / f"el_raw_{h}.mp3"
+    out_path  = TTS_CACHE / f"rebexis_{h}.mp3"
+
+    if out_path.exists():
+        return out_path
+
+    raw_path.write_bytes(mp3_bytes)
+    r = subprocess.run([
+        "ffmpeg", "-y", "-i", str(raw_path),
+        "-af", FFMPEG_RADIO,
+        "-b:a", "192k", "-ar", "44100", str(out_path)
+    ], capture_output=True)
+    raw_path.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg radio: {r.stderr.decode()[:200]}")
+    return out_path
+
+
+# ── Génération d'une phrase (avec cache + quota) ──────────────────────────────
+def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
+    """
+    Génère ou récupère du cache un fichier audio pour le texte donné.
+    - Cache hit → retourne immédiatement
+    - Quota OK  → appel EL API, sauvegarde bibliothèque
+    - Quota KO  → fallback aléatoire même catégorie, ou RuntimeError
+    """
+    conn = get_conn()
+
+    # 1. Cache check
+    cached = library_get(conn, text)
+    if cached and pathlib.Path(cached["audio_file"]).exists():
+        print(f"  ✓ cache hit [{category}] → {pathlib.Path(cached['audio_file']).name}")
+        conn.close()
+        return pathlib.Path(cached["audio_file"])
+
+    # 2. Quota check
+    el_text = el_add_playful(text)
+    needed  = len(el_text)
+    remaining = quota_remaining(conn)
+
+    if remaining < needed:
+        print(f"  ⚠ quota insuffisant ({remaining}/{EL_CHARS_LIMIT} restant, besoin {needed})")
+        fallback = library_random_fallback(conn, category)
+        conn.close()
+        if fallback:
+            print(f"  ↩ fallback bibliothèque [{category}] → {fallback['id']}")
+            return pathlib.Path(fallback["audio_file"])
+        raise RuntimeError(
+            f"Quota EL épuisé ({remaining} chars restants) et aucun fallback en cache pour [{category}]"
+        )
+
+    # 3. Appel EL API
+    print(f"  → EL API [{category}] {needed} chars : {text[:60]}")
+    t0 = time.time()
+    mp3_bytes = el_synthesize(el_text)
+    elapsed   = time.time() - t0
+    print(f"  ✓ EL répondu en {elapsed:.1f}s ({len(mp3_bytes)//1024}KB)")
+
+    # 4. Traitement radio
+    mp3_path = apply_radio(mp3_bytes, text)
+
+    # 5. Upload AzuraCast
+    conn2 = get_conn()
+    try:
+        az_result  = upload_file(str(mp3_path), f"Rebexis — {text[:40]}")
+        az_file_id = az_result.get("id") if az_result else None
+    except Exception as e:
+        print(f"  ⚠ upload AZ: {e}")
+        az_file_id = None
+
+    # 6. Sauvegarder bibliothèque + quota
+    library_save(conn2, text, category, str(mp3_path), az_file_id, needed)
+    quota_add(conn2, needed)
+    conn2.close()
+
+    used = quota_used(get_conn())
+    print(f"  ✓ bibliothèque sauvée | quota {used}/{EL_CHARS_LIMIT} chars ce mois")
+    return mp3_path
+
+
+# ── Pré-génération des phrases statiques ─────────────────────────────────────
+def pregen_static():
+    """Génère toutes les phrases Cat3 statiques si pas encore en cache."""
+    print("→ Pré-génération phrases statiques...")
+    conn = get_conn()
+    done = skipped = 0
+    for category, text in STATIC_PHRASES:
+        cached = library_get(conn, text)
+        if cached:
+            skipped += 1
+            continue
+        remaining = quota_remaining(conn)
+        if remaining < len(el_add_playful(text)):
+            print(f"  ⚠ quota insuffisant pour pré-gen, arrêt")
+            break
+        conn.close()
+        try:
+            generate_phrase(text, category)
+            done += 1
+        except Exception as e:
+            print(f"  ✗ pré-gen '{text[:40]}': {e}")
+        conn = get_conn()
+    conn.close()
+    print(f"✓ Pré-génération : {done} générées, {skipped} déjà en cache")
+
+
+# ── Worker queue ──────────────────────────────────────────────────────────────
 def get_rebexis_playlist_id(conn) -> int:
     with conn.cursor() as cur:
         cur.execute("SELECT az_rb_playlist FROM radio_state WHERE id=1")
@@ -1180,55 +1437,176 @@ def get_rebexis_playlist_id(conn) -> int:
     return (row["az_rb_playlist"] or 0) if row else 0
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "engine": "edge-tts", "voice": EDGE_TTS_VOICE}
+def _worker_loop():
+    init_db()
+    pregen_static()
+    global _current_job
+    while True:
+        job = _synth_queue.get()
+        session_id = job["session_id"]
+        text       = job["text"]
+        category   = job.get("category", "custom")
+        started_at = time.time()
+        with _queue_lock:
+            _current_job = {**job, "started_at": started_at}
+        try:
+            print(f"🎙 EL session={session_id} [{category}] : {text[:60]}")
+            mp3 = generate_phrase(text, category)
+            elapsed = int(time.time() - started_at)
+            print(f"✓ session={session_id} en {elapsed}s → {mp3.name}")
 
+            conn = get_conn()
+            rb_pl_id = get_rebexis_playlist_id(conn)
 
-@app.post("/synthesize")
-def synthesize_endpoint(session_id: int, text: str):
-    try:
-        raw  = synthesize_raw(text)
-        mp3  = apply_radio_processing(raw)
+            # Récupérer l'az_file_id depuis la bibliothèque
+            lib_entry = library_get(conn, text)
+            az_file_id = lib_entry["az_file_id"] if lib_entry else None
 
-        az_file_id = None
-        rb_pl_id   = get_rebexis_playlist_id(get_conn())
-
-        az_result = upload_file(str(mp3), f"Rebexis #{session_id}")
-        if az_result:
-            az_file_id = az_result.get("id")
             if rb_pl_id and az_file_id:
                 from az_utils import batch_assign_playlist
                 batch_assign_playlist([az_file_id], [rb_pl_id])
 
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE rebexis_sessions SET audio_file=%s, az_file_id=%s WHERE id=%s",
+                    (str(mp3), az_file_id, session_id)
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"✗ session={session_id}: {e}")
+        finally:
+            with _queue_lock:
+                _current_job = None
+            _synth_queue.task_done()
+
+
+# ── API ───────────────────────────────────────────────────────────────────────
+@app.get("/health")
+def health():
+    with _queue_lock:
+        cur = _current_job
+    try:
         conn = get_conn()
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE rebexis_sessions
-                SET audio_file=%s, az_file_id=%s
-                WHERE id=%s
-            """, (str(mp3), az_file_id, session_id))
-        conn.commit()
+        used = quota_used(conn)
+        remaining = quota_remaining(conn)
+        with conn.cursor() as cur2:
+            cur2.execute("SELECT COUNT(*) AS n FROM tts_library WHERE audio_file IS NOT NULL")
+            lib_count = cur2.fetchone()["n"]
+        conn.close()
+    except Exception:
+        used = remaining = lib_count = -1
+    return {
+        "status":        "ok",
+        "engine":        "elevenlabs",
+        "voice_id":      EL_VOICE_ID,
+        "model":         EL_MODEL,
+        "quota_used":    used,
+        "quota_remaining": remaining,
+        "quota_limit":   EL_CHARS_LIMIT,
+        "library_count": lib_count,
+        "queue_size":    _synth_queue.qsize(),
+        "current_job":   cur["session_id"] if cur else None,
+        "elapsed_s":     int(time.time() - cur["started_at"]) if cur else None,
+    }
 
-        return {"ok": True, "audio_file": str(mp3), "az_file_id": az_file_id}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+
+@app.post("/synthesize")
+def synthesize_endpoint(session_id: int, text: str,
+                        mood: str = "default", category: str = "custom"):
+    """Enfile la synthèse. Cache check d'abord, EL API si nécessaire."""
+    _synth_queue.put({
+        "session_id": session_id,
+        "text":       text,
+        "mood":       mood,
+        "category":   category,
+    })
+    with _queue_lock:
+        busy = _current_job is not None
+    return {
+        "ok":                True,
+        "queued":            True,
+        "position":          _synth_queue.qsize(),
+        "estimated_seconds": (_synth_queue.qsize() + (1 if busy else 0)) * 3,
+    }
 
 
-@app.get("/pending")
-def list_pending():
+@app.post("/synthesize_template")
+def synthesize_template(session_id: int, template_key: str,
+                        artist: str = "", title: str = ""):
+    """
+    Génère depuis un template prédéfini.
+    Ex: template_key=cat1_artiste_1, artist=Daft Punk
+    → "Et maintenant, Daft Punk sur Gaiverland Radio."
+    """
+    if template_key not in TEMPLATES:
+        raise HTTPException(400, f"Template inconnu: {template_key}. Disponibles: {list(TEMPLATES.keys())}")
+    text = TEMPLATES[template_key].format(artist=artist, title=title)
+    cat  = template_key.split("_")[0] + "_" + template_key.split("_")[1]
+    _synth_queue.put({
+        "session_id": session_id,
+        "text":       text,
+        "mood":       "default",
+        "category":   cat,
+    })
+    return {"ok": True, "queued": True, "text": text, "category": cat}
+
+
+@app.get("/library")
+def get_library(category: str = "", limit: int = 50):
+    """Liste les phrases en cache."""
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, intervention, mood_trigger FROM rebexis_sessions
-            WHERE audio_file IS NULL ORDER BY generated_at LIMIT 10
-        """)
-        return {"sessions": list(cur.fetchall())}
+        if category:
+            cur.execute(
+                "SELECT id, category, text, el_chars, created_at FROM tts_library "
+                "WHERE category=%s ORDER BY created_at DESC LIMIT %s",
+                (category, limit)
+            )
+        else:
+            cur.execute(
+                "SELECT id, category, text, el_chars, created_at FROM tts_library "
+                "ORDER BY created_at DESC LIMIT %s", (limit,)
+            )
+        rows = list(cur.fetchall())
+    conn.close()
+    return {"count": len(rows), "phrases": rows}
+
+
+@app.get("/quota")
+def get_quota():
+    """Quota ElevenLabs du mois en cours."""
+    conn = get_conn()
+    used = quota_used(conn)
+    conn.close()
+    return {
+        "month":     current_month(),
+        "used":      used,
+        "remaining": max(0, EL_CHARS_LIMIT - used),
+        "limit":     EL_CHARS_LIMIT,
+        "pct":       round(used / EL_CHARS_LIMIT * 100, 1),
+    }
+
+
+@app.post("/pregen")
+def trigger_pregen():
+    """Déclenche la pré-génération des phrases statiques manuellement."""
+    threading.Thread(target=pregen_static, daemon=True).start()
+    return {"ok": True, "message": "Pré-génération lancée en arrière-plan"}
+
+
+@app.get("/templates")
+def list_templates():
+    return {"templates": TEMPLATES}
 
 
 if __name__ == "__main__":
-    print(f"TTS Worker — edge-tts | Voix: {EDGE_TTS_VOICE} | Cache: {TTS_CACHE}")
+    month = current_month()
+    print(f"TTS Worker — ElevenLabs | Voice: {EL_VOICE_ID} | Quota: {EL_CHARS_LIMIT} chars/{month}")
+    t = threading.Thread(target=_worker_loop, daemon=True)
+    t.start()
     uvicorn.run(app, host="0.0.0.0", port=8082)
+
 PYEOF
 
 # ── scheduler.py — playlists AzuraCast 0.23.4 ─────────────────────────
@@ -1443,43 +1821,92 @@ echo "╔═══════════════════════�
 echo "║  🎙 Gaiverland Radio — Bootstrap AzuraCast            ║"
 echo "╚═══════════════════════════════════════════════════════╝"
 
+# Résoudre l'IP interne d'azuracast (musl libc Alpine peut avoir des problèmes DNS avec curl)
+AZ_IP=$(getent hosts azuracast 2>/dev/null | awk '{print $1}' | head -1 || true)
+if [[ -n "${AZ_IP}" ]]; then
+    echo "  ℹ azuracast résolu → ${AZ_IP}"
+    CURL_RESOLVE="--resolve azuracast:80:${AZ_IP}"
+else
+    CURL_RESOLVE=""
+    echo "  ℹ Résolution DNS standard"
+fi
+
 echo "  ⏳ Attente AzuraCast (peut prendre 5 min)..."
 STATUS="000"
 for i in $(seq 1 60); do
-    STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${AZ_URL}/" 2>/dev/null) || STATUS="000"
+    STATUS=$(curl -s ${CURL_RESOLVE} -o /dev/null -w "%{http_code}" "${AZ_URL}/" 2>/dev/null) || STATUS="000"
     [[ "${STATUS}" != "000" && "${STATUS}" != "502" && "${STATUS}" != "503" ]] && break
     echo "  ⏳ (${i}/60)..."
     sleep 10
 done
 
 [[ "${STATUS}" == "000" ]] && echo "  ⚠ AzuraCast non joignable — skip" && exit 0
+echo "  ✓ AzuraCast joignable (status ${STATUS})"
 
 sleep 3
-REDIR=$(curl -sf -o /dev/null -w "%{redirect_url}" "${AZ_URL}/" 2>/dev/null) || REDIR=""
+REDIR=$(curl -sf ${CURL_RESOLVE} -o /dev/null -w "%{redirect_url}" "${AZ_URL}/" 2>/dev/null) || REDIR=""
 if echo "${REDIR}" | grep -q "/setup"; then
-    RESP=$(curl -sf -X POST "${AZ_URL}/api/frontend/setup/registration" \
-        -H "Content-Type: application/json" \
-        -d "{\"username\":\"Admin\",\"email\":\"${EMAIL}\",\"password\":\"${PASS}\",\"password_confirm\":\"${PASS}\"}" \
-        2>/dev/null) || RESP=""
-    [[ -n "${RESP}" ]] && echo "  ✓ Compte admin créé" || echo "  ⚠ Compte à créer manuellement"
+    # AzuraCast 0.23.x: setup via web form avec CSRF
+    echo "  ℹ AzuraCast en mode setup — création du compte admin..."
+    rm -f /tmp/az_setup_cookies.txt
+
+    # Récupérer la page de registration avec le cookie de session + CSRF
+    CSRF=$(curl -s ${CURL_RESOLVE} -c /tmp/az_setup_cookies.txt \
+        "${AZ_URL}/setup/register" 2>/dev/null | \
+        grep -o '"csrf":"[^"]*"' | sed 's/"csrf":"//;s/"//')
+    [[ -z "${CSRF}" ]] && CSRF=$(curl -s ${CURL_RESOLVE} -c /tmp/az_setup_cookies.txt \
+        "${AZ_URL}/setup/register" 2>/dev/null | \
+        grep -oP '"csrf":"[^"]+"' | cut -d'"' -f4)
+
+    if [[ -n "${CSRF}" ]]; then
+        HTTP_CODE=$(curl -s ${CURL_RESOLVE} -o /dev/null -w "%{http_code}" \
+            -b /tmp/az_setup_cookies.txt -c /tmp/az_setup_cookies.txt \
+            -X POST "${AZ_URL}/setup/register" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "username=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${EMAIL}'))")&password=${PASS}&csrf=${CSRF}" 2>/dev/null)
+        [[ "${HTTP_CODE}" == "302" ]] && echo "  ✓ Compte admin créé" || echo "  ⚠ Création compte : HTTP ${HTTP_CODE}"
+    else
+        echo "  ⚠ Token CSRF non trouvé — configuration manuelle requise"
+    fi
 fi
 
 sleep 2
-TOKEN=$(curl -sf -X POST "${AZ_URL}/api/user/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"${EMAIL}\",\"password\":\"${PASS}\"}" 2>/dev/null \
-    | jq -r '.api_key // empty') || TOKEN=""
+# Login via web form pour obtenir une session authentifiée
+rm -f /tmp/az_cookies.txt
+LOGIN_CSRF=$(curl -s ${CURL_RESOLVE} -c /tmp/az_cookies.txt \
+    "${AZ_URL}/login" 2>/dev/null | \
+    grep -oP '"csrf":"[^"]+"' | cut -d'"' -f4)
+LOGIN_STATUS=$(curl -s ${CURL_RESOLVE} -o /dev/null -w "%{http_code}" \
+    -b /tmp/az_cookies.txt -c /tmp/az_cookies.txt \
+    -X POST "${AZ_URL}/login" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${EMAIL}'))")&password=${PASS}&csrf=${LOGIN_CSRF}" 2>/dev/null)
 
-[[ -z "${TOKEN}" ]] && echo "  ⚠ Auth API échouée — configuration manuelle requise" && exit 0
+if [[ "${LOGIN_STATUS}" != "302" && "${LOGIN_STATUS}" != "200" ]]; then
+    echo "  ⚠ Auth API échouée (HTTP ${LOGIN_STATUS}) — configuration manuelle requise"
+    exit 0
+fi
+echo "  ✓ Auth OK (HTTP ${LOGIN_STATUS})"
+
+# Récupérer le token CSRF API depuis la page principale
+API_CSRF=$(curl -sL ${CURL_RESOLVE} -b /tmp/az_cookies.txt -c /tmp/az_cookies.txt \
+    "${AZ_URL}/" 2>/dev/null | grep -oP '"apiCsrf":"[^"]+"' | cut -d'"' -f4)
+echo "  ℹ apiCsrf: ${API_CSRF:-non trouvé}"
+
+az_curl() {
+    curl -sf ${CURL_RESOLVE} \
+        -b /tmp/az_cookies.txt -c /tmp/az_cookies.txt \
+        -H "X-API-CSRF: ${API_CSRF:-}" \
+        -H "Content-Type: application/json" "$@" 2>/dev/null
+}
+
 echo "  ✓ Auth API OK"
 
 # Créer la station si absente
-EXISTING=$(curl -sf "${AZ_URL}/api/stations" -H "X-API-Key: ${TOKEN}" 2>/dev/null | jq 'length') || EXISTING=0
+EXISTING=$(az_curl "${AZ_URL}/api/stations" | jq 'length' 2>/dev/null) || EXISTING=0
 if [[ "${EXISTING}" -eq 0 ]]; then
-    RESP=$(curl -sf -X POST "${AZ_URL}/api/admin/stations" \
-        -H "Content-Type: application/json" -H "X-API-Key: ${TOKEN}" \
-        -d "{\"name\":\"${STATION}\",\"short_name\":\"${SHORT}\",\"frontend_type\":\"icecast\",\"backend_type\":\"liquidsoap\",\"frontend_config\":{\"port\":${ICECAST}},\"is_public\":false,\"enable_requests\":true}" \
-        2>/dev/null) || RESP=""
+    RESP=$(az_curl -X POST "${AZ_URL}/api/admin/stations" \
+        -d "{\"name\":\"${STATION}\",\"short_name\":\"${SHORT}\",\"frontend_type\":\"icecast\",\"backend_type\":\"liquidsoap\",\"frontend_config\":{\"port\":${ICECAST}},\"is_public\":false,\"enable_requests\":true}") || RESP=""
     [[ -n "${RESP}" ]] && echo "  ✓ Station '${STATION}' créée" || echo "  ⚠ Création station échouée"
 fi
 
@@ -1492,11 +1919,35 @@ for PL_NAME in "Gaiverland IA" "Rebexis"; do
     [[ "${PER_SONGS}" -gt 0 ]] && BODY="${BODY},\"play_per_songs\":${PER_SONGS}"
     BODY="${BODY}}"
 
-    PL_RESP=$(curl -sf -X POST "${AZ_URL}/api/station/${AZ_STATION_ID}/playlists" \
-        -H "Content-Type: application/json" -H "X-API-Key: ${TOKEN}" \
-        -d "${BODY}" 2>/dev/null) || PL_RESP=""
+    PL_RESP=$(az_curl -X POST "${AZ_URL}/api/station/${AZ_STATION_ID}/playlists" -d "${BODY}") || PL_RESP=""
     [[ -n "${PL_RESP}" ]] && echo "  ✓ Playlist '${PL_NAME}' créée" || echo "  ℹ Playlist '${PL_NAME}' peut déjà exister"
 done
+
+# Créer une API key persistante pour les services
+API_KEY_RESP=$(az_curl -X POST "${AZ_URL}/api/frontend/account/api-keys" \
+    -d "{\"comment\":\"Gaiverland Radio — services internes\"}") || API_KEY_RESP=""
+PERSISTENT_KEY=$(echo "${API_KEY_RESP}" | jq -r '.key // empty') || PERSISTENT_KEY=""
+
+if [[ -z "${PERSISTENT_KEY}" ]]; then
+    PERSISTENT_KEY="${TOKEN}"
+    echo "  ℹ Utilisation du token de session comme clé API"
+else
+    echo "  ✓ Clé API persistante créée"
+fi
+
+# Écrire la clé dans services.env (volume monté en lecture seule → écrire dans /config-rw si dispo)
+SERVICES_ENV="/bootstrap/services.env"
+if [[ -w "${SERVICES_ENV}" ]]; then
+    if grep -q "^AZURACAST_API_KEY=" "${SERVICES_ENV}"; then
+        sed -i "s|^AZURACAST_API_KEY=.*|AZURACAST_API_KEY=${PERSISTENT_KEY}|" "${SERVICES_ENV}"
+    else
+        echo "AZURACAST_API_KEY=${PERSISTENT_KEY}" >> "${SERVICES_ENV}"
+    fi
+    echo "  ✓ AZURACAST_API_KEY écrite dans services.env"
+else
+    echo "  ℹ services.env en lecture seule — clé API : ${PERSISTENT_KEY}"
+    echo "  ℹ Copier dans services.env : AZURACAST_API_KEY=${PERSISTENT_KEY}"
+fi
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════╗"

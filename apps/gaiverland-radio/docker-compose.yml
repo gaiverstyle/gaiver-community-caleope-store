@@ -119,6 +119,7 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/youtube.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      - {{.BaseDir}}/app-data/gaiverland-radio/bg-cache:/bg-cache
     profiles:
       - with-youtube
     restart: unless-stopped
