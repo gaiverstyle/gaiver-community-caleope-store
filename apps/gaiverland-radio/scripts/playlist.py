@@ -22,9 +22,51 @@ import psycopg2.extras
 DB_URL = os.environ["DATABASE_URL"]
 DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 
-# Genres exclus de la playlist (séparés par virgule dans l'env)
-_excluded_raw = os.environ.get("EXCLUDED_GENRES", "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk")
-EXCLUDED_GENRES = [g.strip() for g in _excluded_raw.split(",") if g.strip()]
+# ── Dayparting — genres avec plages horaires restreintes ──────────────────────
+# Format env GENRE_HOURS : "Genre1,Genre2:HH-HH;Genre3:HH-HH"
+# Exemple : "Hardstyle,Hardcore:22-06" = seulement entre 22h et 6h
+# Genres sans restriction jouent à toute heure.
+_DEFAULT_GENRE_HOURS = "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk:22-06"
+
+def _parse_genre_hours(raw: str) -> dict:
+    """Retourne {genre: (start_h, end_h)} pour chaque genre restreint."""
+    result = {}
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        genres_part, hours_part = entry.rsplit(":", 1)
+        if "-" not in hours_part:
+            continue
+        try:
+            start, end = [int(h.strip()) for h in hours_part.split("-", 1)]
+        except ValueError:
+            continue
+        for g in genres_part.split(","):
+            g = g.strip()
+            if g:
+                result[g] = (start, end)
+    return result
+
+GENRE_HOURS = _parse_genre_hours(
+    os.environ.get("GENRE_HOURS", _DEFAULT_GENRE_HOURS)
+)
+
+def get_excluded_genres() -> list:
+    """Retourne la liste des genres hors de leur créneau horaire actuel."""
+    import datetime
+    now_h = datetime.datetime.now().hour
+    excluded = []
+    for genre, (start, end) in GENRE_HOURS.items():
+        if start < end:
+            # Créneau simple ex. 08-18 : autorisé si start <= h < end
+            allowed = start <= now_h < end
+        else:
+            # Créneau sur minuit ex. 22-06 : autorisé si h >= start OR h < end
+            allowed = now_h >= start or now_h < end
+        if not allowed:
+            excluded.append(genre)
+    return excluded
 
 MOOD_TRANSITIONS = {
     "nocturne":   ["nocturne", "melodique"],
@@ -82,6 +124,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
+    excluded_now = get_excluded_genres()
 
     with conn.cursor() as cur:
         cur.execute("""
@@ -91,7 +134,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND file_path NOT LIKE %s
               AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', EXCLUDED_GENRES, count * 4))
+        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or [''], count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
@@ -101,7 +144,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', EXCLUDED_GENRES, count * 2))
+            """, ('%rebexis_%', excluded_now or [''], count * 2))
             candidates = list(cur.fetchall())
 
     selected = []
