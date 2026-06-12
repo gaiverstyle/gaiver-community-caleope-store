@@ -22,6 +22,10 @@ import psycopg2.extras
 DB_URL = os.environ["DATABASE_URL"]
 DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 
+# Genres exclus de la playlist (séparés par virgule dans l'env)
+_excluded_raw = os.environ.get("EXCLUDED_GENRES", "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk")
+EXCLUDED_GENRES = [g.strip() for g in _excluded_raw.split(",") if g.strip()]
+
 MOOD_TRANSITIONS = {
     "nocturne":   ["nocturne", "melodique"],
     "melodique":  ["melodique", "energique", "nocturne"],
@@ -85,8 +89,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             FROM tracks
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
               AND file_path NOT LIKE %s
+              AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', count * 4))
+        """, (candidate_moods, recent_ids, '%rebexis_%', EXCLUDED_GENRES, count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
@@ -94,8 +99,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             cur.execute("""
                 SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
+                  AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', count * 2))
+            """, ('%rebexis_%', EXCLUDED_GENRES, count * 2))
             candidates = list(cur.fetchall())
 
     selected = []
