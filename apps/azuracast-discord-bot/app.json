@@ -1,0 +1,17 @@
+{
+  "id": "azuracast-discord-bot",
+  "name": "AzuraCast Radio Bot",
+  "category": "communication",
+  "channel": "stable",
+  "repository": "community",
+  "capabilities": {
+    "reverse_proxy": false,
+    "gpu": false,
+    "docker_socket": false,
+    "privileged": false
+  },
+  "network": { "public": false, "internal": true },
+  "ports": [],
+  "volumes": [],
+  "backup": { "enabled": false }
+}

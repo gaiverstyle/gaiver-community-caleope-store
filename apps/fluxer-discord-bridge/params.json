@@ -1,0 +1,26 @@
+[
+  {
+    "id": "DISCORD_TOKEN",
+    "label": "Token du bot Discord",
+    "description": "Créer un bot sur discord.com/developers/applications → Bot → Token",
+    "type": "secret",
+    "required": true,
+    "default": ""
+  },
+  {
+    "id": "FLUXER_TOKEN",
+    "label": "Token du bot Fluxer",
+    "description": "Token d'API du bot Fluxer (permissions : Manage Roles, Webhooks, Messages)",
+    "type": "secret",
+    "required": true,
+    "default": ""
+  },
+  {
+    "id": "CMD_PREFIX",
+    "label": "Préfixe des commandes",
+    "description": "Ex : brdg;help  brdg;link  brdg;unlink",
+    "type": "string",
+    "required": false,
+    "default": "brdg;"
+  }
+]

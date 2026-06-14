@@ -1,0 +1,74 @@
+[
+  {
+    "id": "DISCORD_TOKEN",
+    "label": "Token du bot Discord",
+    "description": "discord.com/developers/applications → ton bot → Bot → Token",
+    "type": "secret",
+    "required": true,
+    "default": ""
+  },
+  {
+    "id": "AZURACAST_URL",
+    "label": "URL de ton AzuraCast",
+    "description": "Si AzuraCast est sur le même serveur Caleope, utilise http://azuracast (réseau Docker interne). Sinon : https://radio.mondomaine.fr",
+    "type": "string",
+    "required": true,
+    "default": ""
+  },
+  {
+    "id": "AZURACAST_STATION_ID",
+    "label": "Shortcode de la station",
+    "description": "AzuraCast → ta station → Modifier → Shortcode unique",
+    "type": "string",
+    "required": true,
+    "default": "radio"
+  },
+  {
+    "id": "AZURACAST_API_KEY",
+    "label": "Clé API AzuraCast (optionnelle)",
+    "description": "Pour les fonctions admin (skip piste, etc.). Admin → Clés API.",
+    "type": "secret",
+    "required": false,
+    "default": ""
+  },
+  {
+    "id": "STREAM_URL",
+    "label": "URL du stream (optionnelle)",
+    "description": "Si AzuraCast est sur le même serveur : http://azuracast:8500/listen/SHORTCODE/radio.mp3 — Sinon : http://radio.mondomaine.fr:8500/listen/SHORTCODE/radio.mp3",
+    "type": "string",
+    "required": false,
+    "default": ""
+  },
+  {
+    "id": "AUTO_CHANNEL_ID",
+    "label": "ID du salon vocal (auto-join)",
+    "description": "Le bot rejoint automatiquement ce salon au démarrage. Discord → Mode dev → clic droit sur le salon → Copier l'identifiant.",
+    "type": "string",
+    "required": false,
+    "default": ""
+  },
+  {
+    "id": "DEFAULT_VOLUME",
+    "label": "Volume par défaut (0-200)",
+    "description": "100 = volume normal, 200 = amplifié x2. Réglable ensuite avec /radio volume.",
+    "type": "string",
+    "required": false,
+    "default": "100"
+  },
+  {
+    "id": "NP_CHANNEL_ID",
+    "label": "ID du salon texte pour le message 'En ce moment'",
+    "description": "Le bot poste un message qui se modifie automatiquement à chaque changement de titre. Laisser vide pour désactiver. Configurable aussi via /radio setnpchannel.",
+    "type": "string",
+    "required": false,
+    "default": ""
+  },
+  {
+    "id": "NP_POLL_INTERVAL",
+    "label": "Intervalle de vérification des titres (secondes)",
+    "description": "À quelle fréquence le bot interroge AzuraCast pour détecter un changement de titre. Min : 5s.",
+    "type": "string",
+    "required": false,
+    "default": "10"
+  }
+]

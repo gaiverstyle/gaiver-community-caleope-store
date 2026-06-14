@@ -1,0 +1,19 @@
+{
+  "id": "fluxer-discord-bridge",
+  "name": "Fluxer-Discord Bridge",
+  "category": "communication",
+  "channel": "stable",
+  "repository": "community",
+  "capabilities": {
+    "reverse_proxy": false,
+    "gpu": false,
+    "docker_socket": false,
+    "privileged": false
+  },
+  "network": { "public": false, "internal": true },
+  "ports": [],
+  "volumes": [
+    { "source": "app-data/fluxer-discord-bridge/db", "target": "/Bot/db" }
+  ],
+  "backup": { "enabled": true }
+}

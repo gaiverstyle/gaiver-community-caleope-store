@@ -1,0 +1,16 @@
+services:
+  fluxer-discord-bridge:
+    image: rillabel/fluxer-discord-bridge:latest
+    container_name: fluxer-discord-bridge
+    restart: unless-stopped
+    working_dir: /Bot
+    env_file:
+      - {{.BaseDir}}/app-config/{{.AppID}}/secrets.env
+    volumes:
+      - {{.BaseDir}}/app-data/fluxer-discord-bridge/db:/Bot/db
+    networks:
+      - caleope-internal
+
+networks:
+  caleope-internal:
+    external: true
