@@ -166,3 +166,69 @@ def get_queue(limit: int = 6) -> list:
         return items[:limit] if isinstance(items, list) else []
     except Exception:
         return []
+
+
+def update_playlist(playlist_id: int, **kwargs) -> bool:
+    """Met à jour les propriétés d'une playlist AzuraCast (weight, is_enabled, etc.)."""
+    if not _ok():
+        return False
+    try:
+        r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/playlist/{playlist_id}",
+                      headers=_headers(), json=kwargs, timeout=_TIMEOUT)
+        return r.status_code < 400
+    except Exception as e:
+        print(f"  warning update_playlist: {e}")
+        return False
+
+
+def _get_all_files() -> list:
+    """Récupère tous les fichiers de la station (max 1000)."""
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/files",
+                      headers=_headers(), params={"rowsPerPage": 1000}, timeout=30)
+        rows = r.json() if r.status_code == 200 else []
+        return rows.get("rows", rows) if isinstance(rows, dict) else rows
+    except Exception:
+        return []
+
+
+def replace_playlist(file_ids: list, playlist_id: int,
+                     prev_az_ids: list = None) -> bool:
+    """
+    Remplace le contenu de la playlist par file_ids.
+    - Retire prev_az_ids de la playlist via PUT individuel (si fournis)
+    - Ajoute les nouveaux via batch assign
+    Note: le batch AzuraCast (do=playlist) est additif. Le retrait se fait fichier par fichier.
+    """
+    if not _ok() or not file_ids:
+        return False
+    try:
+        all_rows = _get_all_files()
+        id_to_path = {row["id"]: row["path"] for row in all_rows if "id" in row and "path" in row}
+        path_to_playlists = {row["path"]: [p["id"] for p in row.get("playlists", [])] for row in all_rows}
+
+        # Retirer prev_az_ids de la playlist si c'est une rotation
+        to_remove = [fid for fid in (prev_az_ids or []) if fid not in file_ids and fid in id_to_path]
+        for fid in to_remove[:20]:  # max 20 suppressions par cycle pour limiter la charge
+            path = id_to_path[fid]
+            current_pls = [p for p in path_to_playlists.get(path, []) if p != playlist_id]
+            try:
+                httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/file/{fid}",
+                          headers=_headers(), json={"playlists": current_pls}, timeout=10)
+            except Exception:
+                pass
+
+        # Ajouter les nouveaux
+        new_paths = [id_to_path[fid] for fid in file_ids if fid in id_to_path]
+        if not new_paths:
+            return False
+        r2 = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
+                       headers=_headers(),
+                       json={"do": "playlist", "files": new_paths,
+                             "playlists": [str(playlist_id)]},
+                       timeout=30)
+        d = r2.json() if r2.status_code in (200, 201) else {}
+        return bool(d.get("success", False))
+    except Exception as e:
+        print(f"  ⚠ replace_playlist: {e}")
+        return False

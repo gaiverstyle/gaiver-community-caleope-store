@@ -3,14 +3,16 @@ Scheduler Gaiverland — orchestre playlist + Rebexis + TTS.
 Gère les playlists AzuraCast 0.23.4 directement via API.
 
 Stratégie playlist :
-  - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 5 min
+  - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 3 min
   - "Rebexis"       (once_per_x_songs)  : jingles de Rebexis générés à l'avance
 """
-import os, sys, subprocess, time
+import os, sys, subprocess, time, datetime
+from zoneinfo import ZoneInfo
+LOCAL_TZ = ZoneInfo("Europe/Paris")
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "httpx", "psycopg2-binary"], check=True)
+                    "httpx", "psycopg2-binary", "tzdata"], check=True)
 
 try:
     import httpx, psycopg2
@@ -21,18 +23,66 @@ except ImportError:
 import psycopg2.extras
 import sys
 sys.path.insert(0, "/app")
-from az_utils import (get_or_create_playlist, batch_assign_playlist,
-                      set_playlist_order, get_station, now_playing, get_queue)
+from az_utils import (get_or_create_playlist, batch_assign_playlist, replace_playlist,
+                      set_playlist_order, get_station, now_playing, get_queue, update_playlist)
 
 DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
 REBEXIS_URL  = "http://gaiverland-rebexis:8081"
 TTS_URL      = "http://gaiverland-tts:8082"
-CYCLE_SEC    = 300  # 5 minutes
+CYCLE_SEC    = 180  # 3 minutes
 AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
-REBEXIS_SONGS_INTERVAL = 8
+REBEXIS_SONGS_INTERVAL = 3
+# Timer indépendant pour les phrases lore (en secondes)
+LORE_INTERVAL_S = 45 * 60  # 1 phrase lore toutes les 45 min
+
+# Créneaux horaires
+WORK_START = (8, 20)   # 8h20
+WORK_END   = (17, 0)   # 17h00
+WORK_DAYS  = {0, 1, 2, 3, 4}  # lundi-vendredi
+
+
+_lore_last_time: float = 0.0
+_current_slot: str = ""
+_wd_playlist_id: int = 0
+
+
+def get_time_slot() -> str:
+    now = datetime.datetime.now(LOCAL_TZ)
+    if now.weekday() not in WORK_DAYS:
+        return "standard"
+    now_hm = (now.hour, now.minute)
+    return "work" if WORK_START <= now_hm < WORK_END else "standard"
+
+
+def maybe_update_slot_mood(gw_id: int, wd_id: int, fr_id: int = 0):
+    """Bascule mood et poids de playlists selon le créneau horaire."""
+    global _current_slot
+    slot = get_time_slot()
+    if slot == _current_slot:
+        return
+    _current_slot = slot
+    try:
+        target_mood = "travail" if slot == "work" else "energique"
+        httpx.post(f"{PLAYLIST_URL}/state/mood", params={"mood": target_mood}, timeout=5)
+        if wd_id:
+            if slot == "work":
+                update_playlist(wd_id, is_enabled=True,  weight=3)
+                update_playlist(gw_id, weight=1)
+                if fr_id: update_playlist(fr_id, is_enabled=True, weight=2)
+                print("  travail Créneau travail actif -> playlist Travail Decouverte ON")
+            else:
+                update_playlist(wd_id, is_enabled=False)
+                update_playlist(gw_id, weight=3)
+                if fr_id: update_playlist(fr_id, is_enabled=False)
+                print("  nuit Créneau standard -> playlist Gaiverland IA ON")
+        else:
+            emoji = "travail" if slot == "work" else "nuit"
+            print(f"  {emoji} Créneau {slot} -> mood = {target_mood}")
+    except Exception as e:
+        print(f"  warning Slot mood: {e}")
 
 
 def get_conn():
@@ -78,7 +128,21 @@ def setup_playlists(conn):
     else:
         print("  ⚠ Playlists AzuraCast non configurées (clé API manquante ?)")
 
-    return gw_id, rb_id
+    wd_id = get_or_create_playlist("Travail Decouverte", pl_type="default", weight=3)
+    if wd_id:
+        update_playlist(wd_id, is_enabled=False)
+        print(f"  playlist 'Travail Decouverte' : ID {wd_id} (désactivée au démarrage)")
+
+    with conn.cursor() as cur:
+        cur.execute("UPDATE radio_state SET az_wd_playlist=%s, updated_at=NOW() WHERE id=1", (wd_id,))
+    conn.commit()
+
+    fr_id = get_or_create_playlist("Bien Francais", pl_type="default", weight=2)
+    if fr_id:
+        update_playlist(fr_id, is_enabled=False)
+        print(f"  playlist 'Bien Francais'     : ID {fr_id} (désactivée au démarrage)")
+
+    return gw_id, rb_id, wd_id, fr_id
 
 
 def update_gaiverland_playlist(conn, gw_playlist_id: int):
@@ -87,22 +151,30 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
         return
 
     try:
-        # Récupérer la playlist suggérée par le moteur IA
         resp = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 25}, timeout=15)
         data = resp.json()
         tracks = data.get("tracks", [])
         mood   = data.get("mood", "?")
 
-        # Extraire les az_id valides
         az_ids = [t["az_id"] for t in tracks if t.get("az_id")]
         if not az_ids:
             print(f"  ℹ Playlist [{mood}] — aucun az_id disponible (analyzer pas encore synchro ?)")
             return
 
-        # Assigner les titres à la playlist Gaiverland IA (type shuffle)
-        # batch_assign_playlist récupère les paths AzuraCast et utilise do=playlist
-        ok = batch_assign_playlist(az_ids, [gw_playlist_id])
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT az_id FROM tracks WHERE az_playlist_assigned=true AND az_id IS NOT NULL")
+            prev_az_ids = [row["az_id"] for row in cur.fetchall()]
+
+        ok = replace_playlist(az_ids, gw_playlist_id, prev_az_ids=prev_az_ids)
+
         if ok:
+            conn = get_conn()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE tracks SET az_playlist_assigned=false WHERE az_playlist_assigned=true")
+                if az_ids:
+                    cur.execute("UPDATE tracks SET az_playlist_assigned=true WHERE az_id = ANY(%s)", (az_ids,))
+            conn.commit()
             print(f"  📻 Playlist [{mood}] mise à jour — {len(az_ids)} titres")
         else:
             print(f"  ⚠ Mise à jour playlist échouée")
@@ -114,7 +186,7 @@ def process_tts_queue():
     """Convertit en audio les interventions Rebexis en attente."""
     try:
         pending = httpx.get(f"{TTS_URL}/pending", timeout=10).json().get("sessions", [])
-        for s in pending[:2]:  # max 2 par cycle — charge CPU stable
+        for s in pending[:2]:
             print(f"  → TTS session {s['id']}: {s['intervention'][:50]}…")
             httpx.post(f"{TTS_URL}/synthesize",
                        params={"session_id": s["id"], "text": s["intervention"]},
@@ -124,19 +196,32 @@ def process_tts_queue():
 
 
 def maybe_generate_rebexis():
-    """Déclenche la génération d'une intervention Rebexis si le timing le permet."""
-    try:
-        state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
-        mood  = state.get("mood", "energique")
+    """Déclenche la génération d'une intervention Rebexis.
 
-        # Récupérer le titre en cours depuis AzuraCast
+    Les phrases "lore" (identité de Rebexis) ont leur propre timer indépendant
+    (LORE_INTERVAL_S). Les phrases mood-appropriées suivent l'interval check du
+    moteur Rebexis (INT_MIN/INT_MAX). Les deux timers sont décorrélés pour éviter
+    que le lore monopolise toutes les interventions.
+    """
+    global _lore_last_time
+    try:
+        now = time.time()
+        force_lore = (now - _lore_last_time >= LORE_INTERVAL_S)
+
+        if not force_lore:
+            state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
+            mood  = state.get("mood", "energique")
+        else:
+            mood = "lore"
+
+        # Titre en cours
         np_data = now_playing()
         context = ""
         if np_data:
             song = np_data.get("now_playing", {}).get("song", {})
             context = f"{song.get('artist', '')} — {song.get('title', '')}".strip(" —")
 
-        # Récupérer le prochain titre musical (skip les jingles Rebexis)
+        # Prochain titre musical (skip les jingles Rebexis)
         next_music = ""
         try:
             queue = get_queue(limit=6)
@@ -144,8 +229,7 @@ def maybe_generate_rebexis():
                 song = entry.get("song", {})
                 title = song.get("title", "")
                 artist = song.get("artist", "")
-                # Ignorer les jingles Rebexis (nom de fichier technique)
-                if title and "rebexis_" not in title.lower():
+                if title and "rebexis" not in title.lower() and "rebexis" not in artist.lower():
                     next_music = f"{artist} — {title}".strip(" —") if artist else title
                     break
         except Exception:
@@ -153,10 +237,12 @@ def maybe_generate_rebexis():
 
         resp = httpx.post(f"{REBEXIS_URL}/generate",
                           params={"mood": mood, "context_track": context,
-                                  "next_track": next_music},
+                                  "next_track": next_music, "force": str(force_lore).lower()},
                           timeout=30)
         data = resp.json()
         if data.get("intervention"):
+            if force_lore:
+                _lore_last_time = now
             suffix = f" → {next_music[:35]}" if next_music else ""
             print(f"  🎙 Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
     except Exception as e:
@@ -169,7 +255,6 @@ def main():
     wait_for(REBEXIS_URL,  "Rebexis Engine")
     wait_for(TTS_URL,      "TTS Worker")
 
-    # Vérifier la connexion AzuraCast
     station = get_station()
     if station:
         print(f"  ✓ AzuraCast connecté — station : {station.get('name', '?')}")
@@ -177,7 +262,7 @@ def main():
         print("  ⚠ AzuraCast non joignable — scheduler en mode dégradé (Rebexis + TTS actifs)")
 
     conn = get_conn()
-    gw_id, rb_id = setup_playlists(conn)
+    gw_id, rb_id, wd_id, fr_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
     cycle = 0
@@ -188,10 +273,13 @@ def main():
         # 1. Traitement TTS en attente (priorité : audio prêt avant diffusion)
         process_tts_queue()
 
-        # 2. Générer Rebexis si intervalle atteint
+        # 2. Générer Rebexis si intervalle atteint (lore timer indépendant)
         maybe_generate_rebexis()
 
-        # 3. Mettre à jour la playlist Gaiverland IA dans AzuraCast
+        # 3. Vérifier et switcher le créneau horaire (travail/standard)
+        maybe_update_slot_mood(gw_id, wd_id, fr_id)
+
+        # 4. Mettre à jour la playlist Gaiverland IA dans AzuraCast
         if gw_id:
             conn = get_conn()
             update_gaiverland_playlist(conn, gw_id)
