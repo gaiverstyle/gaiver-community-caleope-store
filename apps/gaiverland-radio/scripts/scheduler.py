@@ -38,49 +38,35 @@ REBEXIS_SONGS_INTERVAL = 3
 # Timer indépendant pour les phrases lore (en secondes)
 LORE_INTERVAL_S = 45 * 60  # 1 phrase lore toutes les 45 min
 
-# Créneaux horaires
-WORK_START = (8, 20)   # 8h20
-WORK_END   = (17, 0)   # 17h00
-WORK_DAYS  = {0, 1, 2, 3, 4}  # lundi-vendredi
+# Créneaux horaires : jour = EDM/energique, nuit = nocturne
+NIGHT_START = (22, 0)  # 22h00
+NIGHT_END   = (7, 0)   # 7h00
 
 
 _lore_last_time: float = 0.0
 _current_slot: str = ""
-_wd_playlist_id: int = 0
 
 
 def get_time_slot() -> str:
     now = datetime.datetime.now(LOCAL_TZ)
-    if now.weekday() not in WORK_DAYS:
-        return "standard"
-    now_hm = (now.hour, now.minute)
-    return "work" if WORK_START <= now_hm < WORK_END else "standard"
+    h, m = now.hour, now.minute
+    if h >= NIGHT_START[0] or (h, m) < NIGHT_END:
+        return "night"
+    return "day"
 
 
-def maybe_update_slot_mood(gw_id: int, wd_id: int, fr_id: int = 0):
-    """Bascule mood et poids de playlists selon le créneau horaire."""
+def maybe_update_slot_mood(gw_id: int, wd_id: int = 0, fr_id: int = 0):
+    """Bascule mood selon le créneau : jour=energique, nuit=nocturne."""
     global _current_slot
     slot = get_time_slot()
     if slot == _current_slot:
         return
     _current_slot = slot
     try:
-        target_mood = "travail" if slot == "work" else "energique"
+        target_mood = "nocturne" if slot == "night" else "energique"
         httpx.post(f"{PLAYLIST_URL}/state/mood", params={"mood": target_mood}, timeout=5)
-        if wd_id:
-            if slot == "work":
-                update_playlist(wd_id, is_enabled=True,  weight=3)
-                update_playlist(gw_id, weight=1)
-                if fr_id: update_playlist(fr_id, is_enabled=True, weight=2)
-                print("  travail Créneau travail actif -> playlist Travail Decouverte ON")
-            else:
-                update_playlist(wd_id, is_enabled=False)
-                update_playlist(gw_id, weight=3)
-                if fr_id: update_playlist(fr_id, is_enabled=False)
-                print("  nuit Créneau standard -> playlist Gaiverland IA ON")
-        else:
-            emoji = "travail" if slot == "work" else "nuit"
-            print(f"  {emoji} Créneau {slot} -> mood = {target_mood}")
+        icon = "nuit" if slot == "night" else "soleil"
+        print(f"  {icon} Créneau {slot} -> mood = {target_mood}")
     except Exception as e:
         print(f"  warning Slot mood: {e}")
 
@@ -128,21 +114,13 @@ def setup_playlists(conn):
     else:
         print("  ⚠ Playlists AzuraCast non configurées (clé API manquante ?)")
 
-    wd_id = get_or_create_playlist("Travail Decouverte", pl_type="default", weight=3)
-    if wd_id:
-        update_playlist(wd_id, is_enabled=False)
-        print(f"  playlist 'Travail Decouverte' : ID {wd_id} (désactivée au démarrage)")
+    # Playlists secondaires désactivées
+    for pl_name in ("Travail Decouverte", "Bien Francais"):
+        pl_id = get_or_create_playlist(pl_name, pl_type="default", weight=2)
+        if pl_id:
+            update_playlist(pl_id, is_enabled=False)
 
-    with conn.cursor() as cur:
-        cur.execute("UPDATE radio_state SET az_wd_playlist=%s, updated_at=NOW() WHERE id=1", (wd_id,))
-    conn.commit()
-
-    fr_id = get_or_create_playlist("Bien Francais", pl_type="default", weight=2)
-    if fr_id:
-        update_playlist(fr_id, is_enabled=False)
-        print(f"  playlist 'Bien Francais'     : ID {fr_id} (désactivée au démarrage)")
-
-    return gw_id, rb_id, wd_id, fr_id
+    return gw_id, rb_id, 0, 0
 
 
 def update_gaiverland_playlist(conn, gw_playlist_id: int):
