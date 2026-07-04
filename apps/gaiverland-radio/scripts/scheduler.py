@@ -63,7 +63,7 @@ def maybe_update_slot_mood(gw_id: int, wd_id: int = 0, fr_id: int = 0):
         return
     _current_slot = slot
     try:
-        target_mood = "nocturne" if slot == "night" else "energique"
+        target_mood = "intense" if slot == "night" else "festival"
         httpx.post(f"{PLAYLIST_URL}/state/mood", params={"mood": target_mood}, timeout=5)
         icon = "nuit" if slot == "night" else "soleil"
         print(f"  {icon} Créneau {slot} -> mood = {target_mood}")
