@@ -233,6 +233,32 @@ REBEXIS_API_KEY=${REBEXIS_API_KEY}
 REBEXIS_API_BASE=${REBEXIS_API_BASE}
 EOF
 chmod 600 "${CONFIG_DIR}/rebexis.env"
+
+# ── services-preprod.env ───────────────────────────────────────────────
+# Station AzuraCast id=2, DB gaiverland_preprod, cache TTS séparé
+AZ_PREPROD_STATION_ID="${CALEOPE_PARAM_AZURACAST_PREPROD_STATION_ID:-2}"
+cat > "${CONFIG_DIR}/services-preprod.env" <<EOF
+DATABASE_URL=postgresql://gaiverland:${DB_PASSWORD}@gw-db:5432/gaiverland_preprod
+AZURACAST_URL=${AZ_URL}
+AZURACAST_API_KEY=${AZ_API_KEY}
+AZURACAST_STATION_ID=${AZ_PREPROD_STATION_ID}
+AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
+AZURACAST_GW_PLAYLIST_ID=
+AZURACAST_REBEXIS_PLAYLIST_ID=
+REBEXIS_MODE=${REBEXIS_MODE}
+REBEXIS_INTERVAL_MIN=${REBEXIS_INTERVAL_MIN}
+REBEXIS_INTERVAL_MAX=${REBEXIS_INTERVAL_MAX}
+DISCOVERY_RATIO=${DISCOVERY_RATIO}
+GENRE_HOURS=${GENRE_HOURS}
+TTS_CACHE_DIR=/tts-cache
+ESSENTIA_MODELS_DIR=/essentia-models
+OLLAMA_URL=http://gaiverland-ollama:11434
+OLLAMA_MODEL=${REBEXIS_LLM_MODEL}
+EOF
+chmod 600 "${CONFIG_DIR}/services-preprod.env"
+
+mkdir -p "${STORAGE_PATH}/tts-cache-pp"
+
 echo "  ✓ Fichiers de config créés"
 
 # ════════════════════════════════════════════════════════════════════════

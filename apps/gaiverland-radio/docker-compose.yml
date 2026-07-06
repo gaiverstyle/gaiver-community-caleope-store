@@ -186,6 +186,84 @@ services:
       - azuracast-internal
       - caleope-public
 
+  # ── Profil PREPROD — station AzuraCast id=2, DB gaiverland_preprod ──────────
+  # Démarrer avec : docker compose --profile preprod up -d
+  # Les workers prod et preprod tournent en parallèle, chacun sur leur station AZ.
+
+  gw-playlist-pp:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
+    container_name: gaiverland-playlist-pp
+    command: ["python", "-u", "/app/playlist.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services-preprod.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - preprod
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - caleope-public
+
+  gw-rebexis-pp:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
+    container_name: gaiverland-rebexis-pp
+    command: ["python", "-u", "/app/rebexis.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services-preprod.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/rebexis.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - preprod
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+
+  gw-tts-pp:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
+    container_name: gaiverland-tts-pp
+    command: ["python", "-u", "/app/tts_worker.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services-preprod.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache-pp:/tts-cache
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - preprod
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
+  gw-scheduler-pp:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/scheduler
+    container_name: gaiverland-scheduler-pp
+    command: ["python", "-u", "/app/scheduler.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services-preprod.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - preprod
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
 networks:
   # Réseau interne gaiverland (inter-services)
   gaiverland-internal:
