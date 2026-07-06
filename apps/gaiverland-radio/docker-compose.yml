@@ -264,6 +264,47 @@ services:
       - gaiverland-internal
       - azuracast-internal
 
+  # ── GCS Phase 1 — dual-run avec gw-* (profil gcs) ──────────────────────────
+  # Démarrer avec : docker compose --profile gcs up -d
+  # Les services gw-* continuent en production, gcs-* tournent en shadow.
+
+  gcs-track-service:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-track-service
+    container_name: gaiverland-gcs-track
+    command: ["python", "-u", "/app/gcs_track_service.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/gcs.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - gcs
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+
+  gcs-state-engine:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-state-engine
+    container_name: gaiverland-gcs-state
+    command: ["python", "-u", "/app/gcs_state_engine.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/gcs.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - gcs
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+
 networks:
   # Réseau interne gaiverland (inter-services)
   gaiverland-internal:
