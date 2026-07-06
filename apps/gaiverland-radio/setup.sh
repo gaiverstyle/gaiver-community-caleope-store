@@ -128,6 +128,14 @@ else
     docker rm   azuracast 2>/dev/null || true
 fi
 
+# ── Profils composites (azuracast + GCS optionnel) ────────────────────
+GCS_ENABLED="${CALEOPE_PARAM_GCS_ENABLED:-false}"
+if [[ "${GCS_ENABLED}" == "true" ]]; then
+    [[ -n "${COMPOSE_PROFILES_VALUE}" ]] \
+        && COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE},gcs" \
+        || COMPOSE_PROFILES_VALUE="gcs"
+fi
+
 # Écrire le .env Docker Compose (lu depuis le répertoire du compose.yml)
 cat > "${CONFIG_DIR}/.env" <<EOF
 COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}
