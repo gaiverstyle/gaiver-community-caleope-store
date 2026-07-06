@@ -1,107 +1,132 @@
 {
-  "_note": "Formatage : majuscules = emphase ElevenLabs v3, '...' = pause, {next} = prochain artiste/titre",
+  "_note": "Charte Rebexis — style Scott Taylor (FH5). JAMAIS de 'tu'. S'adresser à la foule collectivement. Formatage : MAJUSCULES = emphase ElevenLabs v3, '...' = pause, {next} = prochain artiste/titre",
   "modes": {
     "normal": {
       "templates": [
-        "Ce morceau... exactement ce qu'il fallait.",
-        "Je reste discrète. La musique, elle, ne l'est pas.",
-        "C'est BIEN. Continuons.",
+        "Ce morceau... exactement ce qu'il fallait pour ce moment.",
+        "Gaiverland Radio. On est là, et la musique aussi.",
+        "C'est BIEN. On continue.",
         "Aucune raison d'interrompre ça. Aucune.",
-        "Parfait... pour ce moment précis."
+        "Parfait... pour ce moment précis. Pour vous tous.",
+        "On reste là. La musique fait le reste.",
+        "Gaiverland... toujours là où il faut être."
       ]
     },
     "hype": {
       "triggers": ["festival", "energique"],
       "templates_no_next": [
-        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+        "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
         "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
-        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
+        "L'énergie est là, pour VOUS TOUS. Et franchement, ça me va très bien.",
         "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
-        "Je crois que les enceintes viennent de demander une augmentation.",
         "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
-        "Transition PARFAITE. Je ne dis rien. Je profite.",
-        "On monte... on monte encore... et puis on monte UN PEU PLUS.",
-        "Gaiverland Radio, toujours dans les bons mouvements. On s'arrête pas, on accélère.",
-        "Ce set-là... il n'a pas l'intention de ralentir. Et moi non plus."
+        "On monte... on monte encore... et tout le monde monte avec nous.",
+        "Gaiverland Radio, toujours dans les bons mouvements. On accélère.",
+        "Ce set n'a pas l'intention de ralentir. Et nous non plus.",
+        "Le festival... il est là. Peu importe où vous êtes ce soir.",
+        "Ce moment est pour TOUT LE MONDE. Profitez-en."
       ],
       "templates_with_next": [
-        "Et voilà, on souffle... deux secondes seulement. Parce que {next} débarque, et j'espère que vous êtes PRÊTS.",
-        "Ce train-là, il ralentit pas. {next} prend le relais et je vous garantis que le volume, lui, il augmente.",
-        "Gaiverland Radio continue sans pause... {next} arrive et je vous conseille d'accrocher vos ceintures.",
-        "Allez, j'espère que vous êtes bien attaché... parce que là {next} débarque et ça va DÉCHIRER.",
-        "On reste dans la bonne direction. {next} prend le relais et le festival... il continue.",
-        "Je passe le micro... enfin, les basses. {next} arrive. C'est PAS fait pour être assis.",
-        "Et le train de la dance repart ! {next} en cabine, et moi je monte le son.",
-        "Ok on repart. {next} en approche, altitude maximale, personne ne dort ici."
+        "On souffle... deux secondes seulement. Parce que {next} débarque, et tout le monde doit être PRÊT.",
+        "Ce train ralentit pas. {next} prend le relais et le volume, lui, il augmente.",
+        "Gaiverland Radio continue sans pause... {next} arrive. Restez avec nous.",
+        "Accrochez-vous... parce que {next} débarque et ça va DÉCHIRER.",
+        "On reste dans la bonne direction. {next} prend le relais et le festival continue.",
+        "Les basses passent à {next}. C'est PAS fait pour rester assis.",
+        "Et le train de la dance repart ! {next} en cabine, et le son monte.",
+        "{next} en approche. Altitude maximale. Personne ne dort ici.",
+        "On s'accroche ensemble... {next} arrive et c'est exactement ce qu'il nous faut.",
+        "Gaiverland... {next} est là. Ce set, il est pour VOUS."
       ],
       "templates": [
-        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+        "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
         "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
-        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
-        "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
-        "Je crois que les enceintes viennent de demander une augmentation.",
+        "L'énergie est là, pour VOUS TOUS. Et franchement, ça me va très bien.",
         "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
-        "Transition PARFAITE. Je ne dis rien. Je profite.",
-        "On monte... on monte encore... et puis on monte UN PEU PLUS."
+        "On monte... on monte encore... et tout le monde monte avec nous.",
+        "Gaiverland Radio, toujours dans les bons mouvements. On accélère.",
+        "Ce moment est pour TOUT LE MONDE. Profitez-en.",
+        "Le festival... il est là. Peu importe où vous êtes ce soir."
       ]
     },
     "peak": {
       "triggers": ["intense"],
       "templates_no_next": [
         "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
-        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
-        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "C'est LOUD. C'est voulu. Et c'est pour VOUS TOUS.",
         "On est au sommet. PROFITEZ-EN.",
-        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Le genre de track qui fait changer d'avis sur la nuit.",
         "Hardstyle activé. Tout le reste... peut attendre.",
         "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
-        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
+        "Peu importe où vous êtes ce soir... vous êtes EXACTEMENT au bon endroit.",
+        "Gaiverland Radio au maximum. Ce moment est pour tout le monde.",
+        "Ce set est une déclaration. Et vous en faites partie."
       ],
       "templates_with_next": [
-        "Je croyais qu'on avait atteint le plafond... et puis {next} arrive. Le plafond, il vient de s'envoler.",
-        "Là c'est {next}. Moi je recule de quelques pas. Par précaution. Bonne chance à vous.",
-        "Vous croyiez que c'était fini ? {next} dit NON. Et franchement, {next} a raison.",
-        "Alerte niveau CRITIQUE. {next} entre dans la salle. Je déconseille formellement de rester assis.",
-        "C'est pas une radio... c'est une catapulte. Et là {next} appuie sur le bouton.",
-        "Gaiverland Radio, on n'excuse pas le volume. {next} arrive et c'est VOULU.",
-        "Le Hardstyle, il ne demande pas la permission. {next} non plus. Vous voilà PRÉVENUS."
+        "On croyait avoir atteint le plafond... et puis {next} arrive. Le plafond vient de s'envoler.",
+        "Là c'est {next}. On recule de quelques pas. Par précaution. Bonne chance à vous tous.",
+        "Vous croyiez que c'était fini ? {next} dit NON. Et {next} a raison.",
+        "Alerte niveau CRITIQUE. {next} entre dans la salle. Rester assis est fortement déconseillé.",
+        "C'est pas une radio... c'est une catapulte. Et {next} appuie sur le bouton.",
+        "Gaiverland Radio n'excuse pas le volume. {next} arrive et c'est VOULU.",
+        "Le Hardstyle ne demande pas la permission. {next} non plus. Vous voilà PRÉVENUS.",
+        "Ce set appartient à TOUT LE MONDE ici. {next} en est la preuve."
       ],
       "templates": [
         "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
-        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
-        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "C'est LOUD. C'est voulu. Et c'est pour VOUS TOUS.",
         "On est au sommet. PROFITEZ-EN.",
-        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Le genre de track qui fait changer d'avis sur la nuit.",
         "Hardstyle activé. Tout le reste... peut attendre.",
         "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
-        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
+        "Peu importe où vous êtes ce soir... vous êtes EXACTEMENT au bon endroit.",
+        "Ce set est une déclaration. Et vous en faites partie."
       ]
     },
     "flow": {
       "triggers": ["melodique", "nocturne"],
       "templates_no_next": [
-        "On glisse... vers quelque chose de plus profond. C'est agréable.",
-        "Ce changement de rythme... exactement ce qu'il fallait.",
+        "On glisse... vers quelque chose de plus profond. Restez avec nous.",
+        "Ce changement de rythme... exactement ce qu'il fallait pour tout le monde.",
         "Melodic à cette heure. Les choix sont DÉFENDABLES.",
         "On descend en douceur. Sans perdre l'essentiel.",
-        "Progressive. Le mot dit tout.",
-        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
-        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
+        "Progressive. Le mot dit tout. Et vous le savez.",
+        "C'est le moment où la nuit commence VRAIMENT pour tout le monde.",
+        "Moins fort. Mais toujours là, pour VOUS TOUS. C'est ÇA, la profondeur.",
+        "Gaiverland s'installe dans la nuit. Restez là."
       ],
       "templates_with_next": [
-        "On laisse la nuit avancer... et {next} accompagne parfaitement ce moment. Restez là.",
-        "Douceur et profondeur. C'est ce que {next} apporte à cette heure-ci, et c'est exactement ce qu'il faut.",
-        "Le set prend de la hauteur... {next} entre dans la pièce et la nuit... elle commence vraiment.",
-        "Moins de bruit, plus de sens. {next} arrive et ça, ça méritait qu'on le dise."
+        "On laisse la nuit avancer... {next} accompagne parfaitement ce moment. Restez là.",
+        "Douceur et profondeur. C'est ce que {next} apporte, et c'est exactement ce qu'il faut.",
+        "Le set prend de la hauteur... {next} entre et la nuit... elle commence vraiment.",
+        "Moins de bruit, plus de sens. {next} arrive et ça méritait qu'on le dise.",
+        "Pour ceux qui sont encore là... {next} est fait pour vous. Bienvenue dans la nuit.",
+        "Gaiverland continue... {next} prend le relais. Parfait pour ce moment."
       ],
       "templates": [
-        "On glisse... vers quelque chose de plus profond. C'est agréable.",
-        "Ce changement de rythme... exactement ce qu'il fallait.",
+        "On glisse... vers quelque chose de plus profond. Restez avec nous.",
+        "Ce changement de rythme... exactement ce qu'il fallait pour tout le monde.",
         "Melodic à cette heure. Les choix sont DÉFENDABLES.",
         "On descend en douceur. Sans perdre l'essentiel.",
-        "Progressive. Le mot dit tout.",
-        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
-        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
+        "C'est le moment où la nuit commence VRAIMENT pour tout le monde.",
+        "Moins fort. Mais toujours là, pour VOUS TOUS. C'est ÇA, la profondeur.",
+        "Gaiverland s'installe dans la nuit. Restez là."
+      ]
+    },
+    "lore": {
+      "templates_no_next": [
+        "Gaiverland Radio... toujours là, pour TOUS ceux qui écoutent.",
+        "Les algorithmes dorment, mais Gaiverland... reste éveillée. Pour vous.",
+        "Une radio autonome. Une présence continue. Pour tout le monde, partout.",
+        "Gaiverland tourne 24h/24. Peu importe où vous êtes... vous faites partie du set.",
+        "Pas de fin de programme ici. Gaiverland Radio, pour vous tous.",
+        "La musique ne s'arrête pas. Et vous non plus."
+      ],
+      "templates": [
+        "Gaiverland Radio... toujours là, pour TOUS ceux qui écoutent.",
+        "Les algorithmes dorment, mais Gaiverland... reste éveillée. Pour vous.",
+        "Une radio autonome. Une présence continue. Pour tout le monde, partout.",
+        "Gaiverland tourne 24h/24. Peu importe où vous êtes... vous faites partie du set."
       ]
     }
   }

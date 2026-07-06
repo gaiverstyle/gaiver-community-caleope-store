@@ -68,6 +68,26 @@ GENRE_HOURS = _parse_genre_hours(
     os.environ.get("GENRE_HOURS", _DEFAULT_GENRE_HOURS)
 )
 
+# ── Whitelist de genres — seuls ces genres électroniques sont autorisés ────────
+# Les tracks avec genre_top1 non-électronique sont filtrées (French Pop, Rap, etc.)
+# Les tracks avec genre_top1=NULL sont autorisées (Essentia n'a pas classifié → électro probable)
+# Surcharger via env GENRE_WHITELIST="Techno,House,..." pour ajuster
+_DEFAULT_GENRE_WHITELIST = (
+    "Techno,House,Trance,Progressive House,Melodic Techno,Melodic Dubstep,"
+    "Electronic,Dance,Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,"
+    "Makina,Donk,Hands Up,Dubstep,Drum and Bass,Drum n Bass,DnB,"
+    "Electro House,Big Room,Progressive,Synthwave,Industrial,Industrial Techno,"
+    "Electronica,Ambient Electronic,Future Bass,Bass House,Tech House,"
+    "Deep House,Tribal,Trance,Psy-Trance,Goa,Breakbeat,UK Garage,Speed Garage"
+)
+
+GENRE_WHITELIST: list[str] = [
+    g.strip()
+    for g in os.environ.get("GENRE_WHITELIST", _DEFAULT_GENRE_WHITELIST).split(",")
+    if g.strip()
+]
+
+
 def get_excluded_genres() -> list:
     """Retourne la liste des genres hors de leur créneau horaire actuel."""
     import datetime
@@ -323,8 +343,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
               AND file_path NOT LIKE %s
               AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
+              AND (genre_top1 IS NULL OR genre_top1 = ANY(%s))
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or [''], count * 4))
+        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or [''], GENRE_WHITELIST, count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
@@ -333,8 +354,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
+                  AND (genre_top1 IS NULL OR genre_top1 = ANY(%s))
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', excluded_now or [''], count * 2))
+            """, ('%rebexis_%', excluded_now or [''], GENRE_WHITELIST, count * 2))
             candidates = list(cur.fetchall())
 
     selected = []

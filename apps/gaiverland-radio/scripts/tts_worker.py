@@ -50,33 +50,39 @@ EL_VOICE_SETTINGS = {
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
 # Cat3 : blocs musicaux (aucune variable, priorité absolue)
 STATIC_PHRASES = [
-    # --- Blocs musicaux ---
+    # --- Blocs musicaux — charte Scott Taylor : collectif, spectacle, jamais "tu" ---
     ("cat3_bloc", "Et maintenant, un maximum d'électro."),
-    ("cat3_bloc", "Retour à la musique."),
+    ("cat3_bloc", "Retour à la musique. Pour tout le monde."),
     ("cat3_bloc", "On continue sans ralentir."),
-    ("cat3_bloc", "On garde cette énergie."),
+    ("cat3_bloc", "On garde cette énergie. Tous ensemble."),
     ("cat3_bloc", "La nuit avance, la musique aussi."),
     ("cat3_bloc", "On enchaîne, et on ne ralentit pas."),
-    ("cat3_bloc", "Gaiverland Radio — on reste en mode plein gaz."),
+    ("cat3_bloc", "Gaiverland Radio — en mode plein gaz pour vous tous."),
     ("cat3_bloc", "Et voilà, on repart."),
+    ("cat3_bloc", "Le set continue. Restez avec nous."),
+    ("cat3_bloc", "Peu importe où vous êtes... la musique est là."),
     # --- Nouveauté sans artiste ---
-    ("cat4_nouveaute", "Place à une nouveauté qui a attiré mon attention."),
-    ("cat4_nouveaute", "Un nouveau titre que je voulais vraiment partager avec vous ce soir."),
+    ("cat4_nouveaute", "Place à une nouveauté sur Gaiverland Radio."),
+    ("cat4_nouveaute", "Un nouveau titre à partager avec vous tous ce soir."),
+    ("cat4_nouveaute", "Découverte en cours. Pour tout le monde ici."),
 ]
 
 # Templates avec variables — générés à la demande, cachés à vie
 # {artist} ou {title} sont résolus dynamiquement
+# Charte : jamais "tu", toujours collectif
 TEMPLATES = {
     # Catégorie 1 — lancement artiste
     "cat1_artiste_1": "Et maintenant, {artist} sur Gaiverland Radio.",
     "cat1_artiste_2": "Place à {artist}.",
-    "cat1_artiste_3": "On retrouve maintenant {artist}.",
+    "cat1_artiste_3": "On retrouve {artist}. Ce soir, pour vous tous.",
+    "cat1_artiste_4": "{artist} prend le relais sur Gaiverland Radio.",
     # Catégorie 2 — lancement morceau
     "cat2_morceau_1": "Et maintenant, {title}.",
-    "cat2_morceau_2": "Voici {title}.",
+    "cat2_morceau_2": "Voici {title}. Pour tout le monde.",
     "cat2_morceau_3": "On s'écoute {title}.",
     # Catégorie 4 — nouveauté avec artiste
     "cat4_nouveaute_1": "Et maintenant une découverte signée {artist}.",
+    "cat4_nouveaute_2": "Nouveauté sur Gaiverland Radio — {artist} est là.",
 }
 
 # ── Chaîne ffmpeg radio ───────────────────────────────────────────────────────
