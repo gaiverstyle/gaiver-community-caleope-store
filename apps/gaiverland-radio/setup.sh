@@ -19,6 +19,7 @@ mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}" \
          "${CONFIG_DIR}/dockerfiles/streamer" \
          "${CONFIG_DIR}/dockerfiles/gcs-track-service" \
          "${CONFIG_DIR}/dockerfiles/gcs-state-engine" \
+         "${CONFIG_DIR}/dockerfiles/gcs-api" \
          "${DATA_DIR}/db" \
          "${STORAGE_PATH}/tts-cache" "${STORAGE_PATH}/ollama" \
          "${STORAGE_PATH}/essentia-models" "${STORAGE_PATH}/backups" \
@@ -64,25 +65,33 @@ RUN pip install --no-cache-dir \
     httpx Pillow
 EOF
 
-# ── GCS services (Phase 1 — même image de base que api) ─────────────────
+# ── GCS services Dockerfiles ─────────────────────────────────────────────
 cat > "${CONFIG_DIR}/dockerfiles/gcs-track-service/Dockerfile" <<'EOF'
 FROM python:3.12-slim
-RUN pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" psycopg2-binary httpx
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" psycopg2-binary httpx
 EOF
 
 cat > "${CONFIG_DIR}/dockerfiles/gcs-state-engine/Dockerfile" <<'EOF'
 FROM python:3.12-slim
-RUN pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" psycopg2-binary httpx
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" psycopg2-binary httpx
 EOF
-echo "  ✓ Dockerfiles créés (legacy + GCS)"
+
+# gcs-api : image partagée pour rebexis/tts/injector/vote/lore (+ ffmpeg pour tts)
+cat > "${CONFIG_DIR}/dockerfiles/gcs-api/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN apt-get update -qq && apt-get install -y -qq ffmpeg && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" psycopg2-binary httpx
+EOF
+echo "  ✓ Dockerfiles créés (legacy + GCS Phase 1-6)"
 
 # ── Nettoyage containers ───────────────────────────────────────────────
 for _ct in gaiverland-db gaiverland-analyzer gaiverland-playlist \
            gaiverland-rebexis gaiverland-tts gaiverland-scheduler \
            gaiverland-ollama gaiverland-bootstrap \
-           gaiverland-gcs-track gaiverland-gcs-state; do
+           gaiverland-gcs-track gaiverland-gcs-state gaiverland-gcs-rebexis \
+           gaiverland-gcs-tts gaiverland-gcs-injector gaiverland-gcs-vote \
+           gaiverland-gcs-lore; do
     if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${_ct}$"; then
         docker stop "${_ct}" 2>/dev/null || true
         docker rm   "${_ct}" 2>/dev/null || true
@@ -285,13 +294,20 @@ mkdir -p "${STORAGE_PATH}/tts-cache-pp"
 
 # ── gcs.env — configuration GCS Phase 1 ──────────────────────────────
 GCS_CITY="${CALEOPE_PARAM_GCS_CITY:-Toulon}"
+GCS_INJECT_ACTIVE="${CALEOPE_PARAM_GCS_INJECT_ACTIVE:-false}"
 cat > "${CONFIG_DIR}/gcs.env" <<EOF
 # Ville de Gaiverland (change environ tous les 3 ans)
 GCS_CITY=${GCS_CITY}
-# URL interne du state engine (Docker network)
+# URLs internes GCS (Docker network gaiverland-internal)
 GCS_STATE_ENGINE_URL=http://gcs-state-engine:8091
+GCS_REBEXIS_URL=http://gcs-rebexis:8092
+GCS_TTS_URL=http://gcs-tts:8093
+GCS_TRACK_URL=http://gcs-track-service:8090
+GCS_LORE_SERVICE_URL=http://gcs-lore-service:8096
 # Intervalle de polling AzuraCast en secondes
 GCS_POLL_INTERVAL=10
+# Injection active : false=shadow/log, true=injecte dans AzuraCast
+GCS_INJECT_ACTIVE=${GCS_INJECT_ACTIVE}
 EOF
 
 echo "  ✓ Fichiers de config créés (legacy + GCS)"
@@ -369,6 +385,48 @@ CREATE TABLE IF NOT EXISTS gcs_state (
 );
 
 INSERT INTO gcs_state (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- GCS Phase 3 — cache TTS avec emotion dans la clé
+CREATE TABLE IF NOT EXISTS gcs_tts_cache (
+    id          SERIAL PRIMARY KEY,
+    cache_key   VARCHAR(64) UNIQUE NOT NULL,
+    text        TEXT NOT NULL,
+    emotion     VARCHAR(30) NOT NULL DEFAULT 'playful',
+    voice_id    VARCHAR(100) NOT NULL,
+    audio_file  TEXT,
+    el_chars    INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_gcs_tts_key ON gcs_tts_cache(cache_key);
+
+-- GCS Phase 5 — votes ENCORE/REVIEW/SKIP
+CREATE TABLE IF NOT EXISTS votes (
+    id          SERIAL PRIMARY KEY,
+    song_id     VARCHAR(100) NOT NULL,
+    vote        VARCHAR(10)  NOT NULL CHECK (vote IN ('ENCORE','REVIEW','SKIP')),
+    user_role   VARCHAR(20)  NOT NULL DEFAULT 'user',
+    user_weight FLOAT        NOT NULL DEFAULT 0.3,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS track_scores (
+    song_id     VARCHAR(100) PRIMARY KEY,
+    score       FLOAT        NOT NULL DEFAULT 0.0,
+    vote_count  INTEGER      NOT NULL DEFAULT 0,
+    last_vote   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_votes_song ON votes(song_id);
+
+-- GCS Phase 6 — mémoire lore festival
+CREATE TABLE IF NOT EXISTS lore_events (
+    id          SERIAL PRIMARY KEY,
+    type        VARCHAR(50)  NOT NULL,
+    description TEXT         NOT NULL,
+    city        VARCHAR(100) DEFAULT '',
+    metadata    JSONB        DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lore_type ON lore_events(type);
+CREATE INDEX IF NOT EXISTS idx_lore_time ON lore_events(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_tracks_mood      ON tracks(mood);
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm       ON tracks(bpm);
@@ -2252,6 +2310,829 @@ if __name__ == "__main__":
 PYEOF
 
 echo "  ✓ Scripts GCS Phase 1 créés (gcs_track_service + gcs_state_engine)"
+
+# ── gcs_rebexis.py — Phase 2 : output JSON structuré RPE v1 ──────────────────
+cat > "${SCRIPTS_DIR}/gcs_rebexis.py" <<'PYEOF'
+"""
+GCS Rebexis Engine — Phase 2.
+Input:  { track: {title,artist}, state: {energy_level,stage_active,...} }
+Output: { emotion, segment_type, text, action }
+100% template-based (RPE v1) — aucune génération libre.
+"""
+import os, sys, subprocess, json, random
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+
+try:
+    import fastapi, uvicorn, psycopg2, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2, httpx
+
+import psycopg2.extras
+from fastapi import FastAPI
+
+DB_URL    = os.environ["DATABASE_URL"]
+STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
+LORE_URL  = os.environ.get("GCS_LORE_SERVICE_URL", "http://gcs-lore-service:8096")
+INT_MIN   = int(os.environ.get("REBEXIS_INTERVAL_MIN", "15")) * 60
+INT_MAX   = int(os.environ.get("REBEXIS_INTERVAL_MAX", "30")) * 60
+
+app = FastAPI(title="GCS Rebexis Engine")
+_tpl: dict = {}
+
+ENERGY_EMOTION = {1: "calm", 2: "calm", 3: "playful", 4: "excited", 5: "energetic"}
+ENERGY_MODE    = {1: "flow",  2: "flow",   3: "normal", 4: "hype",    5: "peak"}
+STAGE_SEGMENT  = {"mainstage": "announcement", "sunset": "transition",
+                  "rush": "intro", "night": "outro"}
+
+
+def load_tpl():
+    global _tpl
+    for path in ("/app/templates.json", "/app/rebexis-templates.json"):
+        try:
+            with open(path) as f:
+                _tpl = json.load(f)
+            return
+        except Exception:
+            pass
+    _tpl = {"modes": {"normal": {"templates": ["La musique continue."]}}}
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def fetch_state() -> dict:
+    try:
+        r = httpx.get(f"{STATE_URL}/state/current", timeout=3)
+        return r.json() if r.status_code == 200 else {}
+    except Exception:
+        return {}
+
+
+def pick(mode: str, track: dict) -> str:
+    modes = _tpl.get("modes", {})
+    pool  = modes.get(mode, {}).get("templates") or \
+            modes.get("normal", {}).get("templates", ["La musique continue."])
+    t = random.choice(pool)
+    t = t.replace("{artist}", track.get("artist", "l'artiste"))
+    t = t.replace("{title}",  track.get("title",  "ce morceau"))
+    return t
+
+
+def should_fire(conn, force: bool) -> bool:
+    if force:
+        return True
+    import datetime
+    with conn.cursor() as cur:
+        cur.execute("SELECT last_rebexis FROM radio_state WHERE id=1")
+        row = cur.fetchone()
+    if not row or not row["last_rebexis"]:
+        return True
+    elapsed = (datetime.datetime.now(datetime.timezone.utc)
+               - row["last_rebexis"]).total_seconds()
+    return elapsed >= random.randint(INT_MIN, INT_MAX)
+
+
+def log_lore(text: str, state: dict):
+    try:
+        httpx.post(f"{LORE_URL}/events", json={
+            "type": "rebexis_intervention",
+            "description": text,
+            "city": state.get("city", ""),
+        }, timeout=2)
+    except Exception:
+        pass
+
+
+@app.on_event("startup")
+def startup():
+    load_tpl()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "templates_loaded": bool(_tpl)}
+
+
+@app.post("/generate")
+def generate(body: dict = None, force: bool = False):
+    body  = body or {}
+    state = body.get("state") or fetch_state()
+    track = body.get("track") or state.get("last_track") or {}
+
+    conn = get_conn()
+    if not should_fire(conn, force):
+        conn.close()
+        return {"intervention": None, "reason": "interval_not_reached"}
+
+    energy       = int(state.get("energy_level", 3))
+    stage        = str(state.get("stage_active", "mainstage"))
+    tod          = str(state.get("time_of_day", "day"))
+    mode         = "flow" if tod == "night" else ENERGY_MODE.get(energy, "normal")
+    emotion      = ENERGY_EMOTION.get(energy, "playful")
+    segment_type = STAGE_SEGMENT.get(stage, "announcement")
+    text         = pick(mode, track)
+    action       = "announce_track" if track.get("title") else "play_music"
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO rebexis_sessions (intervention, mood_trigger, context_track)
+            VALUES (%s,%s,%s) RETURNING id
+        """, (text, f"energy={energy} stage={stage} emotion={emotion}",
+              track.get("title", "")))
+        sid = cur.fetchone()["id"]
+        cur.execute("UPDATE radio_state SET last_rebexis=NOW() WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    log_lore(text, state)
+    print(f"  ✓ rebexis [{emotion}/{segment_type}]: {text[:60]}")
+
+    return {
+        "emotion":      emotion,
+        "segment_type": segment_type,
+        "text":         text,
+        "action":       action,
+        "session_id":   sid,
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8092)
+PYEOF
+
+# ── gcs_tts.py — Phase 3 : cache hash(text+emotion+voice_id) ──────────────────
+cat > "${SCRIPTS_DIR}/gcs_tts.py" <<'PYEOF'
+"""
+GCS TTS Service — Phase 3.
+Cache key: hash(text + emotion + voice_id).
+Emotion influence sur les voice settings ElevenLabs.
+"""
+import os, sys, subprocess, hashlib, pathlib, time
+
+def _install():
+    subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+
+try:
+    import fastapi, uvicorn, psycopg2, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2, httpx
+
+import psycopg2.extras
+from fastapi import FastAPI, HTTPException
+
+DB_URL        = os.environ["DATABASE_URL"]
+EL_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
+EL_VOICE_ID   = os.environ.get("ELEVENLABS_VOICE_ID", "")
+EL_MODEL      = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
+EL_CHARS_LIMIT= int(os.environ.get("EL_CHARS_LIMIT", "10000"))
+TTS_CACHE     = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
+TTS_CACHE.mkdir(parents=True, exist_ok=True)
+
+EMOTION_SETTINGS = {
+    "calm":      {"stability": 0.55, "similarity_boost": 0.75, "style": 0.35, "use_speaker_boost": True},
+    "playful":   {"stability": 0.30, "similarity_boost": 0.75, "style": 0.75, "use_speaker_boost": True},
+    "excited":   {"stability": 0.20, "similarity_boost": 0.80, "style": 0.90, "use_speaker_boost": True},
+    "energetic": {"stability": 0.15, "similarity_boost": 0.85, "style": 0.95, "use_speaker_boost": True},
+    "amused":    {"stability": 0.35, "similarity_boost": 0.75, "style": 0.70, "use_speaker_boost": True},
+}
+
+FFMPEG_RADIO = ",".join([
+    "highpass=f=90",
+    "equalizer=f=2500:width_type=o:width=1.5:g=4",
+    "equalizer=f=10000:width_type=o:width=2:g=3",
+    "acompressor=threshold=-22dB:ratio=4:attack=3:release=150:makeup=6",
+    "alimiter=limit=0.92:attack=0.5:release=3",
+    "loudnorm=I=-13:LRA=5:TP=-1.0",
+])
+
+app = FastAPI(title="GCS TTS Service")
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def init_db():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS gcs_tts_cache (
+                id          SERIAL PRIMARY KEY,
+                cache_key   VARCHAR(64) UNIQUE NOT NULL,
+                text        TEXT NOT NULL,
+                emotion     VARCHAR(30) NOT NULL DEFAULT 'playful',
+                voice_id    VARCHAR(100) NOT NULL,
+                audio_file  TEXT,
+                el_chars    INTEGER DEFAULT 0,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_gcs_tts_key ON gcs_tts_cache(cache_key)")
+    conn.commit()
+    conn.close()
+
+
+def cache_key(text: str, emotion: str, voice_id: str) -> str:
+    return hashlib.sha256(f"{text}|{emotion}|{voice_id}".encode()).hexdigest()[:32]
+
+
+def current_month() -> str:
+    import datetime
+    return datetime.date.today().strftime("%Y-%m")
+
+
+def quota_used(conn) -> int:
+    month = current_month()
+    with conn.cursor() as cur:
+        cur.execute("SELECT chars_used FROM el_monthly_quota WHERE month=%s", (month,))
+        row = cur.fetchone()
+    return row["chars_used"] if row else 0
+
+
+def quota_add(conn, chars: int):
+    month = current_month()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO el_monthly_quota (month, chars_used, chars_limit)
+            VALUES (%s,%s,%s)
+            ON CONFLICT (month) DO UPDATE
+               SET chars_used = el_monthly_quota.chars_used + EXCLUDED.chars_used,
+                   updated_at = NOW()
+        """, (month, chars, EL_CHARS_LIMIT))
+    conn.commit()
+
+
+def synthesize_el(text: str, emotion: str) -> bytes:
+    settings = EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["playful"])
+    el_text  = f"[playful] {text}" if not text.startswith("[") else text
+    r = httpx.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}",
+        headers={"xi-api-key": EL_API_KEY, "Content-Type": "application/json"},
+        json={"text": el_text, "model_id": EL_MODEL, "voice_settings": settings},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"EL HTTP {r.status_code}: {r.text[:200]}")
+    return r.content
+
+
+def apply_radio(mp3_bytes: bytes, key: str) -> pathlib.Path:
+    raw = TTS_CACHE / f"raw_{key}.mp3"
+    out = TTS_CACHE / f"gcs_{key}.mp3"
+    if out.exists():
+        return out
+    raw.write_bytes(mp3_bytes)
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(raw), "-af", FFMPEG_RADIO,
+         "-b:a", "192k", "-ar", "44100", str(out)],
+        capture_output=True
+    )
+    raw.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg: {r.stderr.decode()[:200]}")
+    return out
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+
+@app.get("/health")
+def health():
+    conn = get_conn()
+    used = quota_used(conn)
+    conn.close()
+    return {"status": "ok", "quota_used": used, "quota_limit": EL_CHARS_LIMIT}
+
+
+@app.post("/synthesize")
+def synthesize(body: dict):
+    text     = body.get("text", "").strip()
+    emotion  = body.get("emotion", "playful")
+    voice_id = body.get("voice_id", EL_VOICE_ID)
+
+    if not text:
+        raise HTTPException(400, "text required")
+    if not EL_API_KEY or not voice_id:
+        raise HTTPException(503, "ElevenLabs not configured")
+
+    key  = cache_key(text, emotion, voice_id)
+    conn = get_conn()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT audio_file FROM gcs_tts_cache WHERE cache_key=%s", (key,))
+        row = cur.fetchone()
+    if row and row["audio_file"] and pathlib.Path(row["audio_file"]).exists():
+        conn.close()
+        return {"audio_file": row["audio_file"], "cache_hit": True, "el_chars_used": 0}
+
+    el_text   = f"[playful] {text}" if not text.startswith("[") else text
+    needed    = len(el_text)
+    remaining = EL_CHARS_LIMIT - quota_used(conn)
+    if remaining < needed:
+        conn.close()
+        raise HTTPException(429, f"EL quota insufficient ({remaining} chars remaining)")
+
+    t0       = time.time()
+    mp3      = synthesize_el(text, emotion)
+    out_path = apply_radio(mp3, key)
+    print(f"  ✓ gcs-tts [{emotion}] {needed}ch {time.time()-t0:.1f}s → {out_path.name}")
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO gcs_tts_cache (cache_key, text, emotion, voice_id, audio_file, el_chars)
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (cache_key) DO UPDATE SET audio_file=EXCLUDED.audio_file
+        """, (key, text, emotion, voice_id, str(out_path), needed))
+    conn.commit()
+    quota_add(conn, needed)
+    conn.close()
+
+    return {"audio_file": str(out_path), "cache_hit": False,
+            "el_chars_used": needed, "quota_remaining": remaining - needed}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8093)
+PYEOF
+
+# ── gcs_audio_injector.py — Phase 4 : pipeline rebexis→tts→AzuraCast ─────────
+cat > "${SCRIPTS_DIR}/gcs_audio_injector.py" <<'PYEOF'
+"""
+GCS Audio Injector — Phase 4.
+Orchestre : gcs-rebexis → gcs-tts → AzuraCast.
+Shadow mode par défaut (GCS_INJECT_ACTIVE=false) : génère tout, n'injecte pas.
+Ducking = injection en fin de morceau (silence naturel).
+"""
+import os, sys, subprocess, time, threading
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+
+try:
+    import fastapi, uvicorn, psycopg2, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2, httpx
+
+import psycopg2.extras
+from fastapi import FastAPI
+
+DB_URL         = os.environ["DATABASE_URL"]
+REBEXIS_URL    = os.environ.get("GCS_REBEXIS_URL",    "http://gcs-rebexis:8092")
+TTS_URL        = os.environ.get("GCS_TTS_URL",        "http://gcs-tts:8093")
+TRACK_URL      = os.environ.get("GCS_TRACK_URL",      "http://gcs-track-service:8090")
+AZ_URL         = os.environ.get("AZURACAST_URL",       "http://azuracast:80")
+AZ_KEY         = os.environ.get("AZURACAST_API_KEY",   "")
+AZ_STATION     = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+INJECT_ACTIVE  = os.environ.get("GCS_INJECT_ACTIVE",  "false").lower() == "true"
+POLL_INTERVAL  = int(os.environ.get("GCS_POLL_INTERVAL", "10"))
+
+app = FastAPI(title="GCS Audio Injector")
+_last_song_id: str     = ""
+_last_inject_ts: float = 0.0
+_inject_interval       = float(os.environ.get("REBEXIS_INTERVAL_MIN", "15")) * 60
+_stats: dict           = {"generated": 0, "injected": 0, "errors": 0}
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def az_headers():
+    return {"X-API-Key": AZ_KEY, "Content-Type": "application/json"}
+
+
+def get_rebexis_playlist_id(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT az_rb_playlist FROM radio_state WHERE id=1")
+        row = cur.fetchone()
+    return (row["az_rb_playlist"] or 0) if row else 0
+
+
+def upload_and_queue(audio_file: str, conn) -> bool:
+    rb_pl = get_rebexis_playlist_id(conn)
+    if not rb_pl:
+        print("  ⚠ injector: no rebexis playlist ID — not injecting")
+        return False
+    try:
+        import base64, os as _os
+        with open(audio_file, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        fname = _os.path.basename(audio_file)
+        r = httpx.post(
+            f"{AZ_URL}/api/station/{AZ_STATION}/files",
+            headers=az_headers(),
+            json={"path": f"gcs-rebexis/{fname}", "file": b64},
+            timeout=60,
+        )
+        if r.status_code not in (200, 201):
+            return False
+        az_path = r.json().get("path", "")
+        r2 = httpx.put(
+            f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
+            headers=az_headers(),
+            json={"do": "playlist", "files": [az_path], "playlists": [str(rb_pl)]},
+            timeout=15,
+        )
+        return r2.status_code in (200, 201)
+    except Exception as e:
+        print(f"  ⚠ injector upload: {e}")
+        return False
+
+
+def should_inject(elapsed: int, duration: int) -> bool:
+    global _last_inject_ts
+    return ((time.time() - _last_inject_ts) >= _inject_interval
+            and duration > 0 and (duration - elapsed) <= 30)
+
+
+def run_pipeline(track: dict):
+    global _last_inject_ts, _stats
+    try:
+        r = httpx.post(f"{REBEXIS_URL}/generate", json={"track": track}, timeout=10)
+        if r.status_code != 200:
+            _stats["errors"] += 1
+            return
+        result = r.json()
+        if result.get("intervention") is None:
+            return
+    except Exception as e:
+        print(f"  ⚠ injector→rebexis: {e}")
+        _stats["errors"] += 1
+        return
+
+    emotion = result.get("emotion", "playful")
+    text    = result.get("text", "")
+    if not text:
+        return
+
+    _stats["generated"] += 1
+    print(f"  🎙 [{emotion}]: {text[:60]}")
+
+    try:
+        r2 = httpx.post(f"{TTS_URL}/synthesize",
+                        json={"text": text, "emotion": emotion}, timeout=40)
+        if r2.status_code != 200:
+            return
+        audio_file = r2.json().get("audio_file", "")
+    except Exception as e:
+        print(f"  ⚠ injector→tts: {e}")
+        return
+
+    if not audio_file:
+        return
+
+    if INJECT_ACTIVE:
+        conn = get_conn()
+        ok   = upload_and_queue(audio_file, conn)
+        conn.close()
+        if ok:
+            _stats["injected"] += 1
+            _last_inject_ts = time.time()
+            print(f"  ✓ INJECTED [{emotion}]")
+        else:
+            _stats["errors"] += 1
+    else:
+        _last_inject_ts = time.time()
+        print(f"  👁 SHADOW: would inject [{emotion}] → {audio_file}")
+
+
+def poll_loop():
+    global _last_song_id
+    print(f"🔊 GCS Audio Injector — shadow={not INJECT_ACTIVE}")
+    while True:
+        try:
+            r = httpx.get(f"{TRACK_URL}/track/current", timeout=5)
+            if r.status_code == 200:
+                track    = r.json()
+                song_id  = track.get("song_id", "")
+                elapsed  = int(track.get("elapsed", 0))
+                duration = int(track.get("duration", 0))
+                if song_id and song_id != _last_song_id:
+                    _last_song_id = song_id
+                if song_id and should_inject(elapsed, duration):
+                    run_pipeline(track)
+        except Exception as e:
+            print(f"  ⚠ poll: {e}")
+        time.sleep(POLL_INTERVAL)
+
+
+@app.on_event("startup")
+def startup():
+    threading.Thread(target=poll_loop, daemon=True).start()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "inject_active": INJECT_ACTIVE, **_stats}
+
+
+@app.post("/inject/force")
+def force_inject():
+    try:
+        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
+        track = r.json() if r.status_code == 200 else {}
+    except Exception:
+        track = {}
+    threading.Thread(target=run_pipeline, args=(track,), daemon=True).start()
+    return {"ok": True, "shadow": not INJECT_ACTIVE}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8094)
+PYEOF
+
+# ── gcs_vote_service.py — Phase 5 : ENCORE/REVIEW/SKIP ───────────────────────
+cat > "${SCRIPTS_DIR}/gcs_vote_service.py" <<'PYEOF'
+"""
+GCS Vote Service — Phase 5.
+ENCORE / REVIEW / SKIP — weighted scoring.
+"""
+import os, sys, subprocess
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+
+try:
+    import fastapi, uvicorn, psycopg2, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2, httpx
+
+import psycopg2.extras
+from fastapi import FastAPI, HTTPException
+
+DB_URL    = os.environ["DATABASE_URL"]
+STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
+
+ROLE_WEIGHTS = {"founder": 0.6, "user": 0.3, "system_ai": 0.1}
+VALID_VOTES  = {"ENCORE", "REVIEW", "SKIP"}
+
+app = FastAPI(title="GCS Vote Service")
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def init_db():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS votes (
+                id          SERIAL PRIMARY KEY,
+                song_id     VARCHAR(100) NOT NULL,
+                vote        VARCHAR(10)  NOT NULL CHECK (vote IN ('ENCORE','REVIEW','SKIP')),
+                user_role   VARCHAR(20)  NOT NULL DEFAULT 'user',
+                user_weight FLOAT        NOT NULL DEFAULT 0.3,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS track_scores (
+                song_id     VARCHAR(100) PRIMARY KEY,
+                score       FLOAT        NOT NULL DEFAULT 0.0,
+                vote_count  INTEGER      NOT NULL DEFAULT 0,
+                last_vote   TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_song ON votes(song_id)")
+    conn.commit()
+    conn.close()
+
+
+def compute_score(song_id: str, conn) -> float:
+    with conn.cursor() as cur:
+        cur.execute("SELECT vote, user_weight FROM votes WHERE song_id=%s", (song_id,))
+        rows = cur.fetchall()
+    if not rows:
+        return 0.0
+    score = sum((1.0 if r["vote"]=="ENCORE" else -1.0 if r["vote"]=="SKIP" else 0.0)
+                * r["user_weight"] for r in rows)
+    return round(score / len(rows), 3)
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/vote")
+def cast_vote(body: dict):
+    song_id   = body.get("song_id", "").strip()
+    vote      = body.get("vote", "").upper()
+    user_role = body.get("user_role", "user")
+    if not song_id:
+        raise HTTPException(400, "song_id required")
+    if vote not in VALID_VOTES:
+        raise HTTPException(400, f"vote must be one of {VALID_VOTES}")
+    if user_role not in ROLE_WEIGHTS:
+        user_role = "user"
+    weight = ROLE_WEIGHTS[user_role]
+    conn   = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight) VALUES (%s,%s,%s,%s)",
+                    (song_id, vote, user_role, weight))
+    conn.commit()
+    score = compute_score(song_id, conn)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO track_scores (song_id,score,vote_count)
+            VALUES (%s,%s,1)
+            ON CONFLICT (song_id) DO UPDATE SET
+                score=EXCLUDED.score, vote_count=track_scores.vote_count+1, last_vote=NOW()
+        """, (song_id, score))
+    conn.commit()
+    conn.close()
+    print(f"  ✓ vote [{user_role}] {vote} score={score}")
+    return {"ok": True, "song_id": song_id, "vote": vote, "score": score}
+
+
+@app.get("/track/{song_id}/score")
+def track_score(song_id: str):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM track_scores WHERE song_id=%s", (song_id,))
+        row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else {"song_id": song_id, "score": 0.0, "vote_count": 0}
+
+
+@app.get("/leaderboard")
+def leaderboard(limit: int = 10):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT song_id,score,vote_count FROM track_scores ORDER BY score DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    conn.close()
+    return {"tracks": [dict(r) for r in rows]}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8095)
+PYEOF
+
+# ── gcs_lore_service.py — Phase 6 : mémoire festival ─────────────────────────
+cat > "${SCRIPTS_DIR}/gcs_lore_service.py" <<'PYEOF'
+"""
+GCS Lore Service — Phase 6.
+Mémoire immuable : events C15, stagiaire, Rebexis, villes.
+"""
+import os, sys, subprocess, json
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary"], check=True)
+
+try:
+    import fastapi, uvicorn, psycopg2
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2
+
+import psycopg2.extras
+from fastapi import FastAPI, HTTPException
+from typing import Optional
+
+DB_URL = os.environ["DATABASE_URL"]
+VALID_TYPES = {"c15_event","stagiaire_event","city_transition",
+               "rebexis_intervention","track_milestone","festival_moment"}
+
+app = FastAPI(title="GCS Lore Service")
+
+
+def get_conn():
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def init_db():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lore_events (
+                id          SERIAL PRIMARY KEY,
+                type        VARCHAR(50)  NOT NULL,
+                description TEXT         NOT NULL,
+                city        VARCHAR(100) DEFAULT '',
+                metadata    JSONB        DEFAULT '{}',
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lore_type ON lore_events(type)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lore_time ON lore_events(created_at DESC)")
+    conn.commit()
+    conn.close()
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+
+@app.get("/health")
+def health():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM lore_events")
+        n = cur.fetchone()["n"]
+    conn.close()
+    return {"status": "ok", "total_events": n}
+
+
+@app.post("/events")
+def log_event(body: dict):
+    event_type  = body.get("type", "festival_moment")
+    description = body.get("description", "").strip()
+    city        = body.get("city", "")
+    metadata    = body.get("metadata", {})
+    if not description:
+        raise HTTPException(400, "description required")
+    if event_type not in VALID_TYPES:
+        event_type = "festival_moment"
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO lore_events (type,description,city,metadata)
+            VALUES (%s,%s,%s,%s::jsonb) RETURNING id, created_at
+        """, (event_type, description, city, json.dumps(metadata)))
+        row = cur.fetchone()
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": row["id"], "created_at": str(row["created_at"])}
+
+
+@app.get("/events")
+def get_events(type: Optional[str] = None, limit: int = 20):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        if type:
+            cur.execute("""SELECT * FROM lore_events WHERE type=%s
+                           ORDER BY created_at DESC LIMIT %s""", (type, limit))
+        else:
+            cur.execute("SELECT * FROM lore_events ORDER BY created_at DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    conn.close()
+    return {"events": [dict(r) for r in rows]}
+
+
+@app.get("/summary")
+def summary():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT type, COUNT(*) AS n FROM lore_events GROUP BY type ORDER BY n DESC")
+        counts = {r["type"]: r["n"] for r in cur.fetchall()}
+        cur.execute("""SELECT description, created_at FROM lore_events
+                       WHERE type IN ('c15_event','stagiaire_event')
+                       ORDER BY created_at DESC LIMIT 3""")
+        recent_lore = [dict(r) for r in cur.fetchall()]
+        cur.execute("""SELECT description FROM lore_events
+                       WHERE type='rebexis_intervention'
+                       ORDER BY created_at DESC LIMIT 5""")
+        recent_rebexis = [r["description"] for r in cur.fetchall()]
+    conn.close()
+    return {
+        "event_counts":  counts,
+        "recent_lore":   recent_lore,
+        "recent_rebexis": recent_rebexis,
+        "lore_state": {"c15_status": "active", "stagiaire_status": "unknown",
+                       "festival_is_permanent": True},
+    }
+
+
+@app.get("/rebexis-context")
+def rebexis_context():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""SELECT description FROM lore_events
+                       WHERE type='rebexis_intervention'
+                       ORDER BY created_at DESC LIMIT 5""")
+        recent = [r["description"] for r in cur.fetchall()]
+    conn.close()
+    return {"recent_interventions": recent}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8096)
+PYEOF
+
+echo "  ✓ Scripts GCS Phase 2-6 créés (rebexis/tts/injector/vote/lore)"
 
 # ════════════════════════════════════════════════════════════════════════
 # BOOTSTRAP AZURACAST (mode autonome uniquement)
