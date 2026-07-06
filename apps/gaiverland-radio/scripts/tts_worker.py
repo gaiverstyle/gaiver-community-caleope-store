@@ -7,7 +7,7 @@ Stratégie :
   - Pré-génération des phrases statiques Cat3 au démarrage
   - Dégradation gracieuse si quota épuisé : pioche dans la même catégorie en cache
 """
-import os, sys, subprocess, hashlib, pathlib, threading, queue, time, re
+import os, sys, subprocess, hashlib, pathlib, threading, queue, time, re, json
 
 # ── Deps bootstrap ────────────────────────────────────────────────────────────
 def install_deps():
@@ -40,10 +40,11 @@ TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
 # Paramètres voix ElevenLabs — validés : jeune, motivée, ton radio
 EL_VOICE_SETTINGS = {
-    "stability":         0.30,   # dynamique, moins contrôlé = plus naturel/jeune
+    "stability":         0.35,   # légèrement plus stable = moins précipitée
     "similarity_boost":  0.75,
-    "style":             0.75,   # expressivité radio affirmée
+    "style":             0.55,   # moins d'expressivité = rythme plus posé
     "use_speaker_boost": True,
+    "speed":             0.85,   # ralentit la voix (~15%)
 }
 
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
@@ -88,8 +89,39 @@ FFMPEG_RADIO = ",".join([
     "aexciter=level_in=1:level_out=1:amount=1.5:drive=2",
     "alimiter=limit=0.92:attack=0.5:release=3",
     "loudnorm=I=-13:LRA=5:TP=-1.0",
-    "apad=pad_dur=1.5",  # 1.5 s silence final → absorbe le crossfade AzuraCast sans couper la voix
+    "afade=t=in:st=0:d=0.05:curve=tri",
+    "apad=pad_dur=3.5",
 ])
+FFMPEG_CHAIN_HASH = __import__("hashlib").sha256(FFMPEG_RADIO.encode()).hexdigest()[:8]
+
+
+AZ_URL     = os.environ.get("AZURACAST_URL", "http://azuracast:80")
+AZ_KEY     = os.environ.get("AZURACAST_API_KEY", "")
+AZ_STATION = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+
+
+def get_audio_duration(path) -> float:
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
+            capture_output=True, text=True, timeout=10
+        )
+        return float(json.loads(r.stdout).get("format", {}).get("duration", 0))
+    except Exception:
+        return 0
+
+
+def update_az_cue(az_file_id: int, duration: float):
+    if not az_file_id or not AZ_KEY: return
+    try:
+        r = httpx.put(
+            f"{AZ_URL}/api/station/{AZ_STATION}/file/{az_file_id}",
+            headers={"X-API-Key": AZ_KEY, "Content-Type": "application/json"},
+            json={"extra_metadata": {"cue_in": 0.0, "cue_out": round(duration, 3), "fade_in": 0.0, "fade_out": 0.0, "cross_start_next": None}}, timeout=10)
+        if r.status_code < 400: print(f"  cue in=0 out={duration:.1f}s")
+        else: print(f"  warning cue HTTP {r.status_code}")
+    except Exception as e: print(f"  warning cue: {e}")
+
 
 app = FastAPI(title="TTS Worker — ElevenLabs")
 _synth_queue: queue.Queue = queue.Queue()
@@ -235,7 +267,7 @@ def el_synthesize(text: str) -> bytes:
 
 def apply_radio(mp3_bytes: bytes, label: str) -> pathlib.Path:
     """Applique la chaîne radio ffmpeg sur les bytes MP3 EL → fichier final."""
-    h = hashlib.sha256(label.encode()).hexdigest()[:16]
+    h = hashlib.sha256(f"{label}|{FFMPEG_CHAIN_HASH}".encode()).hexdigest()[:16]
     raw_path = TTS_CACHE / f"el_raw_{h}.mp3"
     out_path  = TTS_CACHE / f"rebexis_{h}.mp3"
 
@@ -267,9 +299,15 @@ def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
     # 1. Cache check
     cached = library_get(conn, text)
     if cached and pathlib.Path(cached["audio_file"]).exists():
-        print(f"  ✓ cache hit [{category}] → {pathlib.Path(cached['audio_file']).name}")
-        conn.close()
-        return pathlib.Path(cached["audio_file"])
+        # Verify the cached file uses the current FFMPEG chain
+        expected_h = __import__("hashlib").sha256(f"{text}|{FFMPEG_CHAIN_HASH}".encode()).hexdigest()[:16]
+        expected_path = TTS_CACHE / f"rebexis_{expected_h}.mp3"
+        if pathlib.Path(cached["audio_file"]) == expected_path:
+            print(f"  ✓ cache hit [{category}] → {pathlib.Path(cached['audio_file']).name}")
+            conn.close()
+            return pathlib.Path(cached["audio_file"])
+        else:
+            print(f"  ↻ chain mismatch, regenerating [{category}] : {text[:40]}")
 
     # 2. Quota check
     el_text = el_add_playful(text)
@@ -302,6 +340,9 @@ def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
     try:
         az_result  = upload_file(str(mp3_path), f"Rebexis — {text[:40]}")
         az_file_id = az_result.get("id") if az_result else None
+        if az_file_id:
+            dur = get_audio_duration(str(mp3_path))
+            if dur > 0: update_az_cue(az_file_id, dur)
     except Exception as e:
         print(f"  ⚠ upload AZ: {e}")
         az_file_id = None

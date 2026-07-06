@@ -20,7 +20,7 @@ services:
 
   # ── Analyseur musical (Essentia + Discogs 400 genres) ───────────────────
   gw-analyzer:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/analyzer
     container_name: gaiverland-analyzer
     command: ["python", "-u", "/app/analyzer.py"]
     env_file:
@@ -39,7 +39,7 @@ services:
 
   # ── Moteur de playlist IA (FastAPI :8080) ───────────────────────────────
   gw-playlist:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-playlist
     command: ["python", "-u", "/app/playlist.py"]
     env_file:
@@ -62,7 +62,7 @@ services:
 
   # ── Rebexis — animatrice IA (FastAPI :8081) ─────────────────────────────
   gw-rebexis:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-rebexis
     command: ["python", "-u", "/app/rebexis.py"]
     env_file:
@@ -79,7 +79,7 @@ services:
 
   # ── TTS Worker — ElevenLabs API (FastAPI :8082) ─────────────────────────
   gw-tts:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-tts
     command: ["python", "-u", "/app/tts_worker.py"]
     env_file:
@@ -98,7 +98,7 @@ services:
 
   # ── Scheduler principal ──────────────────────────────────────────────────
   gw-scheduler:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/scheduler
     container_name: gaiverland-scheduler
     command: ["python", "-u", "/app/scheduler.py"]
     env_file:
@@ -115,7 +115,7 @@ services:
 
   # ── YouTube Live Streamer ────────────────────────────────────────────────
   gw-youtube:
-    image: python:3.12-slim
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/streamer
     container_name: gaiverland-youtube
     command: ["python", "-u", "/app/youtube_streamer.py"]
     env_file:

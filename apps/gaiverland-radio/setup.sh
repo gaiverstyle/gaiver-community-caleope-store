@@ -12,10 +12,56 @@ COMPOSE_DIR="${CALEOPE_BASE_DIR}/apps-installed/${APP_ID}"
 STORAGE_PATH="${CALEOPE_PARAM_STORAGE_PATH:-${DATA_DIR}}"
 
 mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}" \
+         "${CONFIG_DIR}/dockerfiles/api" \
+         "${CONFIG_DIR}/dockerfiles/downloader" \
+         "${CONFIG_DIR}/dockerfiles/analyzer" \
+         "${CONFIG_DIR}/dockerfiles/scheduler" \
+         "${CONFIG_DIR}/dockerfiles/streamer" \
          "${DATA_DIR}/db" \
          "${STORAGE_PATH}/tts-cache" "${STORAGE_PATH}/ollama" \
          "${STORAGE_PATH}/essentia-models" "${STORAGE_PATH}/backups" \
          "${CALEOPE_BASE_DIR}/app-data/azuracast/stations"
+
+# ── Dockerfiles (pip baked in image — évite 700MB/container de writable layer) ──
+cat > "${CONFIG_DIR}/dockerfiles/api/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN apt-get update -qq && \
+    apt-get install -y -qq ffmpeg && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir \
+    fastapi "uvicorn[standard]" psycopg2-binary httpx
+EOF
+
+cat > "${CONFIG_DIR}/dockerfiles/downloader/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN apt-get update -qq && \
+    apt-get install -y -qq ffmpeg && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir \
+    httpx yt-dlp tzdata psycopg2-binary
+EOF
+
+cat > "${CONFIG_DIR}/dockerfiles/analyzer/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN pip install --no-cache-dir \
+    essentia-tensorflow psycopg2-binary inotify-simple httpx mutagen
+EOF
+
+cat > "${CONFIG_DIR}/dockerfiles/scheduler/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN pip install --no-cache-dir \
+    httpx psycopg2-binary tzdata
+EOF
+
+cat > "${CONFIG_DIR}/dockerfiles/streamer/Dockerfile" <<'EOF'
+FROM python:3.12-slim
+RUN apt-get update -qq && \
+    apt-get install -y -qq ffmpeg fonts-dejavu-core && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir \
+    httpx Pillow
+EOF
+echo "  ✓ Dockerfiles créés"
 
 # ── Nettoyage containers ───────────────────────────────────────────────
 for _ct in gaiverland-db gaiverland-analyzer gaiverland-playlist \
