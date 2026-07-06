@@ -304,10 +304,20 @@ GCS_REBEXIS_URL=http://gcs-rebexis:8092
 GCS_TTS_URL=http://gcs-tts:8093
 GCS_TRACK_URL=http://gcs-track-service:8090
 GCS_LORE_SERVICE_URL=http://gcs-lore-service:8096
+GCS_VOTE_URL=http://gcs-vote-service:8095
+GCS_INJECTOR_URL=http://gcs-audio-injector:8094
+GCS_WEATHER_URL=http://gcs-weather:8098
 # Intervalle de polling AzuraCast en secondes
 GCS_POLL_INTERVAL=10
 # Injection active : false=shadow/log, true=injecte dans AzuraCast
 GCS_INJECT_ACTIVE=${GCS_INJECT_ACTIVE}
+# Rebexis timing (minutes) et mémoire anti-répétition
+REBEXIS_INTERVAL_MIN=12
+REBEXIS_INTERVAL_MAX=25
+REBEXIS_MEMORY_HOURS=24
+REBEXIS_MEMORY_MAX=50
+# Météo : intervalle en minutes
+GCS_WEATHER_INTERVAL_MIN=30
 EOF
 
 echo "  ✓ Fichiers de config créés (legacy + GCS)"
@@ -372,16 +382,19 @@ INSERT INTO radio_state (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 -- GCS Phase 1 — état festival complet (séparé de radio_state)
 CREATE TABLE IF NOT EXISTS gcs_state (
-    id              INTEGER PRIMARY KEY DEFAULT 1,
-    city            VARCHAR(100) DEFAULT 'Toulon',
-    festival_phase  VARCHAR(20)  DEFAULT 'live',
-    stage_active    VARCHAR(20)  DEFAULT 'mainstage',
-    energy_level    INTEGER      DEFAULT 3,
-    time_of_day     VARCHAR(20)  DEFAULT 'day',
-    weather_mood    VARCHAR(20)  DEFAULT 'calm',
-    last_track      JSONB        DEFAULT '{}',
-    special_events  JSONB        DEFAULT '[]',
-    updated_at      TIMESTAMPTZ  DEFAULT NOW()
+    id                 INTEGER PRIMARY KEY DEFAULT 1,
+    city               VARCHAR(100) DEFAULT 'Toulon',
+    festival_phase     VARCHAR(20)  DEFAULT 'live',
+    stage_active       VARCHAR(20)  DEFAULT 'mainstage',
+    energy_level       INTEGER      DEFAULT 3,
+    target_energy      INTEGER      DEFAULT 4,
+    festival_direction VARCHAR(20)  DEFAULT 'cruise',
+    time_of_day        VARCHAR(20)  DEFAULT 'day',
+    weather_mood       VARCHAR(20)  DEFAULT 'calm',
+    weather_data       JSONB        DEFAULT '{}',
+    last_track         JSONB        DEFAULT '{}',
+    special_events     JSONB        DEFAULT '[]',
+    updated_at         TIMESTAMPTZ  DEFAULT NOW()
 );
 
 INSERT INTO gcs_state (id) VALUES (1) ON CONFLICT DO NOTHING;
@@ -427,6 +440,41 @@ CREATE TABLE IF NOT EXISTS lore_events (
 );
 CREATE INDEX IF NOT EXISTS idx_lore_type ON lore_events(type);
 CREATE INDEX IF NOT EXISTS idx_lore_time ON lore_events(created_at DESC);
+
+-- GCS v2 — mémoire phrases Rebexis (anti-répétition 24h)
+CREATE TABLE IF NOT EXISTS rebexis_phrases (
+    id          SERIAL PRIMARY KEY,
+    phrase_hash VARCHAR(32) NOT NULL UNIQUE,
+    phrase_text TEXT        NOT NULL,
+    mode        VARCHAR(30) DEFAULT '',
+    used_at     TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_phrases_used ON rebexis_phrases(used_at DESC);
+
+-- GCS v2 — score interne par morceau
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gaiverland_score FLOAT DEFAULT NULL;
+
+-- Multi-radio prep — structure pour futures radios
+CREATE TABLE IF NOT EXISTS radio_profiles (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(50)  NOT NULL UNIQUE,
+    display_name VARCHAR(100) NOT NULL,
+    stage       VARCHAR(20)  DEFAULT 'mainstage',
+    mood_filter JSONB        DEFAULT '[]',
+    energy_min  INTEGER      DEFAULT 1,
+    energy_max  INTEGER      DEFAULT 5,
+    active      BOOLEAN      DEFAULT FALSE,
+    config      JSONB        DEFAULT '{}',
+    created_at  TIMESTAMPTZ  DEFAULT NOW()
+);
+
+INSERT INTO radio_profiles (name, display_name, stage, mood_filter, energy_min, energy_max) VALUES
+    ('mainstage', 'Mainstage', 'mainstage', '["festival","intense","energique"]', 3, 5),
+    ('rush',      'Rush',      'rush',      '["intense","festival"]',             4, 5),
+    ('sunset',    'Sunset',    'sunset',    '["melodique","energique"]',          2, 4),
+    ('house',     'House',     'mainstage', '["energique","melodique"]',          3, 4),
+    ('hardstyle', 'Hardstyle', 'mainstage', '["intense"]',                        4, 5)
+ON CONFLICT (name) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_tracks_mood      ON tracks(mood);
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm       ON tracks(bpm);
@@ -2104,10 +2152,15 @@ PYEOF
 # ── gcs_state_engine.py — GCS Phase 1 : GSE complet avec gcs_state table ─────
 cat > "${SCRIPTS_DIR}/gcs_state_engine.py" <<'PYEOF'
 """
-GCS State Engine — Phase 1 GCS migration.
-Maintains full Gaiverland festival state (GSE v1).
+GCS State Engine — Phase 1 v2.
+Gaiverland festival state (GSE v1).
 Separate gcs_state table — never touches the legacy radio_state.
-City is configured via GCS_CITY env var (changes ~every 3 years).
+
+Améliorations v2:
+- music_profile intégré dans last_track (bpm, energy, danceability, genre)
+- target_energy + festival_direction (build_up / peak / wind_down / cruise)
+- weather_data JSONB (meteorologie réelle via gcs-weather)
+- gaiverland_score sur les tracks
 """
 import os, sys, subprocess, datetime
 
@@ -2123,12 +2176,12 @@ except ImportError:
 
 import json
 import psycopg2.extras
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 DB_URL   = os.environ["DATABASE_URL"]
 GCS_CITY = os.environ.get("GCS_CITY", "Toulon")
 
-MOOD_TO_STAGE: dict = {
+MOOD_TO_STAGE: dict[str, str] = {
     "drift":    "sunset",
     "pulse":    "mainstage",
     "festival": "mainstage",
@@ -2143,7 +2196,7 @@ MOOD_TO_STAGE: dict = {
 ENERGY_UP   = {"intense", "festival", "energique"}
 ENERGY_DOWN = {"nocturne", "melodique"}
 
-app = FastAPI(title="GCS State Engine")
+app = FastAPI(title="GCS State Engine v2")
 
 
 def get_conn():
@@ -2153,21 +2206,42 @@ def get_conn():
 def init_db():
     conn = get_conn()
     with conn.cursor() as cur:
+        # Base table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS gcs_state (
-                id              INTEGER PRIMARY KEY DEFAULT 1,
-                city            VARCHAR(100) DEFAULT 'Toulon',
-                festival_phase  VARCHAR(20)  DEFAULT 'live',
-                stage_active    VARCHAR(20)  DEFAULT 'mainstage',
-                energy_level    INTEGER      DEFAULT 3,
-                time_of_day     VARCHAR(20)  DEFAULT 'day',
-                weather_mood    VARCHAR(20)  DEFAULT 'calm',
-                last_track      JSONB        DEFAULT '{}',
-                special_events  JSONB        DEFAULT '[]',
-                updated_at      TIMESTAMPTZ  DEFAULT NOW()
+                id                 INTEGER PRIMARY KEY DEFAULT 1,
+                city               VARCHAR(100) DEFAULT 'Toulon',
+                festival_phase     VARCHAR(20)  DEFAULT 'live',
+                stage_active       VARCHAR(20)  DEFAULT 'mainstage',
+                energy_level       INTEGER      DEFAULT 3,
+                target_energy      INTEGER      DEFAULT 4,
+                festival_direction VARCHAR(20)  DEFAULT 'cruise',
+                time_of_day        VARCHAR(20)  DEFAULT 'day',
+                weather_mood       VARCHAR(20)  DEFAULT 'calm',
+                weather_data       JSONB        DEFAULT '{}',
+                last_track         JSONB        DEFAULT '{}',
+                special_events     JSONB        DEFAULT '[]',
+                updated_at         TIMESTAMPTZ  DEFAULT NOW()
             )
         """)
         cur.execute("INSERT INTO gcs_state (id, city) VALUES (1, %s) ON CONFLICT DO NOTHING", (GCS_CITY,))
+        # Add new columns if missing (safe migration)
+        for col, definition in [
+            ("target_energy",      "INTEGER DEFAULT 4"),
+            ("festival_direction", "VARCHAR(20) DEFAULT 'cruise'"),
+            ("weather_data",       "JSONB DEFAULT '{}'"),
+        ]:
+            cur.execute(f"""
+                DO $$ BEGIN
+                  ALTER TABLE gcs_state ADD COLUMN IF NOT EXISTS {col} {definition};
+                END $$;
+            """)
+        # gaiverland_score on tracks table
+        cur.execute("""
+            DO $$ BEGIN
+              ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gaiverland_score FLOAT DEFAULT NULL;
+            END $$;
+        """)
     conn.commit()
     conn.close()
     print(f"✓ gcs_state table ready (city={GCS_CITY})")
@@ -2182,18 +2256,44 @@ def time_of_day() -> str:
     return "night"
 
 
-def resolve_mood_from_db(conn, artist: str, title: str):
-    """Look up the track in the existing tracks table for its analyzed mood."""
+def compute_direction(current: int, target: int) -> str:
+    if current < target - 1:
+        return "build_up"
+    elif current > target + 1:
+        return "wind_down"
+    elif current == target:
+        return "peak"
+    return "cruise"
+
+
+def resolve_mood_and_profile(conn, artist: str, title: str) -> tuple[str, dict]:
+    """Look up track mood + full music profile from the analyzed tracks table."""
     if not artist and not title:
-        return None
+        return "energique", {}
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT mood FROM tracks
+            SELECT mood, bpm, energy, danceability, genre_top1, genre_top2,
+                   has_vocals, key_note, gaiverland_score
+            FROM tracks
             WHERE (artist ILIKE %s OR title ILIKE %s) AND analyzed=TRUE
             LIMIT 1
         """, (artist, title))
         row = cur.fetchone()
-    return row["mood"] if row else None
+    if not row:
+        return "energique", {}
+
+    mood = row["mood"] or "energique"
+    profile = {
+        "genre":           row["genre_top1"] or row["genre_top2"] or "",
+        "bpm":             round(float(row["bpm"] or 0), 1),
+        "energy":          round(float(row["energy"] or 0), 3),
+        "danceability":    round(float(row["danceability"] or 0), 3),
+        "festival_fit":    mood,
+        "has_vocals":      bool(row["has_vocals"]),
+        "key":             row["key_note"] or "",
+        "gaiverland_score": row["gaiverland_score"],
+    }
+    return mood, profile
 
 
 def compute_new_energy(current: int, mood: str) -> int:
@@ -2202,6 +2302,56 @@ def compute_new_energy(current: int, mood: str) -> int:
     if mood in ENERGY_DOWN:
         return max(1, current - 1)
     return current
+
+
+def compute_gaiverland_score(conn, artist: str, title: str) -> float | None:
+    """Compute and store gaiverland_score for a track."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, bpm, energy, danceability, mood,
+                   (SELECT COUNT(*) FROM play_history ph
+                    JOIN tracks t2 ON ph.track_id=t2.id
+                    WHERE t2.artist=tracks.artist AND t2.title=tracks.title) as play_count
+            FROM tracks
+            WHERE (artist ILIKE %s OR title ILIKE %s) AND analyzed=TRUE LIMIT 1
+        """, (artist, title))
+        row = cur.fetchone()
+    if not row:
+        return None
+
+    bpm    = float(row["bpm"] or 0)
+    energy = float(row["energy"] or 0)
+    dance  = float(row["danceability"] or 0)
+    mood   = row["mood"] or ""
+    plays  = int(row["play_count"] or 0)
+
+    # BPM fitness: ideal range 128-148 for Gaiverland
+    bpm_fit = max(0.0, 1.0 - abs(bpm - 138) / 60) if bpm > 0 else 0.3
+    # Mood quality
+    mood_quality = {
+        "intense": 1.0, "festival": 0.9, "energique": 0.85,
+        "melodique": 0.6, "nocturne": 0.4,
+    }.get(mood, 0.5)
+    # Discovery: inverse log of plays (rarer = more valuable)
+    import math
+    discovery = max(0.0, 1.0 - math.log(plays + 1) / 10) if plays < 100 else 0.0
+
+    score = (
+        bpm_fit       * 0.20 +
+        energy        * 0.25 +
+        dance         * 0.20 +
+        mood_quality  * 0.25 +
+        discovery     * 0.10
+    )
+    score = round(min(1.0, max(0.0, score)), 3)
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE tracks SET gaiverland_score=%s
+            WHERE (artist ILIKE %s OR title ILIKE %s) AND analyzed=TRUE
+        """, (score, artist, title))
+    conn.commit()
+    return score
 
 
 @app.on_event("startup")
@@ -2224,10 +2374,9 @@ def get_state():
     if not row:
         return {}
     state = dict(row)
-    if isinstance(state.get("last_track"), str):
-        state["last_track"] = json.loads(state["last_track"])
-    if isinstance(state.get("special_events"), str):
-        state["special_events"] = json.loads(state["special_events"])
+    for key in ("last_track", "special_events", "weather_data"):
+        if isinstance(state.get(key), str):
+            state[key] = json.loads(state[key])
     return state
 
 
@@ -2238,56 +2387,80 @@ def update_state(body: dict):
     conn = get_conn()
 
     with conn.cursor() as cur:
-        cur.execute("SELECT energy_level FROM gcs_state WHERE id=1")
+        cur.execute("SELECT energy_level, target_energy FROM gcs_state WHERE id=1")
         row = cur.fetchone()
     current_energy = row["energy_level"] if row else 3
+    target_energy  = row["target_energy"] if row else 4
 
-    mood = resolve_mood_from_db(conn, track.get("artist", ""), track.get("title", ""))
-    if not mood:
-        mood = "energique"
+    artist = track.get("artist", "") if isinstance(track, dict) else ""
+    title  = track.get("title", "")  if isinstance(track, dict) else ""
 
-    stage = MOOD_TO_STAGE.get(mood, "mainstage")
-    energy = compute_new_energy(current_energy, mood)
-    tod = time_of_day()
+    mood, music_profile = resolve_mood_and_profile(conn, artist, title)
+
+    # Update gaiverland_score in background
+    compute_gaiverland_score(conn, artist, title)
+
+    stage     = MOOD_TO_STAGE.get(mood, "mainstage")
+    energy    = compute_new_energy(current_energy, mood)
+    tod       = time_of_day()
+    direction = compute_direction(energy, target_energy)
+
+    # Enrich track with music profile
+    enriched_track = dict(track) if isinstance(track, dict) else {}
+    if music_profile:
+        enriched_track["music_profile"] = music_profile
 
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE gcs_state SET
-                city           = %s,
-                festival_phase = 'live',
-                stage_active   = %s,
-                energy_level   = %s,
-                time_of_day    = %s,
-                last_track     = %s::jsonb,
-                updated_at     = NOW()
+                city               = %s,
+                festival_phase     = 'live',
+                stage_active       = %s,
+                energy_level       = %s,
+                festival_direction = %s,
+                time_of_day        = %s,
+                last_track         = %s::jsonb,
+                updated_at         = NOW()
             WHERE id = 1
-        """, (GCS_CITY, stage, energy, tod, json.dumps(track)))
+        """, (GCS_CITY, stage, energy, direction, tod, json.dumps(enriched_track)))
     conn.commit()
     conn.close()
 
-    print(f"  ✓ state: mood={mood} energy={energy} stage={stage} tod={tod}")
+    print(f"  ✓ state: mood={mood} energy={energy}→{target_energy}({direction}) stage={stage}")
     return {
         "mood": mood,
         "energy_level": energy,
+        "target_energy": target_energy,
+        "festival_direction": direction,
         "stage_active": stage,
         "time_of_day": tod,
         "city": GCS_CITY,
+        "music_profile": music_profile,
     }
 
 
 @app.post("/state/weather")
-def set_weather(weather_mood: str):
-    """Manual override for weather_mood (calm|windy|storm|warm)."""
-    valid = {"calm", "windy", "storm", "warm"}
-    if weather_mood not in valid:
-        from fastapi import HTTPException
-        raise HTTPException(400, f"weather_mood must be one of {valid}")
+def set_weather(body: dict = None, weather_mood: str = None):
+    """Update weather — accepts body {weather_mood, weather_data?} or query param."""
+    if body and isinstance(body, dict):
+        wm   = body.get("weather_mood", weather_mood or "calm")
+        data = body.get("weather_data", {})
+    else:
+        wm, data = weather_mood or "calm", {}
+
+    valid = {"calm", "windy", "storm", "warm", "rain", "cold"}
+    if wm not in valid:
+        wm = "calm"
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("UPDATE gcs_state SET weather_mood=%s, updated_at=NOW() WHERE id=1", (weather_mood,))
+        cur.execute("""
+            UPDATE gcs_state SET weather_mood=%s, weather_data=%s::jsonb, updated_at=NOW()
+            WHERE id=1
+        """, (wm, json.dumps(data)))
     conn.commit()
     conn.close()
-    return {"ok": True, "weather_mood": weather_mood}
+    print(f"  ✓ weather updated: {wm} {data.get('temperature','')}")
+    return {"ok": True, "weather_mood": wm, "weather_data": data}
 
 
 @app.post("/state/phase")
@@ -2295,7 +2468,6 @@ def set_phase(festival_phase: str):
     """Manual override for festival_phase (live|transit|setup)."""
     valid = {"live", "transit", "setup"}
     if festival_phase not in valid:
-        from fastapi import HTTPException
         raise HTTPException(400, f"festival_phase must be one of {valid}")
     conn = get_conn()
     with conn.cursor() as cur:
@@ -2305,8 +2477,32 @@ def set_phase(festival_phase: str):
     return {"ok": True, "festival_phase": festival_phase}
 
 
+@app.post("/state/target-energy")
+def set_target_energy(body: dict):
+    """Set target energy level (1-5). Direction auto-computed from current."""
+    target = int(body.get("target", 4))
+    if not 1 <= target <= 5:
+        raise HTTPException(400, "target must be 1-5")
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT energy_level FROM gcs_state WHERE id=1")
+        row = cur.fetchone()
+    current = row["energy_level"] if row else 3
+    direction = compute_direction(current, target)
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE gcs_state SET target_energy=%s, festival_direction=%s, updated_at=NOW()
+            WHERE id=1
+        """, (target, direction))
+    conn.commit()
+    conn.close()
+    print(f"  ✓ target_energy={target} direction={direction}")
+    return {"ok": True, "target_energy": target, "festival_direction": direction}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8091)
+
 PYEOF
 
 echo "  ✓ Scripts GCS Phase 1 créés (gcs_track_service + gcs_state_engine)"
@@ -2314,12 +2510,17 @@ echo "  ✓ Scripts GCS Phase 1 créés (gcs_track_service + gcs_state_engine)"
 # ── gcs_rebexis.py — Phase 2 : output JSON structuré RPE v1 ──────────────────
 cat > "${SCRIPTS_DIR}/gcs_rebexis.py" <<'PYEOF'
 """
-GCS Rebexis Engine — Phase 2.
-Input:  { track: {title,artist}, state: {energy_level,stage_active,...} }
+GCS Rebexis Engine — Phase 2 v2.
+Input:  { track: {title,artist,...}, state: {energy_level,stage,...} }
 Output: { emotion, segment_type, text, action }
 100% template-based (RPE v1) — aucune génération libre.
+Améliorations v2:
+- Mémoire des phrases utilisées (évite répétitions sur 24h)
+- Contexte enrichi : météo, heure, ville, festival_direction, genre, bpm
+- Sélection de mode contextuelle avec probabilités
+- Templates : 12 modes (weather, lore, track_announcement, late_night, humor...)
 """
-import os, sys, subprocess, json, random
+import os, sys, subprocess, json, random, hashlib
 
 def _install():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
@@ -2339,8 +2540,11 @@ STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091
 LORE_URL  = os.environ.get("GCS_LORE_SERVICE_URL", "http://gcs-lore-service:8096")
 INT_MIN   = int(os.environ.get("REBEXIS_INTERVAL_MIN", "15")) * 60
 INT_MAX   = int(os.environ.get("REBEXIS_INTERVAL_MAX", "30")) * 60
+# Max phrases récentes à exclure pour éviter répétitions
+PHRASE_MEMORY_HOURS = int(os.environ.get("REBEXIS_MEMORY_HOURS", "24"))
+PHRASE_MEMORY_MAX   = int(os.environ.get("REBEXIS_MEMORY_MAX", "50"))
 
-app = FastAPI(title="GCS Rebexis Engine")
+app = FastAPI(title="GCS Rebexis Engine v2")
 _tpl: dict = {}
 
 ENERGY_EMOTION = {1: "calm", 2: "calm", 3: "playful", 4: "excited", 5: "energetic"}
@@ -2355,6 +2559,7 @@ def load_tpl():
         try:
             with open(path) as f:
                 _tpl = json.load(f)
+            print(f"  ✓ templates chargés depuis {path} ({len(_tpl.get('modes',{}))} modes)")
             return
         except Exception:
             pass
@@ -2365,6 +2570,21 @@ def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+def init_phrases_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rebexis_phrases (
+                id          SERIAL PRIMARY KEY,
+                phrase_hash VARCHAR(32) NOT NULL UNIQUE,
+                phrase_text TEXT        NOT NULL,
+                mode        VARCHAR(30) DEFAULT '',
+                used_at     TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_phrases_used ON rebexis_phrases(used_at DESC)")
+    conn.commit()
+
+
 def fetch_state() -> dict:
     try:
         r = httpx.get(f"{STATE_URL}/state/current", timeout=3)
@@ -2373,14 +2593,110 @@ def fetch_state() -> dict:
         return {}
 
 
-def pick(mode: str, track: dict) -> str:
+def get_recent_phrase_hashes(conn) -> set:
+    """Return hashes of phrases used in the last PHRASE_MEMORY_HOURS hours."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT phrase_hash FROM rebexis_phrases
+            WHERE used_at > NOW() - INTERVAL '%s hours'
+            ORDER BY used_at DESC LIMIT %s
+        """, (PHRASE_MEMORY_HOURS, PHRASE_MEMORY_MAX))
+        return {r["phrase_hash"] for r in cur.fetchall()}
+
+
+def record_phrase(conn, text: str, mode: str):
+    h = hashlib.md5(text.encode()).hexdigest()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO rebexis_phrases (phrase_hash, phrase_text, mode)
+            VALUES (%s, %s, %s) ON CONFLICT (phrase_hash) DO UPDATE SET used_at=NOW()
+        """, (h, text, mode))
+    conn.commit()
+    # Cleanup old entries
+    with conn.cursor() as cur:
+        cur.execute("""
+            DELETE FROM rebexis_phrases
+            WHERE used_at < NOW() - INTERVAL '%s hours'
+        """, (PHRASE_MEMORY_HOURS * 2,))
+    conn.commit()
+
+
+def phrase_hash(text: str) -> str:
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set) -> tuple[str, bool]:
+    """Pick a phrase from mode pool, avoiding recently used ones.
+    Returns (text, was_fresh). Falls back to any phrase if all used."""
     modes = _tpl.get("modes", {})
     pool  = modes.get(mode, {}).get("templates") or \
             modes.get("normal", {}).get("templates", ["La musique continue."])
-    t = random.choice(pool)
-    t = t.replace("{artist}", track.get("artist", "l'artiste"))
-    t = t.replace("{title}",  track.get("title",  "ce morceau"))
-    return t
+
+    # Expand {artist}/{title} first to compute accurate hashes
+    def expand(t: str) -> str:
+        t = t.replace("{artist}", track.get("artist", "l'artiste") or "l'artiste")
+        t = t.replace("{title}", track.get("title", "ce morceau") or "ce morceau")
+        return t
+
+    fresh = [t for t in pool if phrase_hash(expand(t)) not in recent_hashes]
+
+    if fresh:
+        chosen = random.choice(fresh)
+        return expand(chosen), True
+    # All recently used — pick randomly anyway but signal repetition
+    chosen = random.choice(pool)
+    return expand(chosen), False
+
+
+def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
+                festival_direction: str, track: dict) -> str:
+    """Context-aware mode selection with probability modifiers."""
+    has_artist = bool(track.get("artist") and track.get("title"))
+
+    # Base mode from energy
+    base = ENERGY_MODE.get(energy, "normal")
+    if tod == "night" and energy <= 2:
+        base = "late_night"
+
+    # Context override candidates with (probability, mode)
+    candidates = []
+
+    # Track announcement — prioritize when we have artist info
+    if has_artist and energy >= 3:
+        candidates.append((0.35, "track_announcement"))
+
+    # Weather injection
+    if weather_mood == "warm":
+        candidates.append((0.12, "weather_warm"))
+    elif weather_mood in ("storm", "windy"):
+        candidates.append((0.10, "weather_rain"))
+
+    # Lore injection — random, low probability
+    candidates.append((0.07, "lore_c15"))
+    candidates.append((0.05, "lore_stagiaire"))
+    candidates.append((0.06, "humor"))
+
+    # Festival direction transitions
+    if festival_direction == "build_up" and energy >= 3:
+        candidates.append((0.12, "transition_up"))
+    elif festival_direction == "wind_down" and energy <= 3:
+        candidates.append((0.10, "transition_down"))
+
+    # Crowd reaction
+    candidates.append((0.08, "reaction"))
+
+    # Late night boost
+    if tod == "night":
+        candidates.append((0.15, "late_night"))
+
+    # Roll dice for each candidate
+    for prob, cand_mode in candidates:
+        if random.random() < prob:
+            # Validate mode exists in templates
+            if cand_mode in _tpl.get("modes", {}):
+                return cand_mode
+
+    return base
 
 
 def should_fire(conn, force: bool) -> bool:
@@ -2411,11 +2727,15 @@ def log_lore(text: str, state: dict):
 @app.on_event("startup")
 def startup():
     load_tpl()
+    conn = get_conn()
+    init_phrases_table(conn)
+    conn.close()
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "templates_loaded": bool(_tpl)}
+    modes = list(_tpl.get("modes", {}).keys())
+    return {"status": "ok", "templates_loaded": bool(_tpl), "modes": modes}
 
 
 @app.post("/generate")
@@ -2429,28 +2749,48 @@ def generate(body: dict = None, force: bool = False):
         conn.close()
         return {"intervention": None, "reason": "interval_not_reached"}
 
-    energy       = int(state.get("energy_level", 3))
-    stage        = str(state.get("stage_active", "mainstage"))
-    tod          = str(state.get("time_of_day", "day"))
-    mode         = "flow" if tod == "night" else ENERGY_MODE.get(energy, "normal")
+    energy           = int(state.get("energy_level", 3))
+    stage            = str(state.get("stage_active", "mainstage"))
+    tod              = str(state.get("time_of_day", "day"))
+    weather_mood     = str(state.get("weather_mood", "calm"))
+    city             = str(state.get("city", "Toulon"))
+    festival_dir     = str(state.get("festival_direction", "cruise"))
+
+    # Extract music profile from last_track if available
+    music_profile = track.get("music_profile", {}) if isinstance(track, dict) else {}
+    genre = (music_profile.get("genre") or track.get("genre_top1", "")) if track else ""
+    bpm   = music_profile.get("bpm") or track.get("bpm", 0)
+
+    # Select mode contextually
+    mode = select_mode(energy, stage, tod, weather_mood, festival_dir, track)
+
     emotion      = ENERGY_EMOTION.get(energy, "playful")
     segment_type = STAGE_SEGMENT.get(stage, "announcement")
-    text         = pick(mode, track)
+
+    # Get recent phrase hashes for dedup
+    recent_hashes = get_recent_phrase_hashes(conn)
+
+    text, was_fresh = pick_avoiding_recent(mode, track, recent_hashes)
     action       = "announce_track" if track.get("title") else "play_music"
+
+    # Record this phrase in memory
+    record_phrase(conn, text, mode)
 
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO rebexis_sessions (intervention, mood_trigger, context_track)
             VALUES (%s,%s,%s) RETURNING id
-        """, (text, f"energy={energy} stage={stage} emotion={emotion}",
-              track.get("title", "")))
+        """, (text,
+              f"energy={energy} stage={stage} emotion={emotion} mode={mode} weather={weather_mood}",
+              track.get("title", "") if isinstance(track, dict) else ""))
         sid = cur.fetchone()["id"]
         cur.execute("UPDATE radio_state SET last_rebexis=NOW() WHERE id=1")
     conn.commit()
     conn.close()
 
     log_lore(text, state)
-    print(f"  ✓ rebexis [{emotion}/{segment_type}]: {text[:60]}")
+    fresh_marker = "" if was_fresh else " (repeat pool exhausted)"
+    print(f"  ✓ rebexis [{emotion}/{mode}]{fresh_marker}: {text[:60]}")
 
     return {
         "emotion":      emotion,
@@ -2458,11 +2798,34 @@ def generate(body: dict = None, force: bool = False):
         "text":         text,
         "action":       action,
         "session_id":   sid,
+        "mode":         mode,
+        "context": {
+            "energy": energy, "stage": stage, "tod": tod,
+            "weather_mood": weather_mood, "city": city,
+            "festival_direction": festival_dir,
+            "genre": genre, "bpm": bpm,
+        }
     }
+
+
+@app.get("/phrases/recent")
+def recent_phrases(hours: int = 6, limit: int = 20):
+    """Debugging endpoint — see recently used phrases."""
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT phrase_text, mode, used_at FROM rebexis_phrases
+            WHERE used_at > NOW() - INTERVAL '%s hours'
+            ORDER BY used_at DESC LIMIT %s
+        """, (hours, limit))
+        rows = cur.fetchall()
+    conn.close()
+    return {"phrases": [dict(r) for r in rows]}
 
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8092)
+
 PYEOF
 
 # ── gcs_tts.py — Phase 3 : cache hash(text+emotion+voice_id) ──────────────────
@@ -3133,6 +3496,240 @@ if __name__ == "__main__":
 PYEOF
 
 echo "  ✓ Scripts GCS Phase 2-6 créés (rebexis/tts/injector/vote/lore)"
+
+# ── GCS Weather & Monitoring (v2) ────────────────────────────────────────
+cat > "${SCRIPTS_DIR}/gcs_weather.py" <<'PYEOF'
+"""
+GCS Weather Service — open-meteo.com (gratuit, sans clé).
+Pousse la météo au gcs-state-engine toutes les 30 min.
+Influence uniquement l'ambiance Rebexis — pas la sélection musicale.
+"""
+import os, sys, subprocess, time, threading
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "httpx"], check=True)
+try:
+    import fastapi, uvicorn, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, httpx
+from fastapi import FastAPI
+
+STATE_URL     = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
+GCS_CITY      = os.environ.get("GCS_CITY", "Toulon")
+POLL_INTERVAL = int(os.environ.get("GCS_WEATHER_INTERVAL_MIN", "30")) * 60
+
+CITY_COORDS = {
+    "toulon": (43.1242, 5.9280), "marseille": (43.2965, 5.3698),
+    "paris": (48.8566, 2.3522), "lyon": (45.7640, 4.8357),
+    "nice": (43.7102, 7.2620), "bordeaux": (44.8378, -0.5792),
+}
+WMO_CONDITION = {
+    0: ("clear sky","sunny"), 1: ("mainly clear","sunny"), 2: ("partly cloudy","cloudy"), 3: ("overcast","cloudy"),
+    45: ("fog","cloudy"), 48: ("fog","cloudy"),
+    51: ("drizzle","rain"), 53: ("drizzle","rain"), 55: ("drizzle","rain"),
+    61: ("rain","rain"), 63: ("rain","rain"), 65: ("heavy rain","rain"),
+    80: ("showers","rain"), 81: ("showers","rain"), 82: ("violent rain","storm"),
+    95: ("thunderstorm","storm"), 96: ("thunderstorm","storm"), 99: ("thunderstorm","storm"),
+}
+
+app = FastAPI(title="GCS Weather Service")
+_last_weather: dict = {}
+_last_fetch_ts: float = 0.0
+
+def get_coords(city):
+    return CITY_COORDS.get(city.lower(), CITY_COORDS["toulon"])
+
+def condition_to_mood(raw, temp):
+    if raw == "storm": return "storm"
+    if raw == "rain": return "rain"
+    if raw == "sunny" and temp >= 22: return "warm"
+    if temp < 5: return "cold"
+    return "calm"
+
+def fetch_weather(city):
+    lat, lon = get_coords(city)
+    try:
+        r = httpx.get("https://api.open-meteo.com/v1/forecast", params={
+            "latitude": lat, "longitude": lon,
+            "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+            "timezone": "Europe/Paris",
+        }, timeout=10)
+        if r.status_code != 200: return {}
+        data = r.json().get("current", {})
+        temp = float(data.get("temperature_2m", 20))
+        wind = float(data.get("wind_speed_10m", 0))
+        code = int(data.get("weather_code", 0))
+        condition_str, raw = WMO_CONDITION.get(code, ("unknown","calm"))
+        weather_mood = condition_to_mood(raw, temp)
+        if wind > 40 and weather_mood not in ("storm","rain"): weather_mood = "windy"
+        result = {"city": city, "temperature": round(temp,1), "wind_kmh": round(wind,1),
+                  "condition": condition_str, "weather_mood": weather_mood}
+        print(f"  🌤 weather [{city}]: {temp}°C {condition_str} → {weather_mood}")
+        return result
+    except Exception as e:
+        print(f"  ⚠ weather: {e}"); return {}
+
+def push_to_state(w):
+    if not w: return
+    try: httpx.post(f"{STATE_URL}/state/weather", json={"weather_mood": w["weather_mood"], "weather_data": w}, timeout=5)
+    except Exception as e: print(f"  ⚠ weather→state: {e}")
+
+def weather_loop():
+    global _last_weather, _last_fetch_ts
+    print(f"🌤 GCS Weather — city={GCS_CITY} poll={POLL_INTERVAL//60}min")
+    while True:
+        w = fetch_weather(GCS_CITY)
+        if w: _last_weather = w; _last_fetch_ts = time.time(); push_to_state(w)
+        time.sleep(POLL_INTERVAL)
+
+@app.on_event("startup")
+def startup(): threading.Thread(target=weather_loop, daemon=True).start()
+
+@app.get("/health")
+def health(): return {"status":"ok","city":GCS_CITY,"last_weather":_last_weather}
+
+@app.get("/weather")
+def get_weather(): return _last_weather or {"status":"not_yet_fetched","city":GCS_CITY}
+
+@app.post("/weather/refresh")
+def force_refresh():
+    w = fetch_weather(GCS_CITY)
+    if w:
+        global _last_weather, _last_fetch_ts
+        _last_weather = w; _last_fetch_ts = time.time(); push_to_state(w)
+    return w or {"error":"fetch_failed"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8098)
+PYEOF
+
+cat > "${SCRIPTS_DIR}/gcs_monitoring.py" <<'PYEOF'
+"""
+GCS Monitoring — dashboard temps réel de production Gaiverland.
+Agrège : état festival, track en cours, injections, météo, phrases, votes.
+"""
+import os, sys, subprocess, time, json
+
+def _install():
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
+try:
+    import fastapi, uvicorn, psycopg2, httpx
+except ImportError:
+    _install()
+    import fastapi, uvicorn, psycopg2, httpx
+
+import psycopg2.extras
+from fastapi import FastAPI
+from typing import Optional
+
+DB_URL       = os.environ["DATABASE_URL"]
+STATE_URL    = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
+REBEXIS_URL  = os.environ.get("GCS_REBEXIS_URL",      "http://gcs-rebexis:8092")
+TTS_URL      = os.environ.get("GCS_TTS_URL",          "http://gcs-tts:8093")
+TRACK_URL    = os.environ.get("GCS_TRACK_URL",        "http://gcs-track-service:8090")
+INJECTOR_URL = os.environ.get("GCS_INJECTOR_URL",     "http://gcs-audio-injector:8094")
+VOTE_URL     = os.environ.get("GCS_VOTE_URL",         "http://gcs-vote-service:8095")
+LORE_URL     = os.environ.get("GCS_LORE_SERVICE_URL", "http://gcs-lore-service:8096")
+WEATHER_URL  = os.environ.get("GCS_WEATHER_URL",      "http://gcs-weather:8098")
+
+app = FastAPI(title="GCS Monitoring")
+
+def get_conn(): return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+def ping(url, name):
+    try:
+        t0 = time.time(); r = httpx.get(f"{url}/health", timeout=2); ms = round((time.time()-t0)*1000)
+        return {"name":name,"status":"ok" if r.status_code==200 else "error","latency_ms":ms,"data":r.json() if r.status_code==200 else {}}
+    except Exception as e: return {"name":name,"status":"unreachable","error":str(e)[:60]}
+
+def get_db_stats(conn):
+    s = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT intervention, created_at FROM rebexis_sessions ORDER BY created_at DESC LIMIT 1")
+            row = cur.fetchone()
+            if row: s["rebexis_last"] = {"text": row["intervention"][:80], "at": str(row["created_at"])}
+            cur.execute("SELECT COUNT(*) as total, COUNT(CASE WHEN created_at > NOW()-INTERVAL '1 hour' THEN 1 END) as last_hour FROM gcs_tts_cache")
+            r = cur.fetchone(); s["tts_cache"] = dict(r) if r else {}
+            cur.execute("SELECT COUNT(*) as n FROM lore_events WHERE type='rebexis_intervention' AND created_at > NOW()-INTERVAL '24 hours'")
+            r = cur.fetchone(); s["injections_today"] = r["n"] if r else 0
+            cur.execute("SELECT vote, COUNT(*) as n FROM votes WHERE created_at > NOW()-INTERVAL '24 hours' GROUP BY vote")
+            s["votes_today"] = {r["vote"]: r["n"] for r in cur.fetchall()}
+            cur.execute("SELECT * FROM gcs_state WHERE id=1")
+            row = cur.fetchone()
+            if row:
+                state = dict(row)
+                for k in ("last_track","special_events","weather_data"):
+                    if isinstance(state.get(k), str): state[k] = json.loads(state[k])
+                s["festival_state"] = state
+            cur.execute("SELECT COUNT(*) as n FROM rebexis_phrases WHERE used_at > NOW()-INTERVAL '24 hours'")
+            r = cur.fetchone(); s["phrase_memory_24h"] = r["n"] if r else 0
+    except Exception as e: s["db_error"] = str(e)[:100]
+    return s
+
+@app.get("/health")
+def health(): return {"status":"ok","service":"gcs-monitoring"}
+
+@app.get("/status")
+def full_status():
+    services = [
+        ping(TRACK_URL,"gcs-track"), ping(STATE_URL,"gcs-state"),
+        ping(REBEXIS_URL,"gcs-rebexis"), ping(TTS_URL,"gcs-tts"),
+        ping(INJECTOR_URL,"gcs-injector"), ping(VOTE_URL,"gcs-vote"),
+        ping(LORE_URL,"gcs-lore"), ping(WEATHER_URL,"gcs-weather"),
+    ]
+    ok = sum(1 for s in services if s.get("status")=="ok")
+    conn = get_conn(); db = get_db_stats(conn); conn.close()
+    try: ct = httpx.get(f"{TRACK_URL}/track/current", timeout=2).json()
+    except: ct = {}
+    try: weather = httpx.get(f"{WEATHER_URL}/weather", timeout=2).json()
+    except: weather = {}
+    inj = next((s for s in services if s["name"]=="gcs-injector"), {}).get("data", {})
+    state = db.get("festival_state", {})
+    lt = state.get("last_track", {})
+    return {
+        "summary": {"services_ok": ok, "services_error": len(services)-ok, "overall": "ok" if ok==len(services) else "degraded"},
+        "current_track": {"title": ct.get("title",""), "artist": ct.get("artist",""), "elapsed": ct.get("elapsed",0), "duration": ct.get("duration",0)},
+        "festival": {"energy": state.get("energy_level"), "target": state.get("target_energy"), "direction": state.get("festival_direction"), "stage": state.get("stage_active"), "tod": state.get("time_of_day"), "city": state.get("city"), "weather_mood": state.get("weather_mood")},
+        "music_profile": lt.get("music_profile", {}) if isinstance(lt, dict) else {},
+        "weather": weather,
+        "rebexis_last": db.get("rebexis_last", {}),
+        "injection": {"inject_active": inj.get("inject_active"), "generated": inj.get("generated"), "injected": inj.get("injected"), "errors": inj.get("errors"), "today": db.get("injections_today")},
+        "tts_cache": db.get("tts_cache", {}),
+        "votes_today": db.get("votes_today", {}),
+        "phrase_memory_24h": db.get("phrase_memory_24h"),
+        "services": services,
+    }
+
+@app.get("/events")
+def recent_events(limit: int=20, type: Optional[str]=None):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        if type:
+            cur.execute("SELECT id,type,description,city,created_at FROM lore_events WHERE type=%s ORDER BY created_at DESC LIMIT %s", (type, limit))
+        else:
+            cur.execute("SELECT id,type,description,city,created_at FROM lore_events ORDER BY created_at DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    conn.close()
+    return {"events": [dict(r) for r in rows]}
+
+@app.get("/tracks/scores")
+def track_scores(limit: int=20):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT title,artist,mood,bpm,energy,gaiverland_score FROM tracks WHERE gaiverland_score IS NOT NULL ORDER BY gaiverland_score DESC LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    conn.close()
+    return {"tracks": [dict(r) for r in rows]}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8097)
+PYEOF
+
+echo "  ✓ Scripts GCS v2 créés (monitoring :8097 + weather :8098)"
 
 # ════════════════════════════════════════════════════════════════════════
 # BOOTSTRAP AZURACAST (mode autonome uniquement)

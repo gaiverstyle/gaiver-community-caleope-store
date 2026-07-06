@@ -1,5 +1,5 @@
 {
-  "_note": "Charte Rebexis — style Scott Taylor (FH5). JAMAIS de 'tu'. S'adresser à la foule collectivement. Formatage : MAJUSCULES = emphase ElevenLabs v3, '...' = pause, {next} = prochain artiste/titre",
+  "_note": "Charte Rebexis — style Scott Taylor (FH5). JAMAIS de 'tu'. S'adresser à la foule collectivement. MAJUSCULES = emphase ElevenLabs, '...' = pause, {artist}/{title} = substitution automatique",
   "modes": {
     "normal": {
       "templates": [
@@ -9,7 +9,10 @@
         "Aucune raison d'interrompre ça. Aucune.",
         "Parfait... pour ce moment précis. Pour vous tous.",
         "On reste là. La musique fait le reste.",
-        "Gaiverland... toujours là où il faut être."
+        "Gaiverland... toujours là où il faut être.",
+        "La radio ne dort pas. Et c'est fait EXPRÈS.",
+        "Pour ceux qui écoutent depuis le début... vous savez pourquoi on est là.",
+        "Gaiverland Radio. Présente, comme toujours."
       ]
     },
     "hype": {
@@ -27,16 +30,14 @@
         "Ce moment est pour TOUT LE MONDE. Profitez-en."
       ],
       "templates_with_next": [
-        "On souffle... deux secondes seulement. Parce que {next} débarque, et tout le monde doit être PRÊT.",
-        "Ce train ralentit pas. {next} prend le relais et le volume, lui, il augmente.",
-        "Gaiverland Radio continue sans pause... {next} arrive. Restez avec nous.",
-        "Accrochez-vous... parce que {next} débarque et ça va DÉCHIRER.",
-        "On reste dans la bonne direction. {next} prend le relais et le festival continue.",
-        "Les basses passent à {next}. C'est PAS fait pour rester assis.",
-        "Et le train de la dance repart ! {next} en cabine, et le son monte.",
-        "{next} en approche. Altitude maximale. Personne ne dort ici.",
-        "On s'accroche ensemble... {next} arrive et c'est exactement ce qu'il nous faut.",
-        "Gaiverland... {next} est là. Ce set, il est pour VOUS."
+        "On souffle... deux secondes seulement. Parce que {artist} débarque, et tout le monde doit être PRÊT.",
+        "Ce train ralentit pas. {artist} prend le relais et le volume, lui, il augmente.",
+        "Gaiverland Radio continue sans pause... {artist} arrive. Restez avec nous.",
+        "Accrochez-vous... parce que {artist} débarque et ça va DÉCHIRER.",
+        "On reste dans la bonne direction. {artist} prend le relais et le festival continue.",
+        "Les basses passent à {artist}. C'est PAS fait pour rester assis.",
+        "{artist} en approche. Altitude maximale. Personne ne dort ici.",
+        "Gaiverland... {artist} est là. Ce set, il est pour VOUS."
       ],
       "templates": [
         "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
@@ -60,17 +61,19 @@
         "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
         "Peu importe où vous êtes ce soir... vous êtes EXACTEMENT au bon endroit.",
         "Gaiverland Radio au maximum. Ce moment est pour tout le monde.",
-        "Ce set est une déclaration. Et vous en faites partie."
+        "Ce set est une déclaration. Et vous en faites partie.",
+        "On n'excuse pas le volume. C'est le but.",
+        "CLAIREMENT pas l'heure de dormir. Quelqu'un a prévenu le voisinage ?",
+        "Le plafond était là. Il vient de partir."
       ],
       "templates_with_next": [
-        "On croyait avoir atteint le plafond... et puis {next} arrive. Le plafond vient de s'envoler.",
-        "Là c'est {next}. On recule de quelques pas. Par précaution. Bonne chance à vous tous.",
-        "Vous croyiez que c'était fini ? {next} dit NON. Et {next} a raison.",
-        "Alerte niveau CRITIQUE. {next} entre dans la salle. Rester assis est fortement déconseillé.",
-        "C'est pas une radio... c'est une catapulte. Et {next} appuie sur le bouton.",
-        "Gaiverland Radio n'excuse pas le volume. {next} arrive et c'est VOULU.",
-        "Le Hardstyle ne demande pas la permission. {next} non plus. Vous voilà PRÉVENUS.",
-        "Ce set appartient à TOUT LE MONDE ici. {next} en est la preuve."
+        "On croyait avoir atteint le plafond... et puis {artist} arrive. Le plafond vient de s'envoler.",
+        "Là c'est {artist}. On recule de quelques pas. Par précaution. Bonne chance à vous tous.",
+        "Vous croyiez que c'était fini ? {artist} dit NON. Et {artist} a raison.",
+        "Alerte niveau CRITIQUE. {artist} entre dans la salle. Rester assis est fortement déconseillé.",
+        "C'est pas une radio... c'est une catapulte. Et {artist} appuie sur le bouton.",
+        "Le Hardstyle ne demande pas la permission. {artist} non plus. Vous voilà PRÉVENUS.",
+        "Ce set appartient à TOUT LE MONDE ici. {artist} en est la preuve."
       ],
       "templates": [
         "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
@@ -93,15 +96,17 @@
         "Progressive. Le mot dit tout. Et vous le savez.",
         "C'est le moment où la nuit commence VRAIMENT pour tout le monde.",
         "Moins fort. Mais toujours là, pour VOUS TOUS. C'est ÇA, la profondeur.",
-        "Gaiverland s'installe dans la nuit. Restez là."
+        "Gaiverland s'installe dans la nuit. Restez là.",
+        "Cette profondeur... c'est pas un accident. C'est un CHOIX.",
+        "Le festival respire. Et vous avec lui."
       ],
       "templates_with_next": [
-        "On laisse la nuit avancer... {next} accompagne parfaitement ce moment. Restez là.",
-        "Douceur et profondeur. C'est ce que {next} apporte, et c'est exactement ce qu'il faut.",
-        "Le set prend de la hauteur... {next} entre et la nuit... elle commence vraiment.",
-        "Moins de bruit, plus de sens. {next} arrive et ça méritait qu'on le dise.",
-        "Pour ceux qui sont encore là... {next} est fait pour vous. Bienvenue dans la nuit.",
-        "Gaiverland continue... {next} prend le relais. Parfait pour ce moment."
+        "On laisse la nuit avancer... {artist} accompagne parfaitement ce moment. Restez là.",
+        "Douceur et profondeur. C'est ce que {artist} apporte, et c'est exactement ce qu'il faut.",
+        "Le set prend de la hauteur... {artist} entre et la nuit... elle commence vraiment.",
+        "Moins de bruit, plus de sens. {artist} arrive et ça méritait qu'on le dise.",
+        "Pour ceux qui sont encore là... {artist} est fait pour vous. Bienvenue dans la nuit.",
+        "Gaiverland continue... {artist} prend le relais. Parfait pour ce moment."
       ],
       "templates": [
         "On glisse... vers quelque chose de plus profond. Restez avec nous.",
@@ -127,6 +132,134 @@
         "Les algorithmes dorment, mais Gaiverland... reste éveillée. Pour vous.",
         "Une radio autonome. Une présence continue. Pour tout le monde, partout.",
         "Gaiverland tourne 24h/24. Peu importe où vous êtes... vous faites partie du set."
+      ]
+    },
+    "track_announcement": {
+      "_note": "Annonces directes artiste/titre — utiliser quand track.artist et track.title sont connus",
+      "templates": [
+        "Prochain morceau : {artist}. {title}. Et ça... ça méritait d'être annoncé.",
+        "{artist} sur Gaiverland Radio. {title}. Pour VOUS.",
+        "On continue avec {artist} — {title}. C'était la bonne décision.",
+        "{title}, signé {artist}. Le festival approuve.",
+        "C'est {artist} qui prend les commandes. {title} — et c'est MAINTENANT.",
+        "Gaiverland présente : {artist}. Morceau : {title}. Volume recommandé : ÉLEVÉ.",
+        "{artist} avec {title}. Ce set ne s'excuse pas.",
+        "Et maintenant {artist}, avec {title}. Exactement ce qu'il fallait.",
+        "La scène appartient à {artist}. {title} commence. Restez là.",
+        "{title} de {artist}. Gaiverland l'avait sélectionné pour une raison."
+      ]
+    },
+    "reaction": {
+      "_note": "Réactions crowd — energy changement fort, pic émotionnel",
+      "templates": [
+        "L'énergie dans cette salle... Gaiverland la SENT. Et ça fait quelque chose.",
+        "Quelque chose change ici. Ça se ressent et c'est exactement le but.",
+        "Ce moment... personne ne l'oubliera. Même ceux qui écoutent seuls ce soir.",
+        "Gaiverland vit ça avec vous. En temps réel. MAINTENANT.",
+        "La foule virtuelle est là. Et elle est LOUD.",
+        "Ce que vous ressentez là... c'est le festival. Il existe vraiment.",
+        "Personne n'a demandé à l'énergie de rester sage. Et elle n'a pas obéi.",
+        "Gaiverland Radio. Présente à chaque moment. Surtout CELUI-CI."
+      ]
+    },
+    "transition_up": {
+      "_note": "Montée en énergie — festival_direction=build_up",
+      "templates": [
+        "L'énergie augmente. Ce n'est pas un hasard. C'est un programme.",
+        "Le festival accélère. Et c'était prévu depuis le début.",
+        "On construit quelque chose ici. Ensemble. Et ça commence MAINTENANT.",
+        "La progression... elle est là. Et vous allez la SENTIR.",
+        "Gaiverland est en train de monter. Attachez-vous.",
+        "L'énergie était à 4. Elle vise 5. Et elle y arrive.",
+        "Le festival a décidé d'accélérer. Personne n'a voté contre.",
+        "Construction en cours. Volume en hausse. C'est fait EXPRÈS."
+      ]
+    },
+    "transition_down": {
+      "_note": "Descente en énergie — wind_down, passage vers zone mélodique/nocturne",
+      "templates": [
+        "Le festival reprend son souffle. Ce n'est pas une fin. C'est une transition.",
+        "L'intensité baisse... légèrement. La qualité, elle... reste TOTALE.",
+        "Gaiverland change de registre. Le festival continue, différemment.",
+        "On redescend. Ensemble. Et c'est aussi une forme d'art.",
+        "La nuit évolue. Et Gaiverland évolue avec elle.",
+        "Moins fort. Plus profond. C'est ça le vrai festival.",
+        "Le peak était là. Maintenant... on respire. Et on écoute."
+      ]
+    },
+    "late_night": {
+      "_note": "Templates pour after-minuit — tod=night, énergie basse",
+      "templates": [
+        "Il est tard. Très tard. Et Gaiverland est encore là pour VOUS.",
+        "Les autres radios dorment. Gaiverland... non.",
+        "Cette heure n'appartient qu'à ceux qui sont encore debout. Vous le savez.",
+        "Minuit passé. Le festival continue. Pour tous ceux qui restent.",
+        "L'after commence. Et Gaiverland est votre guide.",
+        "On ne juge pas l'heure ici. On joue de la musique. C'EST TOUT.",
+        "Pour ceux qui ont décidé que la nuit n'était pas terminée... vous avez raison.",
+        "Gaiverland Radio. Présente à 3h du matin comme à midi. Sans exception."
+      ]
+    },
+    "weather_warm": {
+      "_note": "Météo chaude — temperature >25°C ou condition sunny",
+      "templates": [
+        "Il fait chaud dehors. La musique aussi. Restez hydratés... et Gaiverland fait le reste.",
+        "Petit rappel du festival : hydratez-vous. Même le C15 commence à chercher une bouteille d'eau.",
+        "Chaleur dehors, chaleur dans les basses. C'est une constante ici.",
+        "La météo est de notre côté ce soir. Et Gaiverland en profite avec vous.",
+        "Ambiance festival TOTAL. Le soleil était là, la musique prend le relais.",
+        "Eau, soleil, basses. La formule Gaiverland en mode été.",
+        "Le thermomètre est d'accord avec le set. Tout le monde est en accord.",
+        "Cette chaleur... elle est dans les sons aussi. Ce soir, tout est aligné."
+      ]
+    },
+    "weather_rain": {
+      "_note": "Météo pluvieuse/orageuse — condition rain/storm",
+      "templates": [
+        "Il pleut dehors. Mais ici... personne ne s'en rend compte.",
+        "La pluie est à l'extérieur. Le festival, lui, est imperméable.",
+        "Orage dehors. Et ça donne une atmosphère particulière à ce set.",
+        "Gaiverland Radio. Présente par tous les temps. Surtout quand il pleut.",
+        "L'ambiance électrique de la météo... parfaitement synchronisée avec ce morceau.",
+        "Pour ceux qui écoutent sous la pluie ce soir... ce set est pour vous en particulier.",
+        "Temps de chien dehors. Musique parfaite dedans. L'équilibre est trouvé."
+      ]
+    },
+    "lore_c15": {
+      "_note": "Lore C15 — personnage mystérieux du festival. Ne jamais expliquer qui il est.",
+      "templates": [
+        "Le C15 a été vu dans la zone technique. Personne ne sait ce qu'il fait là. Comme d'habitude.",
+        "Quelqu'un a aperçu le C15 près de la régie. Il avait l'air satisfait. C'est bon signe.",
+        "Le C15 est présent ce soir. Ce qui signifie que la soirée se passe bien.",
+        "Aperçu : le C15, backstage, avec une bouteille d'eau et une expression illisible. Normal.",
+        "Le C15 approuve ce morceau. Ce n'est pas une information officielle. Mais c'est VRAI.",
+        "Gaiverland sait que le C15 écoute. Et Gaiverland joue en conséquence.",
+        "Le C15 est quelque part dans ce festival. Il a toujours été là."
+      ]
+    },
+    "lore_stagiaire": {
+      "_note": "Lore stagiaire — le stagiaire perdu du festival. Toujours en retard, jamais au bon endroit.",
+      "templates": [
+        "Le stagiaire a finalement trouvé la bonne scène. Seulement trois tentatives cette fois.",
+        "Notre stagiaire vient de nous passer le mauvais câble. Encore. Mais la musique tourne quand même.",
+        "Le stagiaire est dans la zone. Il ne sait pas laquelle. Mais il y est.",
+        "Le stagiaire a demandé à quelle heure commence le concert. On lui a dit : il a commencé il y a deux heures.",
+        "Quelqu'un a vu le stagiaire ? Dernière fois, il cherchait la scène principale depuis 20 minutes.",
+        "Le stagiaire a finalement capturé la bonne fréquence. Par accident. Mais c'est là.",
+        "Le stagiaire... apprend. Lentement. Mais sincèrement. Et c'est pour ça qu'on l'a gardé."
+      ]
+    },
+    "humor": {
+      "_note": "Humour léger — à utiliser sporadiquement, quand l'énergie le permet",
+      "templates": [
+        "Les voisins ont demandé à baisser. On a fait semblant de ne pas entendre.",
+        "Ce set n'a pas de limite de volume. C'est une fonctionnalité, pas un bug.",
+        "Bonne nouvelle : Gaiverland Radio n'a pas de bouton pause. Par conception.",
+        "La liste de morceaux suivants est classifiée. Pour votre bien.",
+        "Gaiverland Radio : on ne sait pas non plus comment on est arrivés ici. Mais on reste.",
+        "Ce beat... est techniquement défendable. Légalement aussi. On a vérifié.",
+        "Quelqu'un dans la salle a dit 'c'est trop fort'. Cette personne a eu tort.",
+        "La qualité sonore est maximale. La raison... variable. Le résultat... PARFAIT."
       ]
     }
   }
