@@ -98,17 +98,18 @@ def should_inject(elapsed: int, duration: int) -> bool:
     return interval_ok and near_end
 
 
-def run_pipeline(track: dict):
+def run_pipeline(track: dict, force: bool = False):
     global _last_inject_ts, _stats
 
     # 1. Generate Rebexis text
     try:
-        r = httpx.post(f"{REBEXIS_URL}/generate", json={"track": track}, timeout=10)
+        url = f"{REBEXIS_URL}/generate" + ("?force=true" if force else "")
+        r = httpx.post(url, json={"track": track}, timeout=10)
         if r.status_code != 200:
             _stats["errors"] += 1
             return
         result = r.json()
-        if result.get("intervention") is None:
+        if not result.get("text"):
             return
     except Exception as e:
         print(f"  ⚠ injector → rebexis: {e}")
@@ -194,7 +195,7 @@ def force_inject():
         track = r.json() if r.status_code == 200 else {}
     except Exception:
         track = {}
-    threading.Thread(target=run_pipeline, args=(track,), daemon=True).start()
+    threading.Thread(target=run_pipeline, args=(track, True), daemon=True).start()
     return {"ok": True, "shadow": not INJECT_ACTIVE}
 
 
