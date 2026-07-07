@@ -59,14 +59,17 @@ def purge_old_jingles(keep_latest: int = 0):
         r = httpx.get(
             f"{AZ_URL}/api/station/{AZ_STATION}/files",
             headers=az_headers(),
-            params={"searchPhrase": "gcs-rebexis", "rowsPerPage": 100},
+            params={"searchPhrase": "rebexis", "rowsPerPage": 200},
             timeout=15,
         )
         if r.status_code != 200:
             return
         data = r.json()
         rows = data.get("rows", data) if isinstance(data, dict) else data
-        jingles = [f for f in rows if "gcs-rebexis/" in (f.get("path") or "")]
+        # Both jingle generations: gcs-rebexis/ (new stack) + rebexis_*.mp3 (legacy gw-tts)
+        jingles = [f for f in rows
+                   if "gcs-rebexis/" in (f.get("path") or "")
+                   or (f.get("path") or "").split("/")[-1].startswith("rebexis_")]
         # Sort newest first, keep keep_latest, delete the rest
         jingles.sort(key=lambda f: f.get("uploaded_at") or 0, reverse=True)
         for f in jingles[keep_latest:]:
