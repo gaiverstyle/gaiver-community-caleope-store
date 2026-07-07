@@ -120,15 +120,19 @@ def live():
 def events(limit: int = 12):
     conn = get_conn()
     with conn.cursor() as cur:
+        # Le journal raconte l'HISTOIRE du festival : on exclut les répliques de Rebexis
+        # (ce n'est pas le log micro de l'animatrice, c'est le lore du festival).
         cur.execute("""
             SELECT type, description, city, created_at FROM lore_events
+            WHERE type <> 'rebexis_intervention'
             ORDER BY created_at DESC LIMIT %s
         """, (min(limit, 30),))
         rows = cur.fetchall()
     conn.close()
+    # Ordre chronologique (journal/diary), pas newest-first (log) : on renverse.
     return {"events": [
         {"type": r["type"], "text": r["description"], "city": r["city"],
-         "at": r["created_at"].strftime("%H:%M")} for r in rows
+         "at": r["created_at"].strftime("%H:%M")} for r in reversed(rows)
     ]}
 
 
@@ -305,7 +309,7 @@ footer .c15{margin-top:6px;font-size:12px}
 </footer>
 
 </div><script>
-const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_change:'📍'};
+const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
 let streamSet=false;
 async function refresh(){
   try{
