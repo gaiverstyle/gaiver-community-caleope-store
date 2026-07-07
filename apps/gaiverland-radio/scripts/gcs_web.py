@@ -29,8 +29,22 @@ VOTE_URL    = os.environ.get("GCS_VOTE_URL",         "http://gcs-vote-service:80
 AZ_URL      = os.environ.get("AZURACAST_URL",        "http://azuracast:80")
 AZ_STATION  = int(os.environ.get("AZURACAST_STATION_ID", "1"))
 STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
+# Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
+# que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
+# quand il existe ; sinon l'IP LAN. Vide = pas de réécriture.
+AZ_PUBLIC   = os.environ.get("GCS_AZ_PUBLIC_URL", "").rstrip("/")
 
 app = FastAPI(title="Gaiverland Web")
+
+
+def _publicize(url: str) -> str:
+    """Réécrit une URL AzuraCast interne (http://azuracast[:80]) vers la base publique."""
+    if not url or not AZ_PUBLIC:
+        return url
+    for internal in ("http://azuracast:80", "http://azuracast"):
+        if url.startswith(internal):
+            return AZ_PUBLIC + url[len(internal):]
+    return url
 
 WEATHER_POETRY = {
     "calm":  "Ciel tranquille au-dessus du site",
@@ -72,7 +86,7 @@ def live():
                 "duration": np.get("now_playing", {}).get("duration", 0),
                 "song_id":  song.get("id", ""),
             }
-            out["art"]       = song.get("art", "")
+            out["art"]       = _publicize(song.get("art", ""))
             out["listeners"] = np.get("listeners", {}).get("current", 0)
             if not out["stream_url"]:
                 mounts = np.get("station", {}).get("mounts", [])
@@ -80,6 +94,7 @@ def live():
                     out["stream_url"] = mounts[0].get("url", "")
                 else:
                     out["stream_url"] = np.get("station", {}).get("listen_url", "")
+            out["stream_url"] = _publicize(out["stream_url"])
     except Exception:
         pass
     # Festival state
