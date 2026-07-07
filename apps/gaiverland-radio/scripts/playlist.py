@@ -342,10 +342,11 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             FROM tracks
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
               AND file_path NOT LIKE %s
-              AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
-              AND (genre_top1 IS NULL OR genre_top1 = ANY(%s))
+              AND genre_top1 IS NOT NULL
+              AND genre_top1 != ALL(%s)
+              AND genre_top1 = ANY(%s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or [''], GENRE_WHITELIST, count * 4))
+        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
@@ -353,10 +354,11 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             cur.execute("""
                 SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
-                  AND (genre_top1 IS NULL OR genre_top1 != ALL(%s))
-                  AND (genre_top1 IS NULL OR genre_top1 = ANY(%s))
+                  AND genre_top1 IS NOT NULL
+                  AND genre_top1 != ALL(%s)
+                  AND genre_top1 = ANY(%s)
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', excluded_now or [''], GENRE_WHITELIST, count * 2))
+            """, ('%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 2))
             candidates = list(cur.fetchall())
 
     selected = []
