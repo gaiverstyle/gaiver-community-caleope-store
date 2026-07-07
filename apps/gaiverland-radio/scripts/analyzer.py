@@ -19,6 +19,10 @@ GENRE_TO_MOOD = {
     "Hardstyle": "intense", "Hardcore": "intense", "Gabber": "intense",
     "Hard Techno": "intense", "Industrial": "intense", "Speedcore": "intense",
     "UK Hardcore": "intense", "Frenchcore": "intense",
+    "Hardbass": "intense", "Hard Bass": "intense", "Rawstyle": "intense",
+    "Uptempo": "intense", "Terrorcore": "intense", "Hard Dance": "intense",
+    "Hard House": "intense", "Schranz": "intense", "Makina": "intense",
+    "Donk": "intense", "Jump Up": "intense",
     # Festival / Big energy
     "Trance": "festival", "Euro House": "festival", "Happy Hardcore": "festival",
     "Jumpstyle": "festival", "Electro House": "festival", "Big Room": "festival",
@@ -117,12 +121,20 @@ def apply_bpm_guard(mood: str, bpm: float) -> str:
     """
     if mood in ("festival", "energique", "intense") and bpm < 112:
         return "melodique"
-    if mood in ("festival", "energique") and bpm > 155:
+    if mood in ("festival", "energique") and bpm >= 150:
         return "intense"
     if mood == "intense" and bpm < 115:
         return "festival"
     if mood in ("nocturne", "melodique") and bpm > 165:
         return "intense"  # double-tempo probable mais safe fallback
+    return mood
+
+
+def apply_energy_guard(mood: str, bpm: float, energy: float) -> str:
+    """Gros kick + loudness écrasée = hard music même sous 150 BPM
+    (hardbass, rawstyle mid-tempo). Réservé à la nuit via mood=intense."""
+    if mood in ("festival", "energique") and energy >= 0.82 and bpm >= 138:
+        return "intense"
     return mood
 
 
@@ -201,6 +213,7 @@ def analyze_file(path: str) -> dict:
 
         # Garde BPM : corrige les incohérences flagrantes genre/BPM
         mood = apply_bpm_guard(mood, bpm)
+        mood = apply_energy_guard(mood, bpm, energy_norm)
 
         # ── Métadonnées ID3/tags ──────────────────────────────────────
         meta = mutagen.File(path, easy=True) or {}

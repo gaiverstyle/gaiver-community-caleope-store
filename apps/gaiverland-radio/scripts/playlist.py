@@ -42,7 +42,7 @@ DEFAULT_UI_CONFIG = {
 # Format env GENRE_HOURS : "Genre1,Genre2:HH-HH;Genre3:HH-HH"
 # Exemple : "Hardstyle,Hardcore:22-06" = seulement entre 22h et 6h
 # Genres sans restriction jouent à toute heure.
-_DEFAULT_GENRE_HOURS = "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk,Hands Up,Dubstep:22-06"
+_DEFAULT_GENRE_HOURS = "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk,Hands Up,Dubstep,Hardbass,Hard Bass,Rawstyle,Uptempo,Gabber,Frenchcore,Speedcore,Terrorcore,Hard Dance,Hard House,Schranz,Industrial:22-06"
 
 def _parse_genre_hours(raw: str) -> dict:
     """Retourne {genre: (start_h, end_h)} pour chaque genre restreint."""
