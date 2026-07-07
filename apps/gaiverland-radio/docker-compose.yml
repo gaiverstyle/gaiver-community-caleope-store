@@ -418,6 +418,29 @@ services:
       - gaiverland-internal
       - caleope-public
 
+  # ── GCS Web — site public festival (port 8099) ─────────────────────────
+  gcs-web:
+    build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-api
+    container_name: gaiverland-gcs-web
+    command: ["python", "-u", "/app/gcs_web.py"]
+    env_file:
+      - {{.BaseDir}}/app-config/gaiverland-radio/services.env
+      - {{.BaseDir}}/app-config/gaiverland-radio/gcs.env
+    volumes:
+      - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+    ports:
+      - "8099:8099"
+    depends_on:
+      gw-db:
+        condition: service_healthy
+    profiles:
+      - gcs
+    restart: unless-stopped
+    networks:
+      - gaiverland-internal
+      - azuracast-internal
+      - caleope-public
+
   # ── GCS Weather — météo réelle open-meteo (port 8098) ──────────────────
   gcs-weather:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-api
