@@ -100,6 +100,7 @@ def should_inject(elapsed: int, duration: int) -> bool:
 
 def run_pipeline(track: dict, force: bool = False):
     global _last_inject_ts, _stats
+    _last_inject_ts = time.time()  # Pessimistic lock — prevent re-entry on pipeline failure
 
     # 1. Generate Rebexis text
     try:
