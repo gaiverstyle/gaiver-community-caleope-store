@@ -41,6 +41,32 @@ ENERGY_MODE    = {1: "flow",  2: "flow",   3: "normal", 4: "hype",    5: "peak"}
 STAGE_SEGMENT  = {"mainstage": "announcement", "sunset": "transition",
                   "rush": "intro", "night": "outro"}
 
+# Bible v1.1 emotion mapping — amused = running gags, calm = sunset/night.
+# Overrides the energy-based default per mode.
+MODE_EMOTION = {
+    "lore_stagiaire": "amused",
+    "lore_c15":       "amused",
+    "humor":          "amused",
+    "late_night":     "calm",
+    "flow":           "calm",
+    "transition_down":"calm",
+    "peak":           "energetic",
+    "transition_up":  "energetic",
+    "hype":           "excited",
+    "track_announcement": "excited",
+    "reaction":       "excited",
+}
+# Bible segment_type per mode (fallback = stage-based)
+MODE_SEGMENT = {
+    "lore_stagiaire": "joke",
+    "humor":          "joke",
+    "track_announcement": "announcement",
+    "transition_up":  "transition",
+    "transition_down":"transition",
+    "late_night":     "outro",
+    "city":           "announcement",
+}
+
 
 def load_tpl():
     global _tpl
@@ -114,17 +140,35 @@ def phrase_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
 
-def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set) -> tuple[str, bool]:
+def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
+                         state: dict = None) -> tuple[str, bool]:
     """Pick a phrase from mode pool, avoiding recently used ones.
+    Uses templates_with_next when artist/title are known (RPE announce style),
+    templates_no_next otherwise; falls back to the plain templates list.
     Returns (text, was_fresh). Falls back to any phrase if all used."""
+    state = state or {}
     modes = _tpl.get("modes", {})
-    pool  = modes.get(mode, {}).get("templates") or \
-            modes.get("normal", {}).get("templates", ["La musique continue."])
+    entry = modes.get(mode, {})
 
-    # Expand {artist}/{title} first to compute accurate hashes
+    has_track = bool(track.get("artist") and track.get("title"))
+    if has_track and entry.get("templates_with_next"):
+        pool = entry["templates_with_next"]
+    elif not has_track and entry.get("templates_no_next"):
+        pool = entry["templates_no_next"]
+    else:
+        pool = entry.get("templates")
+    if not pool:
+        pool = modes.get("normal", {}).get("templates", ["La musique continue."])
+
+    music_profile = track.get("music_profile", {}) if isinstance(track, dict) else {}
+    genre = (music_profile.get("genre") or track.get("genre_top1") or "électro")
+
+    # Expand all variables first to compute accurate hashes
     def expand(t: str) -> str:
         t = t.replace("{artist}", track.get("artist", "l'artiste") or "l'artiste")
         t = t.replace("{title}", track.get("title", "ce morceau") or "ce morceau")
+        t = t.replace("{city}",  state.get("city", "Toulon") or "Toulon")
+        t = t.replace("{genre}", str(genre))
         return t
 
     fresh = [t for t in pool if phrase_hash(expand(t)) not in recent_hashes]
@@ -164,6 +208,7 @@ def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
     candidates.append((0.07, "lore_c15"))
     candidates.append((0.05, "lore_stagiaire"))
     candidates.append((0.06, "humor"))
+    candidates.append((0.05, "city"))
 
     # Festival direction transitions
     if festival_direction == "build_up" and energy >= 3:
@@ -253,13 +298,14 @@ def generate(body: dict = None, force: bool = False):
     # Select mode contextually
     mode = select_mode(energy, stage, tod, weather_mood, festival_dir, track)
 
-    emotion      = ENERGY_EMOTION.get(energy, "playful")
-    segment_type = STAGE_SEGMENT.get(stage, "announcement")
+    # Bible mapping: mode-specific emotion/segment first, energy/stage as fallback
+    emotion      = MODE_EMOTION.get(mode) or ENERGY_EMOTION.get(energy, "playful")
+    segment_type = MODE_SEGMENT.get(mode) or STAGE_SEGMENT.get(stage, "announcement")
 
     # Get recent phrase hashes for dedup
     recent_hashes = get_recent_phrase_hashes(conn)
 
-    text, was_fresh = pick_avoiding_recent(mode, track, recent_hashes)
+    text, was_fresh = pick_avoiding_recent(mode, track, recent_hashes, state)
     action       = "announce_track" if track.get("title") else "play_music"
 
     # Record this phrase in memory

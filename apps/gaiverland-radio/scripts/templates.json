@@ -249,6 +249,19 @@
         "Le stagiaire... apprend. Lentement. Mais sincèrement. Et c'est pour ça qu'on l'a gardé."
       ]
     },
+    "city": {
+      "_note": "Références ville — le festival Gaiverland est permanent et se déplace de ville en ville. {city} = ville actuelle du state engine.",
+      "templates": [
+        "Gaiverland est posé à {city} en ce moment. Et {city}... tient le rythme.",
+        "Le festival s'est installé à {city}. Personne ne sait pour combien de temps. C'est le principe.",
+        "Depuis {city}, pour le monde entier. Gaiverland Radio.",
+        "{city} accueille le festival cette semaine. Et franchement... {city} s'en sort BIEN.",
+        "Le convoi Gaiverland s'est arrêté à {city}. Le C15 a validé l'emplacement.",
+        "Quelque part dans {city}, ce son résonne. Et c'est exactement le plan.",
+        "Gaiverland ne reste jamais longtemps au même endroit. Mais ce soir... c'est {city}. Profitez-en.",
+        "{city} by night. Gaiverland aux commandes. La suite s'écoute."
+      ]
+    },
     "humor": {
       "_note": "Humour léger — à utiliser sporadiquement, quand l'énergie le permet",
       "templates": [

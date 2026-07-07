@@ -52,12 +52,46 @@ def get_rebexis_playlist_id(conn) -> int:
     return (row["az_rb_playlist"] or 0) if row else 0
 
 
+def purge_old_jingles(keep_latest: int = 0):
+    """Delete previous gcs-rebexis jingles from AzuraCast so they never
+    accumulate in the Rebexis playlist (accumulation = chained voices bug)."""
+    try:
+        r = httpx.get(
+            f"{AZ_URL}/api/station/{AZ_STATION}/files",
+            headers=az_headers(),
+            params={"searchPhrase": "gcs-rebexis", "rowsPerPage": 100},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return
+        data = r.json()
+        rows = data.get("rows", data) if isinstance(data, dict) else data
+        jingles = [f for f in rows if "gcs-rebexis/" in (f.get("path") or "")]
+        # Sort newest first, keep keep_latest, delete the rest
+        jingles.sort(key=lambda f: f.get("uploaded_at") or 0, reverse=True)
+        for f in jingles[keep_latest:]:
+            try:
+                httpx.delete(
+                    f"{AZ_URL}/api/station/{AZ_STATION}/file/{f['id']}",
+                    headers=az_headers(), timeout=10,
+                )
+            except Exception:
+                pass
+        if len(jingles) > keep_latest:
+            print(f"  🧹 injector: purged {len(jingles) - keep_latest} old jingle(s)")
+    except Exception as e:
+        print(f"  ⚠ injector purge: {e}")
+
+
 def upload_and_queue(audio_file: str, text: str, conn) -> bool:
-    """Upload MP3 to AzuraCast, add to rebexis playlist."""
+    """Upload MP3 to AzuraCast, add to rebexis playlist.
+    Purges previous jingles first — the playlist holds at most ONE pending
+    intervention so voices can never chain back-to-back."""
     rb_pl = get_rebexis_playlist_id(conn)
     if not rb_pl:
         print("  ⚠ injector: no rebexis playlist ID in DB — not injecting")
         return False
+    purge_old_jingles(keep_latest=0)
     try:
         import base64
         with open(audio_file, "rb") as f:
