@@ -33,6 +33,9 @@ STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
 # que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
 # quand il existe ; sinon l'IP LAN. Vide = pas de réécriture.
 AZ_PUBLIC   = os.environ.get("GCS_AZ_PUBLIC_URL", "").rstrip("/")
+# gaiverland-clip = instance Owncast (flux HLS image+audio). Utilisé par le "mode vidéo"
+# du player. Override via GCS_CLIP_URL.
+CLIP_BASE   = os.environ.get("GCS_CLIP_URL", "https://gaiverland-clip.caleope.guernaham.bzh").rstrip("/")
 
 app = FastAPI(title="Gaiverland Web")
 
@@ -240,6 +243,18 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .soon{opacity:.75;text-align:center;padding:26px 10px;font-style:italic;font-size:16px}
 footer{text-align:center;margin-top:44px;font-size:13px;opacity:.65;font-style:italic}
 footer .c15{margin-top:6px;font-size:12px}
+.modes{display:flex;gap:8px;margin-top:18px}
+.mode-btn{padding:8px 16px;border:1px solid rgba(255,244,230,.3);background:rgba(255,244,230,.06);
+  color:var(--cream);border-radius:20px;cursor:pointer;font-family:sans-serif;font-size:13px;letter-spacing:1px;transition:.15s}
+.mode-btn.on{background:linear-gradient(135deg,#ffd29a,#ff8fa3);color:var(--ink);border-color:transparent}
+.pane{margin-top:14px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.playbtn{width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
+  background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
+.playbtn:hover{transform:scale(1.06)}
+#player{display:none}
+#clip{width:100%;max-height:60vh;border-radius:14px;background:#000;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.pipbtn{padding:8px 14px;border:1px solid rgba(255,244,230,.3);background:rgba(255,244,230,.06);
+  color:var(--cream);border-radius:12px;cursor:pointer;font-family:sans-serif;font-size:13px}
 </style></head><body><div class="wrap">
 
 <header>
@@ -260,7 +275,18 @@ footer .c15{margin-top:6px;font-size:12px}
       <div class="bar"><i id="prog"></i></div>
     </div>
   </div>
-  <audio id="player" controls preload="none"></audio>
+  <div class="modes">
+    <button id="m-audio" class="mode-btn on" onclick="setMode('audio')">🎧 Audio · direct</button>
+    <button id="m-video" class="mode-btn" onclick="setMode('video')">📺 Vidéo</button>
+  </div>
+  <div id="pane-audio" class="pane">
+    <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
+  </div>
+  <div id="pane-video" class="pane" style="display:none">
+    <video id="clip" playsinline controls></video>
+    <button id="pipbtn" class="pipbtn" onclick="goPip()" style="display:none">🖼️ Picture-in-Picture</button>
+  </div>
+  <audio id="player" preload="none"></audio>
   <div class="votes">
     <button class="v-encore" onclick="vote('ENCORE')">🔥 ENCORE</button>
     <button class="v-review" onclick="vote('REVIEW')">🤔 À REVOIR</button>
@@ -310,7 +336,52 @@ footer .c15{margin-top:6px;font-size:12px}
 
 </div><script>
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
-let streamSet=false;
+const CLIP_HLS="__CLIP_HLS__";
+let audioUrl="", mode="audio", hls=null, videoReady=false;
+
+// Deux modes exclusifs : jamais audio + vidéo en même temps (pas de désync croisée).
+function setMode(m){
+  if(m===mode)return; mode=m;
+  document.getElementById('m-audio').classList.toggle('on',m==='audio');
+  document.getElementById('m-video').classList.toggle('on',m==='video');
+  document.getElementById('pane-audio').style.display=(m==='audio')?'':'none';
+  document.getElementById('pane-video').style.display=(m==='video')?'':'none';
+  if(m==='video'){ document.getElementById('player').pause(); startVideo(); }
+  else { stopVideo(); }
+}
+function togglePlay(){
+  const a=document.getElementById('player');
+  if(audioUrl && !a.src) a.src=audioUrl;
+  if(a.paused){ a.play().catch(()=>{}); } else { a.pause(); }
+}
+function startVideo(){
+  const v=document.getElementById('clip');
+  if(videoReady){ v.play().catch(()=>{}); return; }
+  if(v.canPlayType('application/vnd.apple.mpegurl')){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); }
+  else if(window.Hls){ attachHls(v); }
+  else { const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/hls.js@1';
+         s.onload=()=>attachHls(v); document.head.appendChild(s); }
+  maybeShowPip();
+}
+function attachHls(v){
+  if(!window.Hls||!Hls.isSupported()){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); return; }
+  hls=new Hls({lowLatencyMode:true}); hls.loadSource(CLIP_HLS); hls.attachMedia(v);
+  hls.on(Hls.Events.MANIFEST_PARSED,()=>{ videoReady=true; v.play().catch(()=>{}); });
+}
+function stopVideo(){
+  const v=document.getElementById('clip'); v.pause();
+  if(hls){ hls.destroy(); hls=null; } videoReady=false; v.removeAttribute('src'); v.load();
+}
+function maybeShowPip(){
+  if(document.pictureInPictureEnabled && !/Mobi|Android/i.test(navigator.userAgent)){
+    document.getElementById('pipbtn').style.display='';
+  }
+}
+async function goPip(){
+  const v=document.getElementById('clip');
+  try{ if(document.pictureInPictureElement){ await document.exitPictureInPicture(); }
+       else { await v.requestPictureInPicture(); } }catch(e){}
+}
 async function refresh(){
   try{
     const d=await (await fetch('/api/live')).json();
@@ -321,7 +392,7 @@ async function refresh(){
     document.getElementById('meta').textContent=l;
     if(d.art){const a=document.getElementById('art');a.src=d.art;a.style.visibility='visible';}
     if(t.duration>0){document.getElementById('prog').style.width=Math.min(100,100*t.elapsed/t.duration)+'%';}
-    if(d.stream_url&&!streamSet){document.getElementById('player').src=d.stream_url;streamSet=true;}
+    if(d.stream_url){audioUrl=d.stream_url;}
     const s=d.state||{};
     document.getElementById('city').textContent=s.city||'Quelque part';
     document.getElementById('wx').textContent=(s.weather||'')+(s.stage?' — scène active : '+s.stage:'');
@@ -346,6 +417,8 @@ async function vote(v){
   }catch(e){m.textContent='Le stagiaire a débranché quelque chose. Réessayez.';}
   setTimeout(()=>m.textContent='',6000);
 }
+(function(){const a=document.getElementById('player'),b=document.getElementById('playbtn');
+ a.addEventListener('play',()=>b.textContent='⏸');a.addEventListener('pause',()=>b.textContent='▶');})();
 refresh();loadEvents();
 setInterval(refresh,10000);setInterval(loadEvents,30000);
 </script></body></html>"""
@@ -353,7 +426,7 @@ setInterval(refresh,10000);setInterval(loadEvents,30000);
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return PAGE
+    return PAGE.replace("__CLIP_HLS__", CLIP_BASE + "/hls/stream.m3u8")
 
 
 if __name__ == "__main__":
