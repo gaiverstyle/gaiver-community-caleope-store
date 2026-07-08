@@ -106,6 +106,39 @@ def batch_assign_playlist(file_ids: list, playlist_ids: list) -> bool:
         return False
 
 
+def remove_files_from_playlist(file_ids: list, playlist_id: int) -> int:
+    """Retire des fichiers (az_id) d'une playlist SANS toucher à leurs autres
+    playlists. Le batch AzuraCast étant additif, le retrait se fait fichier par
+    fichier via PUT (mêmes semantics que replace_playlist). Retourne le nombre
+    de fichiers effectivement retirés."""
+    if not _ok() or not file_ids:
+        return 0
+    removed = 0
+    try:
+        all_rows = _get_all_files()
+        id_to_path = {row["id"]: row["path"] for row in all_rows if "id" in row and "path" in row}
+        path_to_playlists = {row["path"]: [p["id"] for p in row.get("playlists", [])] for row in all_rows}
+        for fid in file_ids:
+            path = id_to_path.get(fid)
+            if not path:
+                continue
+            current = path_to_playlists.get(path, [])
+            if playlist_id not in current:
+                continue  # déjà absent de la playlist
+            keep = [p for p in current if p != playlist_id]
+            try:
+                r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/file/{fid}",
+                              headers=_headers(), json={"playlists": keep}, timeout=10)
+                if r.status_code < 400:
+                    removed += 1
+            except Exception:
+                pass
+        return removed
+    except Exception as e:
+        print(f"  ⚠ remove_files_from_playlist: {e}")
+        return 0
+
+
 def find_file_by_path(path: str) -> Optional[dict]:
     """Cherche un fichier AzuraCast par son nom."""
     if not _ok():

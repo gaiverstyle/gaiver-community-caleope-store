@@ -26,6 +26,11 @@ AZ_URL         = os.environ.get("AZURACAST_URL", "http://azuracast:80")
 AZ_KEY         = os.environ.get("AZURACAST_API_KEY", "")
 AZ_STATION_ID  = int(os.environ.get("AZURACAST_STATION_ID", "1"))
 DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
+# Fenêtre anti-répétition : un titre joué dans les N dernières heures est exclu
+# de la sélection. 11h couvre toute la journée de travail (8h-18h) avec marge →
+# aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
+# est assez grand pour remplir la journée (~150 titres pour 10h).
+NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -114,6 +119,88 @@ MOOD_TRANSITIONS = {
     "melodique":  ["melodique", "energique"],
     "nocturne":   ["nocturne", "melodique"],
 }
+
+# ── Cohérence d'enchaînement — roue de Camelot (mixage harmonique) ────────────
+# Essentia fournit key_note (C, C#, D…) + key_scale (major/minor). On les
+# convertit en code Camelot pour évaluer la compatibilité harmonique entre deux
+# morceaux consécutifs : transitions douces = clés voisines sur la roue.
+_CAMELOT = {
+    ("C", "major"): "8B", ("G", "major"): "9B", ("D", "major"): "10B",
+    ("A", "major"): "11B", ("E", "major"): "12B", ("B", "major"): "1B",
+    ("F#", "major"): "2B", ("C#", "major"): "3B", ("G#", "major"): "4B",
+    ("D#", "major"): "5B", ("A#", "major"): "6B", ("F", "major"): "7B",
+    ("A", "minor"): "8A", ("E", "minor"): "9A", ("B", "minor"): "10A",
+    ("F#", "minor"): "11A", ("C#", "minor"): "12A", ("G#", "minor"): "1A",
+    ("D#", "minor"): "2A", ("A#", "minor"): "3A", ("F", "minor"): "4A",
+    ("C", "minor"): "5A", ("G", "minor"): "6A", ("D", "minor"): "7A",
+}
+# Normalisation enharmonique des notes renvoyées par Essentia
+_ENHARM = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+
+
+def _camelot(note: str, scale: str):
+    """(numéro 1-12, lettre 'A'/'B') ou None si tonalité inconnue."""
+    if not note or not scale:
+        return None
+    note = _ENHARM.get(note, note)
+    code = _CAMELOT.get((note, scale.lower()))
+    return (int(code[:-1]), code[-1]) if code else None
+
+
+def _key_cost(a: dict, b: dict) -> float:
+    """Coût harmonique 0 (parfait) → 1 (dissonant) entre deux morceaux."""
+    ka, kb = _camelot(a.get("key_note", ""), a.get("key_scale", "")), \
+             _camelot(b.get("key_note", ""), b.get("key_scale", ""))
+    if not ka or not kb:
+        return 0.5  # tonalité inconnue → neutre
+    (na, la_), (nb, lb) = ka, kb
+    if ka == kb:
+        return 0.0                                        # même clé
+    step = min((na - nb) % 12, (nb - na) % 12)
+    if la_ == lb and step == 1:
+        return 0.15                                       # voisin sur la roue (±1)
+    if na == nb and la_ != lb:
+        return 0.2                                        # relatif majeur/mineur
+    if la_ == lb and step == 2:
+        return 0.45                                       # saut de 2 (énergisant)
+    return 1.0                                            # dissonant
+
+
+def _transition_cost(a: dict, b: dict) -> float:
+    """Coût de passer du morceau a au morceau b (0 = transition idéale)."""
+    ba, bb = float(a.get("bpm") or 0), float(b.get("bpm") or 0)
+    if ba and bb:
+        # tolère le mixage moitié/double tempo (128 <-> 174 en DnB, etc.)
+        d = min(abs(ba - bb), abs(ba - 2 * bb), abs(2 * ba - bb))
+        bpm_cost = min(1.0, d / 16.0)                     # ~16 BPM d'écart = coût plein
+    else:
+        bpm_cost = 0.5
+    ea, eb = float(a.get("energy") or 0.5), float(b.get("energy") or 0.5)
+    energy_cost = min(1.0, abs(ea - eb) / 0.35)
+    return 0.5 * _key_cost(a, b) + 0.3 * bpm_cost + 0.2 * energy_cost
+
+
+def order_for_coherence(candidates: list, count: int, start_energy: float) -> list:
+    """Ordonne les candidats en un chemin harmonique fluide (glouton plus proche
+    voisin) : chaque morceau enchaîne sur le plus compatible (clé + BPM +
+    énergie), en évitant de répéter un artiste sur 3 titres consécutifs."""
+    pool = [dict(c) for c in candidates]
+    if not pool:
+        return []
+    # Départ : morceau le plus proche de l'énergie courante → transition douce
+    # depuis ce qui vient de jouer.
+    pool.sort(key=lambda t: abs(float(t.get("energy") or 0.5) - start_energy))
+    ordered = [pool.pop(0)]
+    while pool and len(ordered) < count:
+        last = ordered[-1]
+        recent_artists = {t["artist"] for t in ordered[-3:]}
+        allowed = [t for t in pool if t.get("artist") not in recent_artists]
+        search = allowed or pool  # relâche l'anti-répétition si bloqué
+        nxt = min(search, key=lambda t: _transition_cost(last, t))
+        pool.remove(nxt)
+        ordered.append(nxt)
+    return ordered
+
 
 app = FastAPI(title="Gaiverland Playlist Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -320,8 +407,8 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     with conn.cursor() as cur:
         cur.execute("""
             SELECT track_id FROM play_history
-            WHERE played_at > NOW() - INTERVAL '2 hours'
-        """)
+            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
@@ -338,7 +425,8 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
 
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
+            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                   key_note, key_scale
             FROM tracks
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
               AND file_path NOT LIKE %s
@@ -352,7 +440,8 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     if not candidates:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
+                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                       key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND genre_top1 IS NOT NULL
                   AND genre_top1 != ALL(%s)
@@ -361,26 +450,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             """, ('%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 2))
             candidates = list(cur.fetchall())
 
-    selected = []
-    target_energy = current_energy
-    main_count = count - int(count * DISCOVERY_RATIO)
-
-    for track in candidates:
-        if len(selected) >= count:
-            break
-        # Anti-répétition artiste sur les 3 derniers titres
-        if track["artist"] in {t["artist"] for t in selected[-3:]}:
-            continue
-        e = float(track.get("energy") or 0.5)
-        if abs(e - target_energy) > 0.35 and len(selected) < main_count:
-            continue
-        selected.append(dict(track))
-        target_energy = target_energy * 0.75 + e * 0.25  # glissement progressif
-
-    # Compléter
-    rest = [c for c in candidates if c not in selected]
-    while len(selected) < count and rest:
-        selected.append(dict(rest.pop()))
+    # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
+    # au lieu de garder l'ordre aléatoire du tirage SQL.
+    selected = order_for_coherence(candidates, count, current_energy)
 
     if selected:
         avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)

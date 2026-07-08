@@ -99,6 +99,20 @@ def setup_playlists(conn):
                                     weight=1,
                                     play_per_songs=REBEXIS_SONGS_INTERVAL)
 
+    # get_or_create_playlist ne reconfigure PAS une playlist "Rebexis" déjà
+    # existante (il renvoie son ID tel quel). Si elle a été créée un jour en
+    # rotation générale, ses jingles jouent en série -> plusieurs voix d'affilée.
+    # On ré-applique donc le type à chaque démarrage pour garantir 1 jingle/X titres.
+    if rb_id:
+        update_playlist(rb_id, type="once_per_x_songs",
+                        play_per_songs=REBEXIS_SONGS_INTERVAL,
+                        weight=1, is_enabled=True)
+
+    # Lecture séquentielle pour la playlist musicale : l'ordre harmonique calculé
+    # par le moteur doit être respecté à l'antenne, pas re-mélangé par AzuraCast.
+    if gw_id:
+        update_playlist(gw_id, order="sequential")
+
     if gw_id or rb_id:
         with conn.cursor() as cur:
             cur.execute("""
@@ -154,6 +168,10 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
                     cur.execute("UPDATE tracks SET az_playlist_assigned=true WHERE az_id = ANY(%s)", (az_ids,))
             conn.commit()
             print(f"  📻 Playlist [{mood}] mise à jour — {len(az_ids)} titres")
+            # Imposer l'ordre d'enchaînement calculé (sinon AzuraCast rejoue dans
+            # son ordre interne et la cohérence harmonique est perdue).
+            if set_playlist_order(gw_playlist_id, az_ids):
+                print(f"  🎚 Ordre d'enchaînement appliqué ({len(az_ids)} titres)")
         else:
             print(f"  ⚠ Mise à jour playlist échouée")
     except Exception as e:
@@ -227,6 +245,60 @@ def maybe_generate_rebexis():
         print(f"  ⚠ Rebexis: {e}")
 
 
+_recorded_sh: set = set()  # sh_id AzuraCast déjà enregistrés (dédup)
+
+
+def record_plays():
+    """Enregistre dans play_history les morceaux réellement diffusés (source de
+    vérité = historique AzuraCast). Sans ça, l'anti-répétition du moteur de
+    playlist n'a rien à exclure → les titres se répètent en journée.
+    Dédup par sh_id (identifiant unique de lecture AzuraCast).
+    Tout est encapsulé : une erreur DB/réseau ne doit jamais tuer la boucle."""
+    try:
+        np = now_playing()
+        if not np:
+            return
+        entries = []
+        if np.get("now_playing"):
+            entries.append(np["now_playing"])
+        entries += (np.get("song_history") or [])
+
+        recorded = 0
+        conn = get_conn()
+        try:
+            for e in entries:
+                sh_id = e.get("sh_id")
+                if not sh_id or sh_id in _recorded_sh:
+                    continue
+                song   = e.get("song") or {}
+                title  = (song.get("title") or "").strip()
+                artist = (song.get("artist") or "").strip()
+                if not title:
+                    continue
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id FROM tracks
+                        WHERE lower(trim(title)) = lower(%s)
+                          AND lower(trim(COALESCE(artist,''))) = lower(%s)
+                        LIMIT 1
+                    """, (title, artist))
+                    row = cur.fetchone()
+                    if row:
+                        cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (row["id"],))
+                        recorded += 1
+                _recorded_sh.add(sh_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+        if len(_recorded_sh) > 2000:      # borne mémoire
+            _recorded_sh.clear()
+        if recorded:
+            print(f"  📝 {recorded} lecture(s) enregistrée(s) dans play_history")
+    except Exception as e:
+        print(f"  ⚠ record_plays: {e}")
+
+
 def main():
     print("⚙  Scheduler Gaiverland démarré")
     wait_for(PLAYLIST_URL, "Playlist Engine")
@@ -256,6 +328,9 @@ def main():
 
         # 3. Vérifier et switcher le créneau horaire (travail/standard)
         maybe_update_slot_mood(gw_id, wd_id, fr_id)
+
+        # 3b. Enregistrer les morceaux diffusés (alimente l'anti-répétition)
+        record_plays()
 
         # 4. Mettre à jour la playlist Gaiverland IA dans AzuraCast
         if gw_id:
