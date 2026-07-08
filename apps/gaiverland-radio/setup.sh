@@ -184,6 +184,16 @@ if [[ -d "${COMPOSE_DIR}" ]]; then
     cp "${CONFIG_DIR}/.env" "${COMPOSE_DIR}/.env"
 fi
 
+# Le daemon Caleope lance `docker compose --env-file app.env` (ce qui IGNORE le .env local)
+# et reconstruit app.env en fusionnant secrets.env (cf install.go étape 7.5). Donc pour que les
+# profils (gcs…) soient activés par le daemon, COMPOSE_PROFILES DOIT être dans secrets.env.
+touch "${CONFIG_DIR}/secrets.env"; chmod 600 "${CONFIG_DIR}/secrets.env"
+if grep -q "^COMPOSE_PROFILES=" "${CONFIG_DIR}/secrets.env"; then
+    sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}|" "${CONFIG_DIR}/secrets.env"
+else
+    echo "COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}" >> "${CONFIG_DIR}/secrets.env"
+fi
+
 # ── Paramètres ────────────────────────────────────────────────────────
 AZ_URL="${CALEOPE_PARAM_AZURACAST_URL:-http://azuracast:80}"
 AZ_API_KEY="${CALEOPE_PARAM_AZURACAST_API_KEY:-}"
