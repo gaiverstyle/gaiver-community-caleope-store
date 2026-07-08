@@ -149,11 +149,21 @@ else
 fi
 
 # ── Profils composites (azuracast + GCS optionnel) ────────────────────
-GCS_ENABLED="${CALEOPE_PARAM_GCS_ENABLED:-false}"
+# v2 data/web (track, vote, state, lore, web, weather, monitoring) — activé par DÉFAUT
+# désormais (géré par Caleope, persiste aux redéploiements). Ce sont eux qui font
+# marcher votes + ville + journal.
+GCS_ENABLED="${CALEOPE_PARAM_GCS_ENABLED:-true}"
 if [[ "${GCS_ENABLED}" == "true" ]]; then
     [[ -n "${COMPOSE_PROFILES_VALUE}" ]] \
         && COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE},gcs" \
         || COMPOSE_PROFILES_VALUE="gcs"
+fi
+# Pipeline AUDIO v2 (gcs-rebexis/tts/injector) — OPT-IN via --param gcs_audio=true.
+# Remplace la v1 (gw-rebexis/tts) ; laissée OFF tant que la v2 audio n'est pas validée
+# (sinon doublon d'annonces Rebexis). Migration audio = étape séparée.
+GCS_AUDIO="${CALEOPE_PARAM_GCS_AUDIO:-false}"
+if [[ "${GCS_AUDIO}" == "true" ]]; then
+    COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE},gcs-audio"
 fi
 
 # Écrire le .env Docker Compose (lu depuis le répertoire du compose.yml)

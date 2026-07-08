@@ -318,7 +318,7 @@ services:
       gw-db:
         condition: service_healthy
     profiles:
-      - gcs
+      - gcs-audio
     restart: unless-stopped
     networks:
       - gaiverland-internal
@@ -338,7 +338,7 @@ services:
       gw-db:
         condition: service_healthy
     profiles:
-      - gcs
+      - gcs-audio
     restart: unless-stopped
     networks:
       - gaiverland-internal
@@ -356,7 +356,7 @@ services:
       gw-db:
         condition: service_healthy
     profiles:
-      - gcs
+      - gcs-audio
     restart: unless-stopped
     networks:
       - gaiverland-internal
