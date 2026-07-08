@@ -4143,7 +4143,7 @@ cat > "${SCRIPTS_DIR}/gcs_lore_service.py" <<'PYEOF'
 GCS Lore Service — Phase 6.
 Mémoire immuable : events C15, stagiaire, Rebexis, villes.
 """
-import os, sys, subprocess, json
+import os, sys, subprocess, json, threading, random, time
 
 def _install():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
@@ -4189,9 +4189,57 @@ def init_db():
     conn.close()
 
 
+# ── Générateur de lore (STARTER — catalogue à enrichir par Rebexis) ──────────
+# Fait vivre le « Journal du festival » : insère périodiquement un event lié à
+# l'état réel (ville). Contenu minimal de démarrage ; le vrai catalogue/ton = Rebexis.
+GCS_CITY = os.environ.get("GCS_CITY", "Toulon")
+LORE_INTERVAL_S = int(os.environ.get("LORE_GEN_INTERVAL_S", "1500"))  # ~25 min
+LORE_STARTER = {
+    "c15_event": [
+        "Le C15 est garé à {city}. Le festival est chez lui.",
+        "On a retrouvé le C15 exactement là où il devait être. Pour une fois.",
+        "Le C15 ronronne dans la nuit de {city}. Il veille.",
+        "Quelqu'un a lavé le C15. Personne n'avoue.",
+    ],
+    "stagiaire_event": [
+        "Le stagiaire a encore perdu la carte SD.",
+        "Le stagiaire jure qu'il a tout sauvegardé. On vérifie... non.",
+        "Le stagiaire a rebranché un câble à l'envers. Encore.",
+        "On cherche le stagiaire. Le stagiaire cherche la sortie.",
+    ],
+    "festival_moment": [
+        "La foule de {city} ne veut pas que ça s'arrête.",
+        "Un frisson a traversé {city} sur ce drop.",
+        "Quelque part à {city}, quelqu'un danse seul et c'est parfait.",
+        "L'air de {city} sent la basse et la nuit.",
+    ],
+}
+
+
+def _lore_generator():
+    time.sleep(20)  # laisser init_db finir
+    last_type = None
+    while True:
+        try:
+            types = [t for t in LORE_STARTER if t != last_type] or list(LORE_STARTER)
+            etype = random.choice(types)
+            last_type = etype
+            desc = random.choice(LORE_STARTER[etype]).replace("{city}", GCS_CITY)
+            conn = get_conn(); conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO lore_events (type,description,city) VALUES (%s,%s,%s)",
+                            (etype, desc, GCS_CITY))
+            conn.close()
+            print(f"  ✎ lore [{etype}] {desc}")
+        except Exception as e:
+            print(f"  ⚠ lore gen: {e}")
+        time.sleep(LORE_INTERVAL_S)
+
+
 @app.on_event("startup")
 def startup():
     init_db()
+    threading.Thread(target=_lore_generator, daemon=True).start()
 
 
 @app.get("/health")
