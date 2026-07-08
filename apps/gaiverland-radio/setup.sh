@@ -816,7 +816,8 @@ def download_models():
         dest = MODELS_DIR / pathlib.Path(url).name
         if not dest.exists():
             print(f"  → Téléchargement modèle Essentia : {dest.name} (~{40 if 'effnet' in name else 2}Mo)...")
-            subprocess.run(["wget", "-q", "--show-progress", "-O", str(dest), url], check=True)
+            import urllib.request  # stdlib — évite wget (absent de l'image analyzer → crash-loop)
+            urllib.request.urlretrieve(url, str(dest))
             print(f"  ✓ {dest.name}")
     # Charger les labels genre
     labels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_labels"]).name
