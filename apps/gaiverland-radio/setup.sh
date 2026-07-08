@@ -2145,6 +2145,30 @@ def apply_radio(mp3_bytes: bytes, label: str) -> pathlib.Path:
 
 
 # ── Génération d'une phrase (avec cache + quota) ──────────────────────────────
+_el_credits = {"pct": None, "at": 0.0}
+
+
+def el_credits_pct():
+    """% de crédits ElevenLabs restants via /v1/user/subscription (caché 5 min, None si indispo)."""
+    now = time.time()
+    if _el_credits["at"] and now - _el_credits["at"] < 300:
+        return _el_credits["pct"]
+    pct = None
+    try:
+        r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+        if r.status_code == 200:
+            d = r.json()
+            limit = d.get("character_limit") or 0
+            used = d.get("character_count") or 0
+            if limit > 0:
+                pct = max(0.0, 100.0 * (limit - used) / limit)
+    except Exception as e:
+        print(f"  ⚠ crédits EL: check impossible ({e})")
+    _el_credits.update(pct=pct, at=now)
+    return pct
+
+
 def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
     """
     Génère ou récupère du cache un fichier audio pour le texte donné.
@@ -2161,20 +2185,25 @@ def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
         conn.close()
         return pathlib.Path(cached["audio_file"])
 
-    # 2. Quota check
+    # 2. Garde-fou crédits EL réels (spec chef 09/07 : LOG à 15 %, bascule ARCHIVES à 2 %) + quota local
     el_text = el_add_playful(text)
     needed  = len(el_text)
     remaining = quota_remaining(conn)
+    pct = el_credits_pct()  # % de crédits ElevenLabs réels (None si API indispo)
+    if pct is not None and 2.0 <= pct < 15.0:
+        print(f"  🟠 ALERTE crédits ElevenLabs : {pct:.1f}% restants (<15%) — penser à recharger")
 
-    if remaining < needed:
-        print(f"  ⚠ quota insuffisant ({remaining}/{EL_CHARS_LIMIT} restant, besoin {needed})")
+    low_credits = (pct is not None and pct < 2.0)
+    if low_credits or remaining < needed:
+        why = f"crédits EL {pct:.1f}% (<2%)" if low_credits else f"quota local {remaining}/{EL_CHARS_LIMIT}"
+        print(f"  🔴 bascule ARCHIVES ({why}) — jamais 0, jamais local")
         fallback = library_random_fallback(conn, category)
         conn.close()
         if fallback:
-            print(f"  ↩ fallback bibliothèque [{category}] → {fallback['id']}")
+            print(f"  ↩ fallback archives [{category}] → {fallback['id']}")
             return pathlib.Path(fallback["audio_file"])
         raise RuntimeError(
-            f"Quota EL épuisé ({remaining} chars restants) et aucun fallback en cache pour [{category}]"
+            f"Bascule archives impossible ({why}) : aucun fallback en cache pour [{category}]"
         )
 
     # 3. Appel EL API
