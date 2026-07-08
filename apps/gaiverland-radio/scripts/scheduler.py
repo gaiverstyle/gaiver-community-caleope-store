@@ -6,7 +6,7 @@ Stratégie playlist :
   - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 3 min
   - "Rebexis"       (once_per_x_songs)  : jingles de Rebexis générés à l'avance
 """
-import os, sys, subprocess, time, datetime
+import os, sys, subprocess, time, datetime, unicodedata
 from zoneinfo import ZoneInfo
 LOCAL_TZ = ZoneInfo("Europe/Paris")
 
@@ -248,11 +248,21 @@ def maybe_generate_rebexis():
 _recorded_sh: set = set()  # sh_id AzuraCast déjà enregistrés (dédup)
 
 
+def _norm(s: str) -> str:
+    """Normalise pour un matching robuste : retire accents (NFKD), ne garde que
+    l'alphanumérique, minuscules. Indispensable car les titres accentués sont
+    parfois corrompus en base ('Dernière' -> 'Dernie?re') → le match exact
+    échouait → le morceau n'était pas enregistré → il repassait en boucle."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
 def record_plays():
     """Enregistre dans play_history les morceaux réellement diffusés (source de
     vérité = historique AzuraCast). Sans ça, l'anti-répétition du moteur de
     playlist n'a rien à exclure → les titres se répètent en journée.
-    Dédup par sh_id (identifiant unique de lecture AzuraCast).
+    Dédup par sh_id ; matching titre/artiste NORMALISÉ (robuste accents/encodage).
     Tout est encapsulé : une erreur DB/réseau ne doit jamais tuer la boucle."""
     try:
         np = now_playing()
@@ -262,31 +272,48 @@ def record_plays():
         if np.get("now_playing"):
             entries.append(np["now_playing"])
         entries += (np.get("song_history") or [])
+        pending = [(e.get("sh_id"), e.get("song") or {}) for e in entries
+                   if e.get("sh_id") and e.get("sh_id") not in _recorded_sh]
+        if not pending:
+            return
 
         recorded = 0
         conn = get_conn()
         try:
-            for e in entries:
-                sh_id = e.get("sh_id")
-                if not sh_id or sh_id in _recorded_sh:
-                    continue
-                song   = e.get("song") or {}
-                title  = (song.get("title") or "").strip()
-                artist = (song.get("artist") or "").strip()
-                if not title:
-                    continue
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT id FROM tracks
-                        WHERE lower(trim(title)) = lower(%s)
-                          AND lower(trim(COALESCE(artist,''))) = lower(%s)
-                        LIMIT 1
-                    """, (title, artist))
-                    row = cur.fetchone()
-                    if row:
-                        cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (row["id"],))
-                        recorded += 1
-                _recorded_sh.add(sh_id)
+            # Index : exact (titre,artiste) + par artiste pour le prefix-match
+            by_ta = {}          # (nt, na) -> id
+            by_artist = {}      # na -> [(nt, id)]
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, title, artist FROM tracks WHERE analyzed=TRUE")
+                for r in cur.fetchall():
+                    nt = _norm(r["title"])
+                    if not nt:
+                        continue
+                    na = _norm(r.get("artist") or "")
+                    by_ta[(nt, na)] = r["id"]
+                    by_artist.setdefault(na, []).append((nt, r["id"]))
+
+            def _match(nt, na):
+                if (nt, na) in by_ta:                  # match exact
+                    return by_ta[(nt, na)]
+                best = None                            # sinon préfixe (même artiste) :
+                for cnt, cid in by_artist.get(na, []): # gère les suffixes AzuraCast
+                    if len(cnt) < 8 or len(nt) < 8:    # (feat., [Clean], (Bass Boosted)…)
+                        continue                       # trop court = risque de faux positif
+                    if nt.startswith(cnt) or cnt.startswith(nt):
+                        if best is None or len(cnt) > best[1]:
+                            best = (cid, len(cnt))
+                return best[0] if best else None
+
+            with conn.cursor() as cur:
+                for sh_id, song in pending:
+                    nt = _norm(song.get("title") or "")
+                    if nt:
+                        tid = _match(nt, _norm(song.get("artist") or ""))
+                        if tid:
+                            cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (tid,))
+                            recorded += 1
+                    _recorded_sh.add(sh_id)
             conn.commit()
         finally:
             conn.close()
