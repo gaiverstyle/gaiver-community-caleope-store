@@ -138,6 +138,36 @@ def apply_energy_guard(mood: str, bpm: float, energy: float) -> str:
     return mood
 
 
+# Mots-clés qui trahissent un style dur (nuit uniquement, 22h-06h)
+_HARD_HINTS = (
+    "frenchcore", "hardcore", "hardstyle", "uptempo", "gabber", "rawstyle",
+    "terror", "speedcore", "tekstyle", "hardbass", "hard bass", "makina",
+    "happy hardcore", "hard techno", "hard trance", "mainstream hardcore",
+    "hard dance", "donk",
+)
+
+
+def apply_hard_genre_guard(mood: str, title: str, genre_top1: str, genre_top2: str) -> str:
+    """Titre OU genre trahissant un style dur → nuit (intense), quel que soit le BPM.
+    Indispensable car les frenchcore/hardstyle (~200 BPM) sont souvent détectés à
+    demi-tempo (~100 BPM) et/ou mal classés (ex: 'Tribal') → l'inférence BPM/genre
+    les laissait fuiter en journée. Le titre est le signal le plus fiable
+    ('... Frenchcore Remix', 'Hardstyle Edit')."""
+    hay = f"{title} {genre_top1} {genre_top2}".lower()
+    if any(h in hay for h in _HARD_HINTS):
+        return "intense"
+    return mood
+
+
+def apply_half_tempo_guard(mood: str, bpm: float, energy: float) -> str:
+    """Hard music détecté à demi-tempo : énergie très haute avec un BPM anormalement
+    bas pour de la journée (le vrai tempo est ~2x). Un vrai titre de jour à 90-108 BPM
+    est downtempo/doux, pas à énergie ≥ 0.88 → on bascule en nuit."""
+    if mood in ("festival", "energique", "melodique") and energy >= 0.88 and 90 <= bpm <= 108:
+        return "intense"
+    return mood
+
+
 def analyze_file(path: str) -> dict:
     try:
         # ── Chargement audio ─────────────────────────────────────────
@@ -221,6 +251,10 @@ def analyze_file(path: str) -> dict:
         artist   = str(meta.get("artist", [""])[0]) or "Inconnu"
         album    = str(meta.get("album",  [""])[0]) or ""
         duration = float(features["metadata.audio_properties.length"])
+
+        # Gardes anti-fuite hard en journée (titre fiable + demi-tempo)
+        mood = apply_hard_genre_guard(mood, title, genre_top1, genre_top2)
+        mood = apply_half_tempo_guard(mood, bpm, energy_norm)
 
         return {
             "file_path": path, "title": title, "artist": artist, "album": album,
