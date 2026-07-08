@@ -25,6 +25,17 @@ mkdir -p "${CONFIG_DIR}" "${SCRIPTS_DIR}" \
          "${STORAGE_PATH}/essentia-models" "${STORAGE_PATH}/backups" \
          "${CALEOPE_BASE_DIR}/app-data/azuracast/stations"
 
+# ── Scripts applicatifs : source → app-config (montés read-only dans les conteneurs) ──
+# CAUSE RACINE des "mises à jour qui n'arrivent jamais" : sans cette copie, un reinstall
+# ne rafraîchit PAS le code des services (app-config/scripts reste figé au 1er install).
+# On copie depuis le dossier source de l'app, résolu via BASH_SOURCE (= cache du store,
+# rafraîchi par `caleope update`). Restart des conteneurs ensuite pour charger le nouveau code.
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -d "${SRC_DIR}/scripts" ]; then
+    cp -f "${SRC_DIR}/scripts/"*.py "${SCRIPTS_DIR}/" 2>/dev/null || true
+    echo "  ✓ scripts .py synchronisés depuis le store → app-config"
+fi
+
 # ── Dockerfiles (pip baked in image — évite 700MB/container de writable layer) ──
 cat > "${CONFIG_DIR}/dockerfiles/api/Dockerfile" <<'EOF'
 FROM python:3.12-slim
