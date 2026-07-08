@@ -306,12 +306,17 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .soon{opacity:.75;text-align:center;padding:26px 10px;font-style:italic;font-size:16px}
 footer{text-align:center;margin-top:44px;font-size:13px;opacity:.65;font-style:italic}
 footer .c15{margin-top:6px;font-size:12px}
-.hero{position:relative;width:100%;aspect-ratio:16/9;border-radius:16px;overflow:hidden;
-  background:rgba(0,0,0,.35);box-shadow:0 10px 40px rgba(0,0,0,.45);margin:4px 0 18px}
-.hero-layer{position:absolute;inset:0;background-size:cover;background-position:center;
-  opacity:0;transition:opacity 1.6s ease;will-change:opacity,transform}
-.hero-layer.on{opacity:1;animation:kenburns 14s ease-in-out infinite alternate}
-@keyframes kenburns{from{transform:scale(1.03)}to{transform:scale(1.13) translate(-2%,-1.5%)}}
+.hero{position:relative;width:100%;aspect-ratio:4/3;border-radius:16px;overflow:hidden;
+  background:#1a1030;box-shadow:0 10px 40px rgba(0,0,0,.45);margin:4px 0 16px}
+.hero-bg{position:absolute;inset:0;background-size:cover;background-position:center;
+  filter:brightness(.5) saturate(1.15);transform:scale(1.06);transition:background-image .5s ease}
+.hero-fg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;padding:22px;text-align:center}
+.hero-cover{width:min(48%,240px);aspect-ratio:1;border-radius:12px;object-fit:cover;
+  box-shadow:0 14px 44px rgba(0,0,0,.65);background:rgba(0,0,0,.35)}
+.hero-t{font-size:clamp(17px,3.2vw,24px);font-weight:bold;line-height:1.2;
+  text-shadow:0 2px 14px rgba(0,0,0,.9);max-width:92%}
+.hero-a{font-size:15px;font-style:italic;opacity:.92;text-shadow:0 2px 10px rgba(0,0,0,.9)}
 .playbtn{flex:0 0 auto;width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
@@ -328,13 +333,15 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Mainstage Broadcast <span class="live-badge">EN DIRECT</span></h2>
   <div class="hero">
-    <div class="hero-layer" id="hero-a"></div>
-    <div class="hero-layer" id="hero-b"></div>
+    <div class="hero-bg" id="hero-bg"></div>
+    <div class="hero-fg">
+      <img class="hero-cover" id="hero-cover" alt="" onerror="this.style.visibility='hidden'">
+      <div class="hero-t" id="title">…</div>
+      <div class="hero-a" id="artist"></div>
+    </div>
   </div>
   <div class="np">
     <div style="flex:1;min-width:200px">
-      <div class="t" id="title">…</div>
-      <div class="a" id="artist"></div>
       <div class="meta" id="meta"></div>
       <div class="bar"><i id="prog"></i></div>
     </div>
@@ -391,32 +398,27 @@ footer .c15{margin-top:6px;font-size:12px}
 </div><script>
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
 let audioUrl="";
-let visuals=[], vi=0, heroToggle=false;
+let cityPhotos=[], bgIdx=0, lastTitle="";
 
 function togglePlay(){
   const a=document.getElementById('player');
   if(audioUrl && !a.src) a.src=audioUrl;
   if(a.paused){ a.play().catch(()=>{}); } else { a.pause(); }
 }
-// Clip in-page : slideshow (cover de l'artiste + photos de la ville) — image qui change souvent.
+// Clip in-page : composition fixe par morceau — fond Toulon + cover devant + titre dessous.
 async function loadVisuals(){
   try{
     const d=await (await fetch('/api/visuals')).json();
-    if(d.images && d.images.length) visuals=d.images;
+    const imgs=d.images||[];
+    cityPhotos = imgs.length>1 ? imgs.slice(1) : imgs;  // photos de ville (index 0 = cover)
+    if(cityPhotos.length && !document.getElementById('hero-bg').style.backgroundImage) setBg();
   }catch(e){}
 }
-function nextVisual(){
-  if(!visuals.length) return;
-  const url=visuals[vi % visuals.length]; vi++;
+function setBg(){
+  if(!cityPhotos.length) return;
+  const url=cityPhotos[bgIdx % cityPhotos.length];
   const img=new Image();
-  img.onload=()=>{
-    const a=document.getElementById('hero-a'), b=document.getElementById('hero-b');
-    const show=heroToggle?b:a, hide=heroToggle?a:b;
-    show.style.backgroundImage="url('"+url.replace(/'/g,'%27')+"')";
-    show.classList.add('on'); hide.classList.remove('on');
-    heroToggle=!heroToggle;
-  };
-  img.onerror=()=>{};  // image cassée → on garde l'actuelle, l'image suivante passera au prochain tick
+  img.onload=()=>{ document.getElementById('hero-bg').style.backgroundImage="url('"+url.replace(/'/g,'%27')+"')"; };
   img.src=url;
 }
 async function refresh(){
@@ -425,6 +427,8 @@ async function refresh(){
     const t=d.track||{};
     document.getElementById('title').textContent=t.title||'Gaiverland Radio';
     document.getElementById('artist').textContent=t.artist||'';
+    if(d.art) document.getElementById('hero-cover').src=d.art;
+    if(t.title && t.title!==lastTitle){ lastTitle=t.title; bgIdx++; setBg(); }  // nouveau fond Toulon par morceau
     const l=d.listeners?d.listeners+' personne(s) dans la foule':'';
     document.getElementById('meta').textContent=l;
     // Media Session — titre/artiste/cover sur l'écran verrouillé + widgets média de l'OS
@@ -469,8 +473,8 @@ async function vote(v){
    navigator.mediaSession.setActionHandler('pause',()=>document.getElementById('player').pause());
  }})();
 refresh();loadEvents();
-loadVisuals().then(()=>{ nextVisual(); setInterval(nextVisual,7000); });
-setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,45000);
+loadVisuals();
+setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);
 </script></body></html>"""
 
 
