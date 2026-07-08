@@ -360,17 +360,31 @@ function togglePlay(){
 }
 function startVideo(){
   const v=document.getElementById('clip');
+  const off=document.getElementById('clip-offline'); if(off) off.style.display='none';
+  v.style.display='';
   if(videoReady){ v.play().catch(()=>{}); return; }
+  v.onerror=()=>showClipOffline();
   if(v.canPlayType('application/vnd.apple.mpegurl')){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); }
   else if(window.Hls){ attachHls(v); }
   else { const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/hls.js@1';
-         s.onload=()=>attachHls(v); document.head.appendChild(s); }
+         s.onload=()=>attachHls(v); s.onerror=()=>showClipOffline(); document.head.appendChild(s); }
   maybeShowPip();
 }
 function attachHls(v){
   if(!window.Hls||!Hls.isSupported()){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); return; }
   hls=new Hls({lowLatencyMode:true}); hls.loadSource(CLIP_HLS); hls.attachMedia(v);
   hls.on(Hls.Events.MANIFEST_PARSED,()=>{ videoReady=true; v.play().catch(()=>{}); });
+  hls.on(Hls.Events.ERROR,(e,data)=>{ if(data && data.fatal) showClipOffline(); });
+}
+function showClipOffline(){
+  stopVideo();
+  const v=document.getElementById('clip'); if(v) v.style.display='none';
+  const pip=document.getElementById('pipbtn'); if(pip) pip.style.display='none';
+  let m=document.getElementById('clip-offline');
+  if(!m){ m=document.createElement('div'); m.id='clip-offline'; m.className='soon';
+    m.innerHTML="📴 Le clip vidéo est hors ligne pour le moment.<br>La radio, elle, ne s'arrête jamais — repasse en 🎧 Audio.";
+    document.getElementById('pane-video').appendChild(m); }
+  m.style.display='';
 }
 function stopVideo(){
   const v=document.getElementById('clip'); v.pause();
@@ -395,6 +409,14 @@ async function refresh(){
     const l=d.listeners?d.listeners+' personne(s) dans la foule':'';
     document.getElementById('meta').textContent=l;
     if(d.art){const a=document.getElementById('art');a.src=d.art;a.style.visibility='visible';}
+    // Media Session — titre/artiste/cover sur l'écran verrouillé + widgets média de l'OS
+    if('mediaSession' in navigator && (t.title||t.artist)){
+      navigator.mediaSession.metadata=new MediaMetadata({
+        title:t.title||'Gaiverland Radio', artist:t.artist||'Gaiverland Radio',
+        album:'Gaiverland — le festival permanent',
+        artwork:d.art?[{src:d.art,sizes:'512x512',type:'image/jpeg'}]:[]
+      });
+    }
     if(t.duration>0){document.getElementById('prog').style.width=Math.min(100,100*t.elapsed/t.duration)+'%';}
     if(d.stream_url){audioUrl=d.stream_url;}
     const s=d.state||{};
@@ -422,7 +444,12 @@ async function vote(v){
   setTimeout(()=>m.textContent='',6000);
 }
 (function(){const a=document.getElementById('player'),b=document.getElementById('playbtn');
- a.addEventListener('play',()=>b.textContent='⏸');a.addEventListener('pause',()=>b.textContent='▶');})();
+ a.addEventListener('play',()=>{b.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
+ a.addEventListener('pause',()=>{b.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused';});
+ if('mediaSession' in navigator){
+   navigator.mediaSession.setActionHandler('play',()=>{ mode==='video'?startVideo():togglePlay(); });
+   navigator.mediaSession.setActionHandler('pause',()=>{ a.pause(); const c=document.getElementById('clip'); if(c) c.pause(); });
+ }})();
 refresh();loadEvents();
 setInterval(refresh,10000);setInterval(loadEvents,30000);
 </script></body></html>"""
