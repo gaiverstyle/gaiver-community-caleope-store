@@ -336,6 +336,44 @@ def vote(request: Request, body: dict = Body(...)):
         return {"ok": False, "error": str(e)[:60]}
 
 
+@app.post("/api/propose")
+def propose(request: Request, body: dict = Body(...)):
+    uid = _uid(request)
+    if not uid:
+        return {"ok": False, "error": "login requis", "need_login": True}
+    title = str(body.get("title", "")).strip()[:200]
+    if len(title) < 2:
+        return {"ok": False, "error": "titre trop court"}
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS title_proposals (
+                id SERIAL PRIMARY KEY, user_id VARCHAR(64) NOT NULL,
+                title TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())""")
+            cur.execute("INSERT INTO title_proposals (user_id, title) VALUES (%s,%s)", (uid, title))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:60]}
+
+
+@app.get("/api/proposals")
+def proposals(limit: int = 30):
+    """Propositions récentes (pour Régis / affichage). Regroupées par titre + nb de votants distincts."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT title, COUNT(DISTINCT user_id) AS n, MAX(created_at) AS last
+                           FROM title_proposals GROUP BY title ORDER BY n DESC, last DESC LIMIT %s""",
+                        (min(limit, 100),))
+            rows = cur.fetchall()
+        conn.close()
+        return {"proposals": [{"title": r["title"], "count": r["n"]} for r in rows]}
+    except Exception:
+        return {"proposals": []}
+
+
 PAGE = """<!doctype html>
 <html lang="fr"><head>
 <meta charset="utf-8">
@@ -397,6 +435,10 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .authbtn.g{background:#fff}
 .authbtn.d{background:#5865F2;color:#fff}
 .authlink{color:var(--cream);opacity:.55;font-size:12px}
+.propose{display:flex;gap:8px;flex-wrap:wrap}
+.propose input{flex:1;min-width:200px;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,244,230,.3);background:rgba(255,244,230,.08);color:var(--cream);font-family:Georgia,serif;font-size:15px}
+.propbtn{padding:12px 18px;border:none;border-radius:12px;cursor:pointer;font-family:Georgia,serif;font-size:15px;color:var(--ink);background:linear-gradient(135deg,#c9b6ff,#a48fff);font-weight:700}
+.propmsg{font-size:14px;margin-top:10px;font-style:italic;min-height:18px;opacity:.9}
 .stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
 .stage{border-radius:14px;padding:18px 14px;text-align:center;position:relative;
   border:1px dashed rgba(255,244,230,.35)}
@@ -469,6 +511,15 @@ footer .c15{margin-top:6px;font-size:12px}
     <button class="v-skip"   onclick="vote('SKIP')">⏭ PASSER</button>
   </div>
   <div class="votemsg" id="votemsg"></div>
+</div>
+
+<div class="card">
+  <h2>Propose un titre 🎶</h2>
+  <div class="propose">
+    <input id="proptitle" type="text" placeholder="Artiste — Titre" maxlength="200">
+    <button class="propbtn" onclick="proposeTitle()">Envoyer au convoi 🚐</button>
+  </div>
+  <div class="propmsg" id="propmsg"></div>
 </div>
 
 <div class="card">
@@ -591,6 +642,18 @@ async function loadAuth(){
       bar.innerHTML='<span class="authtxt">Connecte-toi pour voter :</span> <a class="authbtn g" href="/api/auth/google">Google</a> <a class="authbtn d" href="/api/auth/discord">Discord</a>';
     }
   }catch(e){}
+}
+async function proposeTitle(){
+  const inp=document.getElementById('proptitle'), m=document.getElementById('propmsg');
+  const title=(inp.value||'').trim();
+  if(title.length<2){ m.textContent='Écris un titre (artiste + titre).'; return; }
+  try{
+    const r=await (await fetch('/api/propose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title})})).json();
+    if(r.need_login){ m.textContent='Connecte-toi pour proposer 👆'; return; }
+    m.textContent=r.ok?'Proposé ! Le convoi transmet à Régis. ✦':('Hmm… '+(r.error||'réessaye'));
+    if(r.ok) inp.value='';
+  }catch(e){ m.textContent='Le stagiaire a mangé la proposition. Réessaye.'; }
+  setTimeout(()=>m.textContent='',6000);
 }
 (function(){const a=document.getElementById('player'),b=document.getElementById('playbtn');
  a.addEventListener('play',()=>{b.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
