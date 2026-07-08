@@ -144,7 +144,8 @@ _visuals_cache = {"city": "", "at": 0.0, "imgs": []}
 
 
 def _city_photos(city: str):
-    """Photos de la ville du festival — best-effort via Openverse (CC), caché 30 min, fail-safe."""
+    """Photos de la ville du festival — via Wikipedia REST media-list (fr), caché 30 min, fail-safe.
+    On filtre sur les JPG (écarte cartes/blasons/SVG) et on prend la plus grande vignette dispo."""
     if not city:
         return []
     now = time.time()
@@ -152,15 +153,23 @@ def _city_photos(city: str):
         return _visuals_cache["imgs"]
     imgs = []
     try:
-        r = httpx.get("https://api.openverse.org/v1/images/",
-                      params={"q": city, "page_size": 15, "mature": "false"},
+        r = httpx.get(f"https://fr.wikipedia.org/api/rest_v1/page/media-list/{city}",
                       headers={"User-Agent": "GaiverlandRadio/1.0 (festival visuals)"},
                       timeout=6)
         if r.status_code == 200:
-            for it in r.json().get("results", []):
-                u = it.get("url") or ""
-                if u.startswith("https://"):
-                    imgs.append(u)
+            for m in r.json().get("items", []):
+                if m.get("type") != "image":
+                    continue
+                srcset = m.get("srcset") or []
+                if not srcset:
+                    continue
+                src = srcset[-1].get("src", "")  # la plus grande vignette dispo
+                if src.startswith("//"):
+                    src = "https:" + src
+                if src.lower().endswith((".jpg", ".jpeg")):
+                    imgs.append(src)
+                if len(imgs) >= 15:
+                    break
     except Exception:
         pass
     _visuals_cache.update(city=city, at=now, imgs=imgs)
