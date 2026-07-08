@@ -1889,18 +1889,23 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8081)
 PYEOF
 
-# ── elevenlabs.env — variables API ElevenLabs ────────────────────────────
-cat > "${CONFIG_DIR}/elevenlabs.env" <<'ENVEOF'
+# ── elevenlabs.env — variables API ElevenLabs (idempotent : préserve clé/voice existantes) ──
+EL_KEY_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_API_KEY)"
+{ [ -n "$EL_KEY_VAL" ] && [ "$EL_KEY_VAL" != "your_elevenlabs_api_key_here" ]; } || EL_KEY_VAL="${CALEOPE_PARAM_ELEVENLABS_API_KEY:-your_elevenlabs_api_key_here}"
+EL_VOICE_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_VOICE_ID)"
+{ [ -n "$EL_VOICE_VAL" ] && [ "$EL_VOICE_VAL" != "your_voice_id_here" ]; } || EL_VOICE_VAL="${CALEOPE_PARAM_ELEVENLABS_VOICE_ID:-your_voice_id_here}"
+cat > "${CONFIG_DIR}/elevenlabs.env" <<ENVEOF
 # Clé API ElevenLabs (https://elevenlabs.io → Profile → API Keys)
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_API_KEY=${EL_KEY_VAL}
 # ID de la voix Rebexis (ElevenLabs → Voices → ta voix → ID)
-ELEVENLABS_VOICE_ID=your_voice_id_here
+ELEVENLABS_VOICE_ID=${EL_VOICE_VAL}
 # Modèle recommandé pour le français expressif
 ELEVENLABS_MODEL=eleven_v3
 # Limite mensuelle en caractères (plan gratuit = 10000)
 EL_CHARS_LIMIT=10000
 ENVEOF
-echo "  ✓ elevenlabs.env (à remplir avec tes clés EL)"
+chmod 600 "${CONFIG_DIR}/elevenlabs.env"
+echo "  ✓ elevenlabs.env (clé/voice préservées si déjà posées)"
 
 # ── tts_worker.py — ElevenLabs API + bibliothèque de phrases cachées ─────
 cat > "${SCRIPTS_DIR}/tts_worker.py" <<'PYEOF'
