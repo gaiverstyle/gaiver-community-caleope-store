@@ -1177,6 +1177,7 @@ def main():
     load_models()
 
     conn = get_conn()
+    conn.autocommit = True  # jamais de transaction ouverte (idle-in-transaction) → évite le lock sur 'tracks' qui bloquait le state-engine
     with conn.cursor() as cur:
         cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
         known = {r[0] for r in cur.fetchall()}
@@ -1213,6 +1214,7 @@ def main():
                     conn.cursor().execute("SELECT 1")
                 except Exception:
                     conn = get_conn()
+                    conn.autocommit = True
                 # Reconstruire le chemin complet avec le dossier de l'event
                 event_dir = wd_to_dir.get(event.wd, WATCH_DIR)
                 fp = os.path.join(event_dir, name)
