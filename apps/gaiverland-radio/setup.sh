@@ -698,6 +698,39 @@ def batch_assign_playlist(file_ids: list, playlist_ids: list) -> bool:
         return False
 
 
+def remove_files_from_playlist(file_ids: list, playlist_id: int) -> int:
+    """Retire des fichiers (az_id) d'une playlist SANS toucher à leurs autres
+    playlists. Le batch AzuraCast étant additif, le retrait se fait fichier par
+    fichier via PUT (mêmes semantics que replace_playlist). Retourne le nombre
+    de fichiers effectivement retirés."""
+    if not _ok() or not file_ids:
+        return 0
+    removed = 0
+    try:
+        all_rows = _get_all_files()
+        id_to_path = {row["id"]: row["path"] for row in all_rows if "id" in row and "path" in row}
+        path_to_playlists = {row["path"]: [p["id"] for p in row.get("playlists", [])] for row in all_rows}
+        for fid in file_ids:
+            path = id_to_path.get(fid)
+            if not path:
+                continue
+            current = path_to_playlists.get(path, [])
+            if playlist_id not in current:
+                continue  # déjà absent de la playlist
+            keep = [p for p in current if p != playlist_id]
+            try:
+                r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/file/{fid}",
+                              headers=_headers(), json={"playlists": keep}, timeout=10)
+                if r.status_code < 400:
+                    removed += 1
+            except Exception:
+                pass
+        return removed
+    except Exception as e:
+        print(f"  ⚠ remove_files_from_playlist: {e}")
+        return 0
+
+
 def find_file_by_path(path: str) -> Optional[dict]:
     """Cherche un fichier AzuraCast par son nom."""
     if not _ok():
@@ -745,6 +778,85 @@ def now_playing() -> Optional[dict]:
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
+
+
+def get_queue(limit: int = 6) -> list:
+    """Retourne les prochaines pistes planifiées dans la queue AzuraCast."""
+    if not _ok():
+        return []
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/queue",
+                      headers=_headers(), timeout=5)
+        items = r.json() if r.status_code == 200 else []
+        return items[:limit] if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def update_playlist(playlist_id: int, **kwargs) -> bool:
+    """Met à jour les propriétés d'une playlist AzuraCast (weight, is_enabled, etc.)."""
+    if not _ok():
+        return False
+    try:
+        r = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/playlist/{playlist_id}",
+                      headers=_headers(), json=kwargs, timeout=_TIMEOUT)
+        return r.status_code < 400
+    except Exception as e:
+        print(f"  warning update_playlist: {e}")
+        return False
+
+
+def _get_all_files() -> list:
+    """Récupère tous les fichiers de la station (max 1000)."""
+    try:
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/files",
+                      headers=_headers(), params={"rowsPerPage": 1000}, timeout=30)
+        rows = r.json() if r.status_code == 200 else []
+        return rows.get("rows", rows) if isinstance(rows, dict) else rows
+    except Exception:
+        return []
+
+
+def replace_playlist(file_ids: list, playlist_id: int,
+                     prev_az_ids: list = None) -> bool:
+    """
+    Remplace le contenu de la playlist par file_ids.
+    - Retire prev_az_ids de la playlist via PUT individuel (si fournis)
+    - Ajoute les nouveaux via batch assign
+    Note: le batch AzuraCast (do=playlist) est additif. Le retrait se fait fichier par fichier.
+    """
+    if not _ok() or not file_ids:
+        return False
+    try:
+        all_rows = _get_all_files()
+        id_to_path = {row["id"]: row["path"] for row in all_rows if "id" in row and "path" in row}
+        path_to_playlists = {row["path"]: [p["id"] for p in row.get("playlists", [])] for row in all_rows}
+
+        # Retirer prev_az_ids de la playlist si c'est une rotation
+        to_remove = [fid for fid in (prev_az_ids or []) if fid not in file_ids and fid in id_to_path]
+        for fid in to_remove[:20]:  # max 20 suppressions par cycle pour limiter la charge
+            path = id_to_path[fid]
+            current_pls = [p for p in path_to_playlists.get(path, []) if p != playlist_id]
+            try:
+                httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/file/{fid}",
+                          headers=_headers(), json={"playlists": current_pls}, timeout=10)
+            except Exception:
+                pass
+
+        # Ajouter les nouveaux
+        new_paths = [id_to_path[fid] for fid in file_ids if fid in id_to_path]
+        if not new_paths:
+            return False
+        r2 = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch",
+                       headers=_headers(),
+                       json={"do": "playlist", "files": new_paths,
+                             "playlists": [str(playlist_id)]},
+                       timeout=30)
+        d = r2.json() if r2.status_code in (200, 201) else {}
+        return bool(d.get("success", False))
+    except Exception as e:
+        print(f"  ⚠ replace_playlist: {e}")
+        return False
 PYEOF
 
 # ── analyzer.py — Essentia + Discogs 400 genres ───────────────────────
@@ -760,8 +872,8 @@ MODELS_DIR = pathlib.Path(os.environ.get("ESSENTIA_MODELS_DIR", "/essentia-model
 
 DISCOGS_MODELS = {
     "effnet_embed": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb",
-    "genre_multi":  "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
-    "genre_labels": "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
+    
+    "genre_labels": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.json",
 }
 
 # Mapping genres Discogs → moods Gaiverland
@@ -770,6 +882,10 @@ GENRE_TO_MOOD = {
     "Hardstyle": "intense", "Hardcore": "intense", "Gabber": "intense",
     "Hard Techno": "intense", "Industrial": "intense", "Speedcore": "intense",
     "UK Hardcore": "intense", "Frenchcore": "intense",
+    "Hardbass": "intense", "Hard Bass": "intense", "Rawstyle": "intense",
+    "Uptempo": "intense", "Terrorcore": "intense", "Hard Dance": "intense",
+    "Hard House": "intense", "Schranz": "intense", "Makina": "intense",
+    "Donk": "intense", "Jump Up": "intense",
     # Festival / Big energy
     "Trance": "festival", "Euro House": "festival", "Happy Hardcore": "festival",
     "Jumpstyle": "festival", "Electro House": "festival", "Big Room": "festival",
@@ -789,6 +905,9 @@ GENRE_TO_MOOD = {
 }
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a"}
+
+# Préfixes de fichiers à exclure de l'analyse (jingles, TTS, etc.)
+SKIP_PREFIXES = ("rebexis_",)
 
 
 def install_deps():
@@ -824,8 +943,7 @@ def download_models():
         dest = MODELS_DIR / pathlib.Path(url).name
         if not dest.exists():
             print(f"  → Téléchargement modèle Essentia : {dest.name} (~{40 if 'effnet' in name else 2}Mo)...")
-            import urllib.request  # stdlib — évite wget (absent de l'image analyzer → crash-loop)
-            urllib.request.urlretrieve(url, str(dest))
+            import urllib.request; print(f"  → download {url}"); urllib.request.urlretrieve(url, str(dest))
             print(f"  ✓ {dest.name}")
     # Charger les labels genre
     labels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_labels"]).name
@@ -839,15 +957,11 @@ def download_models():
 def load_models():
     global _effnet_model, _genre_model
     effnet_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["effnet_embed"]).name
-    genre_path  = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_multi"]).name
+    # Utiliser le même modèle effnet pour la classification directe (PartitionedCall:0)
     _effnet_model = es.TensorflowPredictEffnetDiscogs(
-        graphFilename=str(effnet_path), output="PartitionedCall:1"
+        graphFilename=str(effnet_path), output="PartitionedCall:0"
     )
-    _genre_model = es.TensorflowPredict2D(
-        graphFilename=str(genre_path),
-        input="serving_default_model_Placeholder:0",
-        output="PartitionedCall:0"
-    )
+    _genre_model = _effnet_model  # Alias — même modèle, output direct
     print("  ✓ Modèles Essentia chargés en mémoire")
 
 
@@ -862,6 +976,59 @@ def infer_mood_from_bpm_energy(bpm: float, energy: float) -> str:
     elif bpm > 110:
         return "melodique"
     return "nocturne"
+
+
+def apply_bpm_guard(mood: str, bpm: float) -> str:
+    """Corrige les incohérences flagrantes BPM/mood après classification genre.
+    Évite ex: Happy Hardcore 161 BPM → festival, ou House 104 BPM → festival.
+    """
+    if mood in ("festival", "energique", "intense") and bpm < 112:
+        return "melodique"
+    if mood in ("festival", "energique") and bpm >= 150:
+        return "intense"
+    if mood == "intense" and bpm < 115:
+        return "festival"
+    if mood in ("nocturne", "melodique") and bpm > 165:
+        return "intense"  # double-tempo probable mais safe fallback
+    return mood
+
+
+def apply_energy_guard(mood: str, bpm: float, energy: float) -> str:
+    """Gros kick + loudness écrasée = hard music même sous 150 BPM
+    (hardbass, rawstyle mid-tempo). Réservé à la nuit via mood=intense."""
+    if mood in ("festival", "energique") and energy >= 0.82 and bpm >= 138:
+        return "intense"
+    return mood
+
+
+# Mots-clés qui trahissent un style dur (nuit uniquement, 22h-06h)
+_HARD_HINTS = (
+    "frenchcore", "hardcore", "hardstyle", "uptempo", "gabber", "rawstyle",
+    "terror", "speedcore", "tekstyle", "hardbass", "hard bass", "makina",
+    "happy hardcore", "hard techno", "hard trance", "mainstream hardcore",
+    "hard dance", "donk",
+)
+
+
+def apply_hard_genre_guard(mood: str, title: str, genre_top1: str, genre_top2: str) -> str:
+    """Titre OU genre trahissant un style dur → nuit (intense), quel que soit le BPM.
+    Indispensable car les frenchcore/hardstyle (~200 BPM) sont souvent détectés à
+    demi-tempo (~100 BPM) et/ou mal classés (ex: 'Tribal') → l'inférence BPM/genre
+    les laissait fuiter en journée. Le titre est le signal le plus fiable
+    ('... Frenchcore Remix', 'Hardstyle Edit')."""
+    hay = f"{title} {genre_top1} {genre_top2}".lower()
+    if any(h in hay for h in _HARD_HINTS):
+        return "intense"
+    return mood
+
+
+def apply_half_tempo_guard(mood: str, bpm: float, energy: float) -> str:
+    """Hard music détecté à demi-tempo : énergie très haute avec un BPM anormalement
+    bas pour de la journée (le vrai tempo est ~2x). Un vrai titre de jour à 90-108 BPM
+    est downtempo/doux, pas à énergie ≥ 0.88 → on bascule en nuit."""
+    if mood in ("festival", "energique", "melodique") and energy >= 0.88 and 90 <= bpm <= 108:
+        return "intense"
+    return mood
 
 
 def analyze_file(path: str) -> dict:
@@ -905,10 +1072,9 @@ def analyze_file(path: str) -> dict:
         genre_scores = {}
         mood = "energique"  # default
 
-        if _effnet_model and _genre_model and _genre_labels:
+        if _effnet_model and _genre_labels:
             try:
-                embeddings   = _effnet_model(audio_16k)
-                predictions  = _genre_model(embeddings)
+                predictions  = _effnet_model(audio_16k)
                 mean_scores  = np.mean(predictions, axis=0)
 
                 # Top 10 genres par score
@@ -938,12 +1104,20 @@ def analyze_file(path: str) -> dict:
         else:
             mood = infer_mood_from_bpm_energy(bpm, energy_norm)
 
+        # Garde BPM : corrige les incohérences flagrantes genre/BPM
+        mood = apply_bpm_guard(mood, bpm)
+        mood = apply_energy_guard(mood, bpm, energy_norm)
+
         # ── Métadonnées ID3/tags ──────────────────────────────────────
         meta = mutagen.File(path, easy=True) or {}
         title    = str(meta.get("title",  [""])[0]) or os.path.basename(path)
         artist   = str(meta.get("artist", [""])[0]) or "Inconnu"
         album    = str(meta.get("album",  [""])[0]) or ""
         duration = float(features["metadata.audio_properties.length"])
+
+        # Gardes anti-fuite hard en journée (titre fiable + demi-tempo)
+        mood = apply_hard_genre_guard(mood, title, genre_top1, genre_top2)
+        mood = apply_half_tempo_guard(mood, bpm, energy_norm)
 
         return {
             "file_path": path, "title": title, "artist": artist, "album": album,
@@ -1007,11 +1181,14 @@ def main():
         cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
         known = {r[0] for r in cur.fetchall()}
 
+    def should_skip(filename: str) -> bool:
+        return filename.startswith(SKIP_PREFIXES)
+
     # Scan initial
     count = 0
     for root, _, files in os.walk(WATCH_DIR):
         for f in files:
-            if os.path.splitext(f)[1].lower() in AUDIO_EXTS:
+            if os.path.splitext(f)[1].lower() in AUDIO_EXTS and not should_skip(f):
                 fp = os.path.join(root, f)
                 if fp not in known:
                     print(f"  → {os.path.basename(fp)}")
@@ -1019,23 +1196,27 @@ def main():
                     count += 1
     print(f"  ✓ {count} fichiers analysés au démarrage")
 
-    # Surveillance inotify
+    # Surveillance inotify — dict wd→dossier pour reconstituer le chemin complet
     inotify = inotify_simple.INotify()
+    wd_to_dir = {}
     for root, _, _ in os.walk(WATCH_DIR):
-        inotify.add_watch(root, inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO)
+        wd = inotify.add_watch(root, inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO)
+        wd_to_dir[wd] = root
     print("  ✓ Surveillance temps réel active")
 
     while True:
         events = inotify.read(timeout=5000)
         for event in events:
             name = event.name.decode() if isinstance(event.name, bytes) else event.name
-            if os.path.splitext(name)[1].lower() in AUDIO_EXTS:
+            if os.path.splitext(name)[1].lower() in AUDIO_EXTS and not should_skip(name):
                 try:
                     conn.cursor().execute("SELECT 1")
                 except Exception:
                     conn = get_conn()
-                fp = os.path.join(WATCH_DIR, name)
-                print(f"  → Nouveau : {name}")
+                # Reconstruire le chemin complet avec le dossier de l'event
+                event_dir = wd_to_dir.get(event.wd, WATCH_DIR)
+                fp = os.path.join(event_dir, name)
+                print(f"  → Nouveau : {fp}")
                 time.sleep(1)
                 save_track(conn, analyze_file(fp))
                 print(f"  ✓ Analysé : {name}")
@@ -1056,39 +1237,373 @@ import os, sys, subprocess, random, json
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "fastapi", "uvicorn[standard]", "psycopg2-binary"], check=True)
+                    "fastapi", "uvicorn[standard]", "psycopg2-binary", "httpx"], check=True)
 
 try:
-    import fastapi, uvicorn, psycopg2
+    import fastapi, uvicorn, psycopg2, httpx
 except ImportError:
     install_deps()
-    import fastapi, uvicorn, psycopg2
+    import fastapi, uvicorn, psycopg2, httpx
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 import psycopg2.extras
+import datetime
 
-DB_URL = os.environ["DATABASE_URL"]
+DB_URL         = os.environ["DATABASE_URL"]
+AZ_URL         = os.environ.get("AZURACAST_URL", "http://azuracast:80")
+AZ_KEY         = os.environ.get("AZURACAST_API_KEY", "")
+AZ_STATION_ID  = int(os.environ.get("AZURACAST_STATION_ID", "1"))
 DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
+# Fenêtre anti-répétition : un titre joué dans les N dernières heures est exclu
+# de la sélection. 11h couvre toute la journée de travail (8h-18h) avec marge →
+# aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
+# est assez grand pour remplir la journée (~150 titres pour 10h).
+NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
 
-MOOD_TRANSITIONS = {
-    "nocturne":   ["nocturne", "melodique"],
-    "melodique":  ["melodique", "energique", "nocturne"],
-    "energique":  ["energique", "festival", "melodique"],
-    "festival":   ["festival", "intense", "energique"],
-    "intense":    ["intense", "festival", "energique"],
+# ── Config UI par défaut ───────────────────────────────────────────────────────
+DEFAULT_UI_CONFIG = {
+    "work_start":        "08:20",
+    "work_end":          "17:00",
+    "work_days":         [1, 2, 3, 4, 5],
+    "work_offset_min":   0,
+    "paused_moods":      [],   # [{"name": "intense", "until": "2026-07-01"}]
+    "paused_genres":     [],   # [{"name": "hardstyle", "until": "2026-07-05"}]
+    "playlist_weights":  {"bien_francais": 2, "decouverte": 3, "gaiverland_ia": 1},
 }
 
+# ── Dayparting — genres avec plages horaires restreintes ──────────────────────
+# Format env GENRE_HOURS : "Genre1,Genre2:HH-HH;Genre3:HH-HH"
+# Exemple : "Hardstyle,Hardcore:22-06" = seulement entre 22h et 6h
+# Genres sans restriction jouent à toute heure.
+_DEFAULT_GENRE_HOURS = "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk,Hands Up,Dubstep,Hardbass,Hard Bass,Rawstyle,Uptempo,Gabber,Frenchcore,Speedcore,Terrorcore,Hard Dance,Hard House,Schranz,Industrial:22-06"
+
+def _parse_genre_hours(raw: str) -> dict:
+    """Retourne {genre: (start_h, end_h)} pour chaque genre restreint."""
+    result = {}
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        genres_part, hours_part = entry.rsplit(":", 1)
+        if "-" not in hours_part:
+            continue
+        try:
+            start, end = [int(h.strip()) for h in hours_part.split("-", 1)]
+        except ValueError:
+            continue
+        for g in genres_part.split(","):
+            g = g.strip()
+            if g:
+                result[g] = (start, end)
+    return result
+
+GENRE_HOURS = _parse_genre_hours(
+    os.environ.get("GENRE_HOURS", _DEFAULT_GENRE_HOURS)
+)
+
+# ── Whitelist de genres — seuls ces genres électroniques sont autorisés ────────
+# Les tracks avec genre_top1 non-électronique sont filtrées (French Pop, Rap, etc.)
+# Les tracks avec genre_top1=NULL sont autorisées (Essentia n'a pas classifié → électro probable)
+# Surcharger via env GENRE_WHITELIST="Techno,House,..." pour ajuster
+_DEFAULT_GENRE_WHITELIST = (
+    "Techno,House,Trance,Progressive House,Melodic Techno,Melodic Dubstep,"
+    "Electronic,Dance,Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,"
+    "Makina,Donk,Hands Up,Dubstep,Drum and Bass,Drum n Bass,DnB,"
+    "Electro House,Big Room,Progressive,Synthwave,Industrial,Industrial Techno,"
+    "Electronica,Ambient Electronic,Future Bass,Bass House,Tech House,"
+    "Deep House,Tribal,Trance,Psy-Trance,Goa,Breakbeat,UK Garage,Speed Garage"
+)
+
+GENRE_WHITELIST: list[str] = [
+    g.strip()
+    for g in os.environ.get("GENRE_WHITELIST", _DEFAULT_GENRE_WHITELIST).split(",")
+    if g.strip()
+]
+
+
+def get_excluded_genres() -> list:
+    """Retourne la liste des genres hors de leur créneau horaire actuel."""
+    import datetime
+    now_h = datetime.datetime.now().hour
+    excluded = []
+    for genre, (start, end) in GENRE_HOURS.items():
+        if start < end:
+            # Créneau simple ex. 08-18 : autorisé si start <= h < end
+            allowed = start <= now_h < end
+        else:
+            # Créneau sur minuit ex. 22-06 : autorisé si h >= start OR h < end
+            allowed = now_h >= start or now_h < end
+        if not allowed:
+            excluded.append(genre)
+    return excluded
+
+MOOD_TRANSITIONS = {
+    # Jour : festival <-> energique uniquement, jamais d'intense
+    "festival":   ["festival", "energique"],
+    "energique":  ["energique", "festival"],
+    # Nuit : intense en priorité, festival comme buffer si stock insuffisant
+    "intense":    ["intense", "festival"],
+    # Secondaires (peu utilisés en auto)
+    "melodique":  ["melodique", "energique"],
+    "nocturne":   ["nocturne", "melodique"],
+}
+
+# ── Cohérence d'enchaînement — roue de Camelot (mixage harmonique) ────────────
+# Essentia fournit key_note (C, C#, D…) + key_scale (major/minor). On les
+# convertit en code Camelot pour évaluer la compatibilité harmonique entre deux
+# morceaux consécutifs : transitions douces = clés voisines sur la roue.
+_CAMELOT = {
+    ("C", "major"): "8B", ("G", "major"): "9B", ("D", "major"): "10B",
+    ("A", "major"): "11B", ("E", "major"): "12B", ("B", "major"): "1B",
+    ("F#", "major"): "2B", ("C#", "major"): "3B", ("G#", "major"): "4B",
+    ("D#", "major"): "5B", ("A#", "major"): "6B", ("F", "major"): "7B",
+    ("A", "minor"): "8A", ("E", "minor"): "9A", ("B", "minor"): "10A",
+    ("F#", "minor"): "11A", ("C#", "minor"): "12A", ("G#", "minor"): "1A",
+    ("D#", "minor"): "2A", ("A#", "minor"): "3A", ("F", "minor"): "4A",
+    ("C", "minor"): "5A", ("G", "minor"): "6A", ("D", "minor"): "7A",
+}
+# Normalisation enharmonique des notes renvoyées par Essentia
+_ENHARM = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+
+
+def _camelot(note: str, scale: str):
+    """(numéro 1-12, lettre 'A'/'B') ou None si tonalité inconnue."""
+    if not note or not scale:
+        return None
+    note = _ENHARM.get(note, note)
+    code = _CAMELOT.get((note, scale.lower()))
+    return (int(code[:-1]), code[-1]) if code else None
+
+
+def _key_cost(a: dict, b: dict) -> float:
+    """Coût harmonique 0 (parfait) → 1 (dissonant) entre deux morceaux."""
+    ka, kb = _camelot(a.get("key_note", ""), a.get("key_scale", "")), \
+             _camelot(b.get("key_note", ""), b.get("key_scale", ""))
+    if not ka or not kb:
+        return 0.5  # tonalité inconnue → neutre
+    (na, la_), (nb, lb) = ka, kb
+    if ka == kb:
+        return 0.0                                        # même clé
+    step = min((na - nb) % 12, (nb - na) % 12)
+    if la_ == lb and step == 1:
+        return 0.15                                       # voisin sur la roue (±1)
+    if na == nb and la_ != lb:
+        return 0.2                                        # relatif majeur/mineur
+    if la_ == lb and step == 2:
+        return 0.45                                       # saut de 2 (énergisant)
+    return 1.0                                            # dissonant
+
+
+def _transition_cost(a: dict, b: dict) -> float:
+    """Coût de passer du morceau a au morceau b (0 = transition idéale)."""
+    ba, bb = float(a.get("bpm") or 0), float(b.get("bpm") or 0)
+    if ba and bb:
+        # tolère le mixage moitié/double tempo (128 <-> 174 en DnB, etc.)
+        d = min(abs(ba - bb), abs(ba - 2 * bb), abs(2 * ba - bb))
+        bpm_cost = min(1.0, d / 16.0)                     # ~16 BPM d'écart = coût plein
+    else:
+        bpm_cost = 0.5
+    ea, eb = float(a.get("energy") or 0.5), float(b.get("energy") or 0.5)
+    energy_cost = min(1.0, abs(ea - eb) / 0.35)
+    return 0.5 * _key_cost(a, b) + 0.3 * bpm_cost + 0.2 * energy_cost
+
+
+def order_for_coherence(candidates: list, count: int, start_energy: float) -> list:
+    """Ordonne les candidats en un chemin harmonique fluide (glouton plus proche
+    voisin) : chaque morceau enchaîne sur le plus compatible (clé + BPM +
+    énergie), en évitant de répéter un artiste sur 3 titres consécutifs."""
+    pool = [dict(c) for c in candidates]
+    if not pool:
+        return []
+    # Départ : morceau le plus proche de l'énergie courante → transition douce
+    # depuis ce qui vient de jouer.
+    pool.sort(key=lambda t: abs(float(t.get("energy") or 0.5) - start_energy))
+    ordered = [pool.pop(0)]
+    while pool and len(ordered) < count:
+        last = ordered[-1]
+        recent_artists = {t["artist"] for t in ordered[-3:]}
+        allowed = [t for t in pool if t.get("artist") not in recent_artists]
+        search = allowed or pool  # relâche l'anti-répétition si bloqué
+        nxt = min(search, key=lambda t: _transition_cost(last, t))
+        pool.remove(nxt)
+        ordered.append(nxt)
+    return ordered
+
+
 app = FastAPI(title="Gaiverland Playlist Engine")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+def ensure_ui_config_table():
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ui_config (
+                key VARCHAR PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+    conn.close()
+
+
+def load_ui_config() -> dict:
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM ui_config WHERE key='main'")
+            row = cur.fetchone()
+        conn.close()
+        if row:
+            cfg = DEFAULT_UI_CONFIG.copy()
+            cfg.update(row["value"])
+            return cfg
+    except Exception:
+        pass
+    return DEFAULT_UI_CONFIG.copy()
+
+
+def save_ui_config(cfg: dict):
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO ui_config (key, value, updated_at)
+            VALUES ('main', %s, NOW())
+            ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+        """, (json.dumps(cfg),))
+    conn.commit()
+    conn.close()
+
+
+def active_pauses(items: list) -> list:
+    """Filtre les pauses expirées."""
+    today = datetime.date.today().isoformat()
+    return [p for p in items if p.get("until", "9999") >= today]
+
+
+try:
+    ensure_ui_config_table()
+except Exception:
+    pass
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── UI Config ─────────────────────────────────────────────────────────────────
+
+@app.get("/config")
+def get_config():
+    cfg = load_ui_config()
+    cfg["paused_moods"]  = active_pauses(cfg.get("paused_moods", []))
+    cfg["paused_genres"] = active_pauses(cfg.get("paused_genres", []))
+    return cfg
+
+
+@app.post("/config")
+def update_config(body: dict = Body(...)):
+    cfg = load_ui_config()
+    allowed = {"work_start", "work_end", "work_days", "work_offset_min",
+               "paused_moods", "paused_genres", "playlist_weights"}
+    for k, v in body.items():
+        if k in allowed:
+            cfg[k] = v
+    # Nettoyer pauses expirées
+    cfg["paused_moods"]  = active_pauses(cfg.get("paused_moods", []))
+    cfg["paused_genres"] = active_pauses(cfg.get("paused_genres", []))
+    save_ui_config(cfg)
+    return cfg
+
+
+@app.post("/config/pause")
+def add_pause(type: str, name: str, days: int = 7):
+    """Suspend un mood ou genre pour N jours."""
+    if type not in ("mood", "genre"):
+        return {"error": "type doit être 'mood' ou 'genre'"}
+    cfg = load_ui_config()
+    key = "paused_moods" if type == "mood" else "paused_genres"
+    until = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+    pauses = [p for p in cfg.get(key, []) if p["name"] != name]
+    pauses.append({"name": name, "until": until})
+    cfg[key] = pauses
+    save_ui_config(cfg)
+    return {"ok": True, "name": name, "until": until}
+
+
+@app.delete("/config/pause")
+def remove_pause(type: str, name: str):
+    """Réactive un mood ou genre mis en pause."""
+    if type not in ("mood", "genre"):
+        return {"error": "type doit être 'mood' ou 'genre'"}
+    cfg = load_ui_config()
+    key = "paused_moods" if type == "mood" else "paused_genres"
+    cfg[key] = [p for p in cfg.get(key, []) if p["name"] != name]
+    save_ui_config(cfg)
+    return {"ok": True}
+
+
+# ── Now Playing ───────────────────────────────────────────────────────────────
+
+@app.get("/nowplaying")
+def get_nowplaying():
+    result = {}
+    # AzuraCast nowplaying
+    try:
+        headers = {"X-API-Key": AZ_KEY}
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION_ID}/nowplaying", headers=headers, timeout=5)
+        if r.status_code == 200:
+            np = r.json()
+            result["now_playing"] = {
+                "title":    np.get("now_playing", {}).get("song", {}).get("title", ""),
+                "artist":   np.get("now_playing", {}).get("song", {}).get("artist", ""),
+                "art":      np.get("now_playing", {}).get("song", {}).get("art", ""),
+                "duration": np.get("now_playing", {}).get("duration", 0),
+                "elapsed":  np.get("now_playing", {}).get("elapsed", 0),
+            }
+            result["listeners"]  = np.get("listeners", {}).get("current", 0)
+            result["is_online"]  = np.get("is_online", False)
+            result["station"]    = np.get("station", {}).get("name", "")
+            # Playlists actives
+            result["current_playlist"] = np.get("now_playing", {}).get("playlist", "")
+    except Exception as e:
+        result["az_error"] = str(e)
+
+    # État scheduler (mood, énergie)
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT mood, energy_avg, updated_at FROM radio_state WHERE id=1")
+            state = cur.fetchone()
+        conn.close()
+        if state:
+            result["mood"]       = state["mood"]
+            result["energy_avg"] = float(state["energy_avg"] or 0)
+            result["state_at"]   = state["updated_at"].isoformat() if state["updated_at"] else None
+    except Exception:
+        pass
+
+    # Tracks en librairie
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as total, SUM(CASE WHEN analyzed THEN 1 ELSE 0 END) as analyzed FROM tracks")
+            counts = cur.fetchone()
+        conn.close()
+        if counts:
+            result["library"] = {"total": counts["total"], "analyzed": counts["analyzed"]}
+    except Exception:
+        pass
+
+    return result
 
 
 @app.get("/state")
@@ -1122,49 +1637,52 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     with conn.cursor() as cur:
         cur.execute("""
             SELECT track_id FROM play_history
-            WHERE played_at > NOW() - INTERVAL '2 hours'
-        """)
+            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
+    excluded_now = get_excluded_genres()
+
+    # Appliquer les pauses UI
+    ui_cfg = load_ui_config()
+    paused_mood_names  = {p["name"] for p in active_pauses(ui_cfg.get("paused_moods", []))}
+    paused_genre_names = {p["name"] for p in active_pauses(ui_cfg.get("paused_genres", []))}
+    candidate_moods = [m for m in candidate_moods if m not in paused_mood_names]
+    if not candidate_moods:
+        candidate_moods = [current_mood]  # fallback si tout est pausé
+    excluded_now = list(set(excluded_now) | paused_genre_names)
 
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
+            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                   key_note, key_scale
             FROM tracks
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
+              AND file_path NOT LIKE %s
+              AND genre_top1 IS NOT NULL
+              AND genre_top1 != ALL(%s)
+              AND genre_top1 = ANY(%s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, count * 4))
+        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
         candidates = list(cur.fetchall())
 
     if not candidates:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id
-                FROM tracks WHERE analyzed=TRUE ORDER BY RANDOM() LIMIT %s
-            """, (count * 2,))
+                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                       key_note, key_scale
+                FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
+                  AND genre_top1 IS NOT NULL
+                  AND genre_top1 != ALL(%s)
+                  AND genre_top1 = ANY(%s)
+                ORDER BY RANDOM() LIMIT %s
+            """, ('%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 2))
             candidates = list(cur.fetchall())
 
-    selected = []
-    target_energy = current_energy
-    main_count = count - int(count * DISCOVERY_RATIO)
-
-    for track in candidates:
-        if len(selected) >= count:
-            break
-        # Anti-répétition artiste sur les 3 derniers titres
-        if track["artist"] in {t["artist"] for t in selected[-3:]}:
-            continue
-        e = float(track.get("energy") or 0.5)
-        if abs(e - target_energy) > 0.35 and len(selected) < main_count:
-            continue
-        selected.append(dict(track))
-        target_energy = target_energy * 0.75 + e * 0.25  # glissement progressif
-
-    # Compléter
-    rest = [c for c in candidates if c not in selected]
-    while len(selected) < count and rest:
-        selected.append(dict(rest.pop()))
+    # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
+    # au lieu de garder l'ordre aléatoire du tirage SQL.
+    selected = order_for_coherence(candidates, count, current_energy)
 
     if selected:
         avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)
@@ -1889,14 +2407,16 @@ Scheduler Gaiverland — orchestre playlist + Rebexis + TTS.
 Gère les playlists AzuraCast 0.23.4 directement via API.
 
 Stratégie playlist :
-  - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 5 min
+  - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 3 min
   - "Rebexis"       (once_per_x_songs)  : jingles de Rebexis générés à l'avance
 """
-import os, sys, subprocess, time
+import os, sys, subprocess, time, datetime
+from zoneinfo import ZoneInfo
+LOCAL_TZ = ZoneInfo("Europe/Paris")
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                    "httpx", "psycopg2-binary"], check=True)
+                    "httpx", "psycopg2-binary", "tzdata"], check=True)
 
 try:
     import httpx, psycopg2
@@ -1907,18 +2427,52 @@ except ImportError:
 import psycopg2.extras
 import sys
 sys.path.insert(0, "/app")
-from az_utils import (get_or_create_playlist, batch_assign_playlist,
-                      set_playlist_order, get_station, now_playing)
+from az_utils import (get_or_create_playlist, batch_assign_playlist, replace_playlist,
+                      set_playlist_order, get_station, now_playing, get_queue, update_playlist)
 
 DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
 REBEXIS_URL  = "http://gaiverland-rebexis:8081"
 TTS_URL      = "http://gaiverland-tts:8082"
-CYCLE_SEC    = 300  # 5 minutes
+CYCLE_SEC    = 180  # 3 minutes
 AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
-REBEXIS_SONGS_INTERVAL = 8
+REBEXIS_SONGS_INTERVAL = 3
+# Timer indépendant pour les phrases lore (en secondes)
+LORE_INTERVAL_S = 45 * 60  # 1 phrase lore toutes les 45 min
+
+# Créneaux horaires : jour = EDM/energique, nuit = nocturne
+NIGHT_START = (22, 0)  # 22h00
+NIGHT_END   = (7, 0)   # 7h00
+
+
+_lore_last_time: float = 0.0
+_current_slot: str = ""
+
+
+def get_time_slot() -> str:
+    now = datetime.datetime.now(LOCAL_TZ)
+    h, m = now.hour, now.minute
+    if h >= NIGHT_START[0] or (h, m) < NIGHT_END:
+        return "night"
+    return "day"
+
+
+def maybe_update_slot_mood(gw_id: int, wd_id: int = 0, fr_id: int = 0):
+    """Bascule mood selon le créneau : jour=energique, nuit=nocturne."""
+    global _current_slot
+    slot = get_time_slot()
+    if slot == _current_slot:
+        return
+    _current_slot = slot
+    try:
+        target_mood = "intense" if slot == "night" else "festival"
+        httpx.post(f"{PLAYLIST_URL}/state/mood", params={"mood": target_mood}, timeout=5)
+        icon = "nuit" if slot == "night" else "soleil"
+        print(f"  {icon} Créneau {slot} -> mood = {target_mood}")
+    except Exception as e:
+        print(f"  warning Slot mood: {e}")
 
 
 def get_conn():
@@ -1949,6 +2503,20 @@ def setup_playlists(conn):
                                     weight=1,
                                     play_per_songs=REBEXIS_SONGS_INTERVAL)
 
+    # get_or_create_playlist ne reconfigure PAS une playlist "Rebexis" déjà
+    # existante (il renvoie son ID tel quel). Si elle a été créée un jour en
+    # rotation générale, ses jingles jouent en série -> plusieurs voix d'affilée.
+    # On ré-applique donc le type à chaque démarrage pour garantir 1 jingle/X titres.
+    if rb_id:
+        update_playlist(rb_id, type="once_per_x_songs",
+                        play_per_songs=REBEXIS_SONGS_INTERVAL,
+                        weight=1, is_enabled=True)
+
+    # Lecture séquentielle pour la playlist musicale : l'ordre harmonique calculé
+    # par le moteur doit être respecté à l'antenne, pas re-mélangé par AzuraCast.
+    if gw_id:
+        update_playlist(gw_id, order="sequential")
+
     if gw_id or rb_id:
         with conn.cursor() as cur:
             cur.execute("""
@@ -1964,7 +2532,13 @@ def setup_playlists(conn):
     else:
         print("  ⚠ Playlists AzuraCast non configurées (clé API manquante ?)")
 
-    return gw_id, rb_id
+    # Playlists secondaires désactivées
+    for pl_name in ("Travail Decouverte", "Bien Francais"):
+        pl_id = get_or_create_playlist(pl_name, pl_type="default", weight=2)
+        if pl_id:
+            update_playlist(pl_id, is_enabled=False)
+
+    return gw_id, rb_id, 0, 0
 
 
 def update_gaiverland_playlist(conn, gw_playlist_id: int):
@@ -1973,23 +2547,35 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
         return
 
     try:
-        # Récupérer la playlist suggérée par le moteur IA
         resp = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 25}, timeout=15)
         data = resp.json()
         tracks = data.get("tracks", [])
         mood   = data.get("mood", "?")
 
-        # Extraire les az_id valides
         az_ids = [t["az_id"] for t in tracks if t.get("az_id")]
         if not az_ids:
             print(f"  ℹ Playlist [{mood}] — aucun az_id disponible (analyzer pas encore synchro ?)")
             return
 
-        # Assigner les titres à la playlist Gaiverland IA (type shuffle)
-        # batch_assign_playlist récupère les paths AzuraCast et utilise do=playlist
-        ok = batch_assign_playlist(az_ids, [gw_playlist_id])
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT az_id FROM tracks WHERE az_playlist_assigned=true AND az_id IS NOT NULL")
+            prev_az_ids = [row["az_id"] for row in cur.fetchall()]
+
+        ok = replace_playlist(az_ids, gw_playlist_id, prev_az_ids=prev_az_ids)
+
         if ok:
+            conn = get_conn()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE tracks SET az_playlist_assigned=false WHERE az_playlist_assigned=true")
+                if az_ids:
+                    cur.execute("UPDATE tracks SET az_playlist_assigned=true WHERE az_id = ANY(%s)", (az_ids,))
+            conn.commit()
             print(f"  📻 Playlist [{mood}] mise à jour — {len(az_ids)} titres")
+            # Imposer l'ordre d'enchaînement calculé (sinon AzuraCast rejoue dans
+            # son ordre interne et la cohérence harmonique est perdue).
+            if set_playlist_order(gw_playlist_id, az_ids):
+                print(f"  🎚 Ordre d'enchaînement appliqué ({len(az_ids)} titres)")
         else:
             print(f"  ⚠ Mise à jour playlist échouée")
     except Exception as e:
@@ -2000,7 +2586,7 @@ def process_tts_queue():
     """Convertit en audio les interventions Rebexis en attente."""
     try:
         pending = httpx.get(f"{TTS_URL}/pending", timeout=10).json().get("sessions", [])
-        for s in pending[:2]:  # max 2 par cycle — charge CPU stable
+        for s in pending[:2]:
             print(f"  → TTS session {s['id']}: {s['intervention'][:50]}…")
             httpx.post(f"{TTS_URL}/synthesize",
                        params={"session_id": s["id"], "text": s["intervention"]},
@@ -2010,26 +2596,111 @@ def process_tts_queue():
 
 
 def maybe_generate_rebexis():
-    """Déclenche la génération d'une intervention Rebexis si le timing le permet."""
-    try:
-        state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
-        mood  = state.get("mood", "energique")
+    """Déclenche la génération d'une intervention Rebexis.
 
-        # Récupérer le titre en cours depuis AzuraCast
+    Les phrases "lore" (identité de Rebexis) ont leur propre timer indépendant
+    (LORE_INTERVAL_S). Les phrases mood-appropriées suivent l'interval check du
+    moteur Rebexis (INT_MIN/INT_MAX). Les deux timers sont décorrélés pour éviter
+    que le lore monopolise toutes les interventions.
+    """
+    global _lore_last_time
+    try:
+        now = time.time()
+        force_lore = (now - _lore_last_time >= LORE_INTERVAL_S)
+
+        if not force_lore:
+            state = httpx.get(f"{PLAYLIST_URL}/state", timeout=5).json()
+            mood  = state.get("mood", "energique")
+        else:
+            mood = "lore"
+
+        # Titre en cours
         np_data = now_playing()
         context = ""
         if np_data:
             song = np_data.get("now_playing", {}).get("song", {})
             context = f"{song.get('artist', '')} — {song.get('title', '')}".strip(" —")
 
+        # Prochain titre musical (skip les jingles Rebexis)
+        next_music = ""
+        try:
+            queue = get_queue(limit=6)
+            for entry in queue:
+                song = entry.get("song", {})
+                title = song.get("title", "")
+                artist = song.get("artist", "")
+                if title and "rebexis" not in title.lower() and "rebexis" not in artist.lower():
+                    next_music = f"{artist} — {title}".strip(" —") if artist else title
+                    break
+        except Exception:
+            pass
+
         resp = httpx.post(f"{REBEXIS_URL}/generate",
-                          params={"mood": mood, "context_track": context},
+                          params={"mood": mood, "context_track": context,
+                                  "next_track": next_music, "force": str(force_lore).lower()},
                           timeout=30)
         data = resp.json()
         if data.get("intervention"):
-            print(f"  🎙 Rebexis [{mood}] : {data['intervention'][:60]}…")
+            if force_lore:
+                _lore_last_time = now
+            suffix = f" → {next_music[:35]}" if next_music else ""
+            print(f"  🎙 Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
     except Exception as e:
         print(f"  ⚠ Rebexis: {e}")
+
+
+_recorded_sh: set = set()  # sh_id AzuraCast déjà enregistrés (dédup)
+
+
+def record_plays():
+    """Enregistre dans play_history les morceaux réellement diffusés (source de
+    vérité = historique AzuraCast). Sans ça, l'anti-répétition du moteur de
+    playlist n'a rien à exclure → les titres se répètent en journée.
+    Dédup par sh_id (identifiant unique de lecture AzuraCast).
+    Tout est encapsulé : une erreur DB/réseau ne doit jamais tuer la boucle."""
+    try:
+        np = now_playing()
+        if not np:
+            return
+        entries = []
+        if np.get("now_playing"):
+            entries.append(np["now_playing"])
+        entries += (np.get("song_history") or [])
+
+        recorded = 0
+        conn = get_conn()
+        try:
+            for e in entries:
+                sh_id = e.get("sh_id")
+                if not sh_id or sh_id in _recorded_sh:
+                    continue
+                song   = e.get("song") or {}
+                title  = (song.get("title") or "").strip()
+                artist = (song.get("artist") or "").strip()
+                if not title:
+                    continue
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id FROM tracks
+                        WHERE lower(trim(title)) = lower(%s)
+                          AND lower(trim(COALESCE(artist,''))) = lower(%s)
+                        LIMIT 1
+                    """, (title, artist))
+                    row = cur.fetchone()
+                    if row:
+                        cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (row["id"],))
+                        recorded += 1
+                _recorded_sh.add(sh_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+        if len(_recorded_sh) > 2000:      # borne mémoire
+            _recorded_sh.clear()
+        if recorded:
+            print(f"  📝 {recorded} lecture(s) enregistrée(s) dans play_history")
+    except Exception as e:
+        print(f"  ⚠ record_plays: {e}")
 
 
 def main():
@@ -2038,7 +2709,6 @@ def main():
     wait_for(REBEXIS_URL,  "Rebexis Engine")
     wait_for(TTS_URL,      "TTS Worker")
 
-    # Vérifier la connexion AzuraCast
     station = get_station()
     if station:
         print(f"  ✓ AzuraCast connecté — station : {station.get('name', '?')}")
@@ -2046,7 +2716,7 @@ def main():
         print("  ⚠ AzuraCast non joignable — scheduler en mode dégradé (Rebexis + TTS actifs)")
 
     conn = get_conn()
-    gw_id, rb_id = setup_playlists(conn)
+    gw_id, rb_id, wd_id, fr_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
     cycle = 0
@@ -2057,10 +2727,16 @@ def main():
         # 1. Traitement TTS en attente (priorité : audio prêt avant diffusion)
         process_tts_queue()
 
-        # 2. Générer Rebexis si intervalle atteint
+        # 2. Générer Rebexis si intervalle atteint (lore timer indépendant)
         maybe_generate_rebexis()
 
-        # 3. Mettre à jour la playlist Gaiverland IA dans AzuraCast
+        # 3. Vérifier et switcher le créneau horaire (travail/standard)
+        maybe_update_slot_mood(gw_id, wd_id, fr_id)
+
+        # 3b. Enregistrer les morceaux diffusés (alimente l'anti-répétition)
+        record_plays()
+
+        # 4. Mettre à jour la playlist Gaiverland IA dans AzuraCast
         if gw_id:
             conn = get_conn()
             update_gaiverland_playlist(conn, gw_id)
