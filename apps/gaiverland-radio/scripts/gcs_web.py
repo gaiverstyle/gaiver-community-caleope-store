@@ -20,8 +20,9 @@ except ImportError:
 import json, time, re
 from urllib.parse import urlsplit
 import psycopg2.extras
-from fastapi import FastAPI, Body
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Body, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+import secrets, hmac, hashlib, base64
 
 DB_URL      = os.environ["DATABASE_URL"]
 TRACK_URL   = os.environ.get("GCS_TRACK_URL",        "http://gcs-track-service:8090")
@@ -34,6 +35,14 @@ STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
 # que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
 # quand il existe ; sinon l'IP LAN. Vide = pas de réécriture.
 AZ_PUBLIC   = os.environ.get("GCS_AZ_PUBLIC_URL", "").rstrip("/")
+
+# ── OAuth votes — Google + Discord (PAS Authentik : privé fondateur/famille) ──
+GOOGLE_ID      = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_SECRET  = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+DISCORD_ID     = os.environ.get("DISCORD_CLIENT_ID", "")
+DISCORD_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+SESSION_SECRET = os.environ.get("OAUTH_SESSION_SECRET", "change-me")
+PUBLIC_BASE    = os.environ.get("GCS_PUBLIC_BASE", "https://gaiverland.gaiver-it.fr").rstrip("/")
 
 app = FastAPI(title="Gaiverland Web")
 
@@ -206,8 +215,103 @@ def visuals():
     return {"images": imgs}
 
 
+# ── Session : cookie signé HMAC, identité opaque provider:sub ───────────────
+def _sign(payload: str) -> str:
+    sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return payload + "." + sig
+
+def _verify(token: str) -> str:
+    if not token or "." not in token:
+        return ""
+    payload, sig = token.rsplit(".", 1)
+    good = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return payload if hmac.compare_digest(sig, good) else ""
+
+def _uid(request: Request) -> str:
+    """Identité opaque de session (hash de provider:sub) ou '' si non connecté."""
+    ident = _verify(request.cookies.get("gsid", ""))
+    return hashlib.sha256(ident.encode()).hexdigest()[:32] if ident else ""
+
+def _login_ok(provider: str, sub: str):
+    r = RedirectResponse("/?login=ok", status_code=302)
+    r.set_cookie("gsid", _sign(f"{provider}:{sub}"), max_age=2592000,
+                 httponly=True, secure=True, samesite="lax")
+    r.delete_cookie("gstate")
+    return r
+
+def _oauth_start(auth_url: str):
+    state = secrets.token_urlsafe(16)
+    r = RedirectResponse(auth_url + "&state=" + state, status_code=302)
+    r.set_cookie("gstate", state, max_age=600, httponly=True, secure=True, samesite="lax")
+    return r
+
+
+@app.get("/api/auth/google")
+def auth_google():
+    return _oauth_start(
+        "https://accounts.google.com/o/oauth2/v2/auth?response_type=code"
+        f"&client_id={GOOGLE_ID}&redirect_uri={PUBLIC_BASE}/api/auth/google/callback"
+        "&scope=openid%20email")
+
+@app.get("/api/auth/google/callback")
+def auth_google_cb(request: Request, code: str = "", state: str = ""):
+    if not code or not state or state != request.cookies.get("gstate", ""):
+        return RedirectResponse("/?login=err", status_code=302)
+    sub = ""
+    try:
+        tok = httpx.post("https://oauth2.googleapis.com/token", data={
+            "code": code, "client_id": GOOGLE_ID, "client_secret": GOOGLE_SECRET,
+            "redirect_uri": f"{PUBLIC_BASE}/api/auth/google/callback",
+            "grant_type": "authorization_code"}, timeout=8).json()
+        p = tok.get("id_token", "").split(".")
+        payload = json.loads(base64.urlsafe_b64decode(p[1] + "=" * (-len(p[1]) % 4)))
+        sub = payload.get("sub", "")
+    except Exception:
+        pass
+    return _login_ok("google", sub) if sub else RedirectResponse("/?login=err", status_code=302)
+
+@app.get("/api/auth/discord")
+def auth_discord():
+    return _oauth_start(
+        "https://discord.com/api/oauth2/authorize?response_type=code"
+        f"&client_id={DISCORD_ID}&redirect_uri={PUBLIC_BASE}/api/auth/discord/callback"
+        "&scope=identify")
+
+@app.get("/api/auth/discord/callback")
+def auth_discord_cb(request: Request, code: str = "", state: str = ""):
+    if not code or not state or state != request.cookies.get("gstate", ""):
+        return RedirectResponse("/?login=err", status_code=302)
+    sub = ""
+    try:
+        tok = httpx.post("https://discord.com/api/oauth2/token", data={
+            "code": code, "client_id": DISCORD_ID, "client_secret": DISCORD_SECRET,
+            "redirect_uri": f"{PUBLIC_BASE}/api/auth/discord/callback",
+            "grant_type": "authorization_code"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=8).json()
+        me = httpx.get("https://discord.com/api/users/@me",
+                       headers={"Authorization": f"Bearer {tok.get('access_token','')}"}, timeout=8).json()
+        sub = str(me.get("id", ""))
+    except Exception:
+        pass
+    return _login_ok("discord", sub) if sub else RedirectResponse("/?login=err", status_code=302)
+
+@app.get("/api/me")
+def me(request: Request):
+    ident = _verify(request.cookies.get("gsid", ""))
+    return {"logged_in": bool(ident), "provider": ident.split(":", 1)[0] if ident else ""}
+
+@app.get("/api/logout")
+def logout():
+    r = RedirectResponse("/", status_code=302)
+    r.delete_cookie("gsid")
+    return r
+
+
 @app.post("/api/vote")
-def vote(body: dict = Body(...)):
+def vote(request: Request, body: dict = Body(...)):
+    uid = _uid(request)
+    if not uid:
+        return {"ok": False, "error": "login requis", "need_login": True}
     v = str(body.get("vote", "")).upper()
     if v not in ("ENCORE", "REVIEW", "SKIP"):
         return {"ok": False, "error": "vote invalide"}
@@ -223,7 +327,7 @@ def vote(body: dict = Body(...)):
         return {"ok": False, "error": "pas de morceau en cours"}
     try:
         r = httpx.post(f"{VOTE_URL}/vote",
-                       json={"song_id": song_id, "vote": v, "user_role": "user"},
+                       json={"song_id": song_id, "vote": v, "user_role": "user", "user_id": uid},
                        timeout=5)
         if r.status_code == 200:
             return {"ok": True, "vote": v}
@@ -287,6 +391,12 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .v-review{background:linear-gradient(135deg,#c9b6ff,#a48fff)}
 .v-skip{background:linear-gradient(135deg,#ffb1c0,#ff8fa3)}
 .votemsg{font-size:14px;margin-top:10px;font-style:italic;min-height:18px;opacity:.9}
+.authbar{margin-top:16px;font-size:14px;font-family:sans-serif;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.authtxt,.authok{opacity:.88}
+.authbtn{padding:6px 14px;border-radius:20px;text-decoration:none;color:var(--ink);font-weight:700}
+.authbtn.g{background:#fff}
+.authbtn.d{background:#5865F2;color:#fff}
+.authlink{color:var(--cream);opacity:.55;font-size:12px}
 .stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
 .stage{border-radius:14px;padding:18px 14px;text-align:center;position:relative;
   border:1px dashed rgba(255,244,230,.35)}
@@ -352,6 +462,7 @@ footer .c15{margin-top:6px;font-size:12px}
     <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
   </div>
   <audio id="player" preload="none"></audio>
+  <div class="authbar" id="authbar"></div>
   <div class="votes">
     <button class="v-encore" onclick="vote('ENCORE')">🔥 ENCORE</button>
     <button class="v-review" onclick="vote('REVIEW')">🤔 À REVOIR</button>
@@ -464,10 +575,22 @@ async function vote(v){
   try{
     const r=await (await fetch('/api/vote',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({vote:v})})).json();
+    if(r.need_login){ m.textContent='Connecte-toi pour voter 👇'; return; }
     m.textContent=r.ok?'Vote "'+v+'" enregistré. Le festival vous a entendu. ✦'
                        :'Hmm… '+(r.error||'réessayez');
   }catch(e){m.textContent='Le stagiaire a débranché quelque chose. Réessayez.';}
   setTimeout(()=>m.textContent='',6000);
+}
+async function loadAuth(){
+  try{
+    const d=await (await fetch('/api/me')).json();
+    const bar=document.getElementById('authbar');
+    if(d.logged_in){
+      bar.innerHTML='<span class="authok">✓ Connecté'+(d.provider?' via '+d.provider:'')+' — ton vote compte.</span> <a class="authlink" href="/api/logout">déconnexion</a>';
+    }else{
+      bar.innerHTML='<span class="authtxt">Connecte-toi pour voter :</span> <a class="authbtn g" href="/api/auth/google">Google</a> <a class="authbtn d" href="/api/auth/discord">Discord</a>';
+    }
+  }catch(e){}
 }
 (function(){const a=document.getElementById('player'),b=document.getElementById('playbtn');
  a.addEventListener('play',()=>{b.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
@@ -477,7 +600,7 @@ async function vote(v){
    navigator.mediaSession.setActionHandler('pause',()=>document.getElementById('player').pause());
  }})();
 refresh();loadEvents();
-loadVisuals();
+loadVisuals();loadAuth();
 setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);
 </script></body></html>"""
 

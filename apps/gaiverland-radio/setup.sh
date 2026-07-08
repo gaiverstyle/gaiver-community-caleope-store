@@ -237,6 +237,15 @@ AZ_MYSQL_PWD="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_PASSWORD)"
 AZ_PUBLIC_URL="$(_existing "${CONFIG_DIR}/services.env" GCS_AZ_PUBLIC_URL)"
 [ -n "${AZ_PUBLIC_URL}" ] || AZ_PUBLIC_URL="${CALEOPE_PARAM_AZ_PUBLIC_URL:-}"
 
+# ── Secrets OAuth votes (Google/Discord) — idempotent : param la 1re fois, préservé ensuite.
+# JAMAIS dans git : uniquement dans services.env (app-config) sur le serveur.
+GOOGLE_CLIENT_ID="$(_existing "${CONFIG_DIR}/services.env" GOOGLE_CLIENT_ID)";       [ -n "$GOOGLE_CLIENT_ID" ]     || GOOGLE_CLIENT_ID="${CALEOPE_PARAM_GOOGLE_CLIENT_ID:-}"
+GOOGLE_CLIENT_SECRET="$(_existing "${CONFIG_DIR}/services.env" GOOGLE_CLIENT_SECRET)"; [ -n "$GOOGLE_CLIENT_SECRET" ] || GOOGLE_CLIENT_SECRET="${CALEOPE_PARAM_GOOGLE_CLIENT_SECRET:-}"
+DISCORD_CLIENT_ID="$(_existing "${CONFIG_DIR}/services.env" DISCORD_CLIENT_ID)";       [ -n "$DISCORD_CLIENT_ID" ]     || DISCORD_CLIENT_ID="${CALEOPE_PARAM_DISCORD_CLIENT_ID:-}"
+DISCORD_CLIENT_SECRET="$(_existing "${CONFIG_DIR}/services.env" DISCORD_CLIENT_SECRET)"; [ -n "$DISCORD_CLIENT_SECRET" ] || DISCORD_CLIENT_SECRET="${CALEOPE_PARAM_DISCORD_CLIENT_SECRET:-}"
+GCS_PUBLIC_BASE="$(_existing "${CONFIG_DIR}/services.env" GCS_PUBLIC_BASE)";           [ -n "$GCS_PUBLIC_BASE" ]       || GCS_PUBLIC_BASE="${CALEOPE_PARAM_GCS_PUBLIC_BASE:-https://gaiverland.gaiver-it.fr}"
+OAUTH_SESSION_SECRET="$(_existing "${CONFIG_DIR}/services.env" OAUTH_SESSION_SECRET)"; [ -n "$OAUTH_SESSION_SECRET" ] || OAUTH_SESSION_SECRET="$(openssl rand -hex 32)"
+
 # ── Clé API AzuraCast (IDEMPOTENT) ─────────────────────────────────────
 # La clé est ajoutée à la main après l'install (jamais fournie par le store).
 # Un reinstall NE DOIT PAS la remettre à vide : on relit la clé déjà en place
@@ -292,6 +301,12 @@ cat > "${CONFIG_DIR}/services.env" <<EOF
 DATABASE_URL=postgresql://gaiverland:${DB_PASSWORD}@gw-db:5432/gaiverland
 AZURACAST_URL=${AZ_URL}
 GCS_AZ_PUBLIC_URL=${AZ_PUBLIC_URL}
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+GCS_PUBLIC_BASE=${GCS_PUBLIC_BASE}
+OAUTH_SESSION_SECRET=${OAUTH_SESSION_SECRET}
 AZURACAST_API_KEY=${AZ_API_KEY}
 AZURACAST_STATION_ID=${AZ_STATION_ID}
 AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
