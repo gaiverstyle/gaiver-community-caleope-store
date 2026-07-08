@@ -17,7 +17,7 @@ except ImportError:
     _install()
     import fastapi, uvicorn, psycopg2, httpx
 
-import json, time
+import json, time, re
 from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body
@@ -166,9 +166,13 @@ def _city_photos(city: str):
                 src = srcset[-1].get("src", "")  # la plus grande vignette dispo
                 if src.startswith("//"):
                     src = "https:" + src
-                if src.lower().endswith((".jpg", ".jpeg")):
-                    imgs.append(src)
-                if len(imgs) >= 15:
+                if not src.lower().endswith((".jpg", ".jpeg")):
+                    continue  # écarte cartes/blasons/SVG
+                mw = re.search(r"/(\d+)px-", src)  # largeur de la vignette
+                if mw and int(mw.group(1)) < 1000:
+                    continue  # écarte les basses résolutions (floues en fond)
+                imgs.append(src)
+                if len(imgs) >= 12:
                     break
     except Exception:
         pass
