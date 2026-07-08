@@ -18,6 +18,7 @@ except ImportError:
     import fastapi, uvicorn, psycopg2, httpx
 
 import json
+from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body
 from fastapi.responses import HTMLResponse
@@ -41,13 +42,16 @@ app = FastAPI(title="Gaiverland Web")
 
 
 def _publicize(url: str) -> str:
-    """Réécrit une URL AzuraCast interne (http://azuracast[:80]) vers la base publique."""
+    """Réécrit une URL AzuraCast (interne docker OU IP LAN) vers la base publique AZ_PUBLIC.
+    Appliqué uniquement aux URLs AzuraCast (stream, pochettes) : on remplace le
+    scheme://host[:port] par AZ_PUBLIC et on garde le chemin. Sans quoi un visiteur web
+    reçoit une URL LAN (http://172.x…) injoignable → pas de son ni de pochette."""
     if not url or not AZ_PUBLIC:
         return url
-    for internal in ("http://azuracast:80", "http://azuracast"):
-        if url.startswith(internal):
-            return AZ_PUBLIC + url[len(internal):]
-    return url
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return url  # déjà relative → laissée telle quelle
+    return AZ_PUBLIC + url[len(parts.scheme) + 3 + len(parts.netloc):]
 
 WEATHER_POETRY = {
     "calm":  "Ciel tranquille au-dessus du site",

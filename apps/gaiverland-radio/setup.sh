@@ -221,6 +221,12 @@ AZ_MYSQL_ROOT="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_ROOT_PASSWORD)"
 AZ_MYSQL_PWD="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_PASSWORD)"
 [ -n "${AZ_MYSQL_PWD}" ] || AZ_MYSQL_PWD=$(openssl rand -hex 20)
 
+# ── URL publique d'AzuraCast (réécrit les URLs stream/pochette servies au web) ──
+# Idempotent : réutilise la valeur en place, sinon le param --param az_public_url=..., sinon vide.
+# Sans ça, gcs-web renvoie des URLs en IP LAN → player muet et pas de pochette hors LAN.
+AZ_PUBLIC_URL="$(_existing "${CONFIG_DIR}/services.env" GCS_AZ_PUBLIC_URL)"
+[ -n "${AZ_PUBLIC_URL}" ] || AZ_PUBLIC_URL="${CALEOPE_PARAM_AZ_PUBLIC_URL:-}"
+
 if [[ "${AZ_EXISTING}" == "true" ]]; then
     AZ_BASE_URL="${AZ_URL}"
 else
@@ -267,6 +273,7 @@ chmod 600 "${CONFIG_DIR}/db.env"
 cat > "${CONFIG_DIR}/services.env" <<EOF
 DATABASE_URL=postgresql://gaiverland:${DB_PASSWORD}@gw-db:5432/gaiverland
 AZURACAST_URL=${AZ_URL}
+GCS_AZ_PUBLIC_URL=${AZ_PUBLIC_URL}
 AZURACAST_API_KEY=${AZ_API_KEY}
 AZURACAST_STATION_ID=${AZ_STATION_ID}
 AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
