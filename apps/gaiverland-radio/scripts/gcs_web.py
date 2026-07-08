@@ -188,11 +188,14 @@ def visuals():
                 imgs.append(art)
     except Exception:
         pass
-    city = ""
+    # Ville : GCS_CITY (fiable, statique) ; le state-engine, s'il est joignable, peut surcharger.
+    city = os.environ.get("GCS_CITY", "").strip()
     try:
-        r = httpx.get(f"{STATE_URL}/state/current", timeout=3)
+        r = httpx.get(f"{STATE_URL}/state/current", timeout=2)
         if r.status_code == 200:
-            city = r.json().get("city", "") or ""
+            c = r.json().get("city", "")
+            if c:
+                city = c
     except Exception:
         pass
     imgs += _city_photos(city)
