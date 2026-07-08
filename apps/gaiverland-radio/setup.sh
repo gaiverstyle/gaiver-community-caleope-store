@@ -2161,8 +2161,8 @@ def el_credits_pct():
             d = r.json()
             limit = d.get("character_limit") or 0
             used = d.get("character_count") or 0
-            if limit > 0:
-                pct = max(0.0, 100.0 * (limit - used) / limit)
+            # limit<=0 = compte sans allocation (crédits épuisés / free expiré) → 0% → archives
+            pct = 0.0 if limit <= 0 else max(0.0, 100.0 * (limit - used) / limit)
     except Exception as e:
         print(f"  ⚠ crédits EL: check impossible ({e})")
     _el_credits.update(pct=pct, at=now)
