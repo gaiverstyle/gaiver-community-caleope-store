@@ -412,7 +412,7 @@ function nextVisual(){
   img.onload=()=>{
     const a=document.getElementById('hero-a'), b=document.getElementById('hero-b');
     const show=heroToggle?b:a, hide=heroToggle?a:b;
-    show.style.backgroundImage="url(\""+url.replace(/"/g,'%22')+"\")";
+    show.style.backgroundImage="url('"+url.replace(/'/g,'%27')+"')";
     show.classList.add('on'); hide.classList.remove('on');
     heroToggle=!heroToggle;
   };
