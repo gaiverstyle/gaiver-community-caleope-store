@@ -17,7 +17,7 @@ except ImportError:
     _install()
     import fastapi, uvicorn, psycopg2, httpx
 
-import json
+import json, time
 from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body
@@ -34,9 +34,6 @@ STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
 # que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
 # quand il existe ; sinon l'IP LAN. Vide = pas de réécriture.
 AZ_PUBLIC   = os.environ.get("GCS_AZ_PUBLIC_URL", "").rstrip("/")
-# gaiverland-clip = instance Owncast (flux HLS image+audio). Utilisé par le "mode vidéo"
-# du player. Override via GCS_CLIP_URL.
-CLIP_BASE   = os.environ.get("GCS_CLIP_URL", "https://gaiverland-clip.caleope.guernaham.bzh").rstrip("/")
 
 app = FastAPI(title="Gaiverland Web")
 
@@ -143,6 +140,56 @@ def events(limit: int = 12):
     ]}
 
 
+_visuals_cache = {"city": "", "at": 0.0, "imgs": []}
+
+
+def _city_photos(city: str):
+    """Photos de la ville du festival — best-effort via Openverse (CC), caché 30 min, fail-safe."""
+    if not city:
+        return []
+    now = time.time()
+    if _visuals_cache["city"] == city and now - _visuals_cache["at"] < 1800:
+        return _visuals_cache["imgs"]
+    imgs = []
+    try:
+        r = httpx.get("https://api.openverse.org/v1/images/",
+                      params={"q": city, "page_size": 15, "mature": "false"},
+                      headers={"User-Agent": "GaiverlandRadio/1.0 (festival visuals)"},
+                      timeout=6)
+        if r.status_code == 200:
+            for it in r.json().get("results", []):
+                u = it.get("url") or ""
+                if u.startswith("https://"):
+                    imgs.append(u)
+    except Exception:
+        pass
+    _visuals_cache.update(city=city, at=now, imgs=imgs)
+    return imgs
+
+
+@app.get("/api/visuals")
+def visuals():
+    """Images du 'clip' in-page : cover courante + photos de la ville. Fail-safe (cover au minimum)."""
+    imgs = []
+    try:
+        r = httpx.get(f"{AZ_URL}/api/nowplaying/{AZ_STATION}", timeout=4)
+        if r.status_code == 200:
+            art = _publicize(r.json().get("now_playing", {}).get("song", {}).get("art", ""))
+            if art:
+                imgs.append(art)
+    except Exception:
+        pass
+    city = ""
+    try:
+        r = httpx.get(f"{STATE_URL}/state/current", timeout=3)
+        if r.status_code == 200:
+            city = r.json().get("city", "") or ""
+    except Exception:
+        pass
+    imgs += _city_photos(city)
+    return {"images": imgs}
+
+
 @app.post("/api/vote")
 def vote(body: dict = Body(...)):
     v = str(body.get("vote", "")).upper()
@@ -247,18 +294,16 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .soon{opacity:.75;text-align:center;padding:26px 10px;font-style:italic;font-size:16px}
 footer{text-align:center;margin-top:44px;font-size:13px;opacity:.65;font-style:italic}
 footer .c15{margin-top:6px;font-size:12px}
-.modes{display:flex;gap:8px;margin-top:18px}
-.mode-btn{padding:8px 16px;border:1px solid rgba(255,244,230,.3);background:rgba(255,244,230,.06);
-  color:var(--cream);border-radius:20px;cursor:pointer;font-family:sans-serif;font-size:13px;letter-spacing:1px;transition:.15s}
-.mode-btn.on{background:linear-gradient(135deg,#ffd29a,#ff8fa3);color:var(--ink);border-color:transparent}
-.pane{margin-top:14px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
-.playbtn{width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
+.hero{position:relative;width:100%;aspect-ratio:16/9;border-radius:16px;overflow:hidden;
+  background:rgba(0,0,0,.35);box-shadow:0 10px 40px rgba(0,0,0,.45);margin:4px 0 18px}
+.hero-layer{position:absolute;inset:0;background-size:cover;background-position:center;
+  opacity:0;transition:opacity 1.6s ease;will-change:opacity,transform}
+.hero-layer.on{opacity:1;animation:kenburns 14s ease-in-out infinite alternate}
+@keyframes kenburns{from{transform:scale(1.03)}to{transform:scale(1.13) translate(-2%,-1.5%)}}
+.playbtn{flex:0 0 auto;width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
 #player{display:none}
-#clip{width:100%;max-height:60vh;border-radius:14px;background:#000;box-shadow:0 8px 30px rgba(0,0,0,.4)}
-.pipbtn{padding:8px 14px;border:1px solid rgba(255,244,230,.3);background:rgba(255,244,230,.06);
-  color:var(--cream);border-radius:12px;cursor:pointer;font-family:sans-serif;font-size:13px}
 </style></head><body><div class="wrap">
 
 <header>
@@ -270,25 +315,18 @@ footer .c15{margin-top:6px;font-size:12px}
 
 <div class="card">
   <h2>Mainstage Broadcast <span class="live-badge">EN DIRECT</span></h2>
+  <div class="hero">
+    <div class="hero-layer" id="hero-a"></div>
+    <div class="hero-layer" id="hero-b"></div>
+  </div>
   <div class="np">
-    <img id="art" src="" alt="" onerror="this.style.visibility='hidden'">
     <div style="flex:1;min-width:200px">
       <div class="t" id="title">…</div>
       <div class="a" id="artist"></div>
       <div class="meta" id="meta"></div>
       <div class="bar"><i id="prog"></i></div>
     </div>
-  </div>
-  <div class="modes">
-    <button id="m-audio" class="mode-btn on" onclick="setMode('audio')">🎧 Audio · direct</button>
-    <button id="m-video" class="mode-btn" onclick="setMode('video')">📺 Vidéo</button>
-  </div>
-  <div id="pane-audio" class="pane">
     <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
-  </div>
-  <div id="pane-video" class="pane" style="display:none">
-    <video id="clip" playsinline controls></video>
-    <button id="pipbtn" class="pipbtn" onclick="goPip()" style="display:none">🖼️ Picture-in-Picture</button>
   </div>
   <audio id="player" preload="none"></audio>
   <div class="votes">
@@ -340,65 +378,34 @@ footer .c15{margin-top:6px;font-size:12px}
 
 </div><script>
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
-const CLIP_HLS="__CLIP_HLS__";
-let audioUrl="", mode="audio", hls=null, videoReady=false;
+let audioUrl="";
+let visuals=[], vi=0, heroToggle=false;
 
-// Deux modes exclusifs : jamais audio + vidéo en même temps (pas de désync croisée).
-function setMode(m){
-  if(m===mode)return; mode=m;
-  document.getElementById('m-audio').classList.toggle('on',m==='audio');
-  document.getElementById('m-video').classList.toggle('on',m==='video');
-  document.getElementById('pane-audio').style.display=(m==='audio')?'':'none';
-  document.getElementById('pane-video').style.display=(m==='video')?'':'none';
-  if(m==='video'){ document.getElementById('player').pause(); startVideo(); }
-  else { stopVideo(); }
-}
 function togglePlay(){
   const a=document.getElementById('player');
   if(audioUrl && !a.src) a.src=audioUrl;
   if(a.paused){ a.play().catch(()=>{}); } else { a.pause(); }
 }
-function startVideo(){
-  const v=document.getElementById('clip');
-  const off=document.getElementById('clip-offline'); if(off) off.style.display='none';
-  v.style.display='';
-  if(videoReady){ v.play().catch(()=>{}); return; }
-  v.onerror=()=>showClipOffline();
-  if(v.canPlayType('application/vnd.apple.mpegurl')){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); }
-  else if(window.Hls){ attachHls(v); }
-  else { const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/hls.js@1';
-         s.onload=()=>attachHls(v); s.onerror=()=>showClipOffline(); document.head.appendChild(s); }
-  maybeShowPip();
+// Clip in-page : slideshow (cover de l'artiste + photos de la ville) — image qui change souvent.
+async function loadVisuals(){
+  try{
+    const d=await (await fetch('/api/visuals')).json();
+    if(d.images && d.images.length) visuals=d.images;
+  }catch(e){}
 }
-function attachHls(v){
-  if(!window.Hls||!Hls.isSupported()){ v.src=CLIP_HLS; videoReady=true; v.play().catch(()=>{}); return; }
-  hls=new Hls({lowLatencyMode:true}); hls.loadSource(CLIP_HLS); hls.attachMedia(v);
-  hls.on(Hls.Events.MANIFEST_PARSED,()=>{ videoReady=true; v.play().catch(()=>{}); });
-  hls.on(Hls.Events.ERROR,(e,data)=>{ if(data && data.fatal) showClipOffline(); });
-}
-function showClipOffline(){
-  stopVideo();
-  const v=document.getElementById('clip'); if(v) v.style.display='none';
-  const pip=document.getElementById('pipbtn'); if(pip) pip.style.display='none';
-  let m=document.getElementById('clip-offline');
-  if(!m){ m=document.createElement('div'); m.id='clip-offline'; m.className='soon';
-    m.innerHTML="📴 Le clip vidéo est hors ligne pour le moment.<br>La radio, elle, ne s'arrête jamais — repasse en 🎧 Audio.";
-    document.getElementById('pane-video').appendChild(m); }
-  m.style.display='';
-}
-function stopVideo(){
-  const v=document.getElementById('clip'); v.pause();
-  if(hls){ hls.destroy(); hls=null; } videoReady=false; v.removeAttribute('src'); v.load();
-}
-function maybeShowPip(){
-  if(document.pictureInPictureEnabled && !/Mobi|Android/i.test(navigator.userAgent)){
-    document.getElementById('pipbtn').style.display='';
-  }
-}
-async function goPip(){
-  const v=document.getElementById('clip');
-  try{ if(document.pictureInPictureElement){ await document.exitPictureInPicture(); }
-       else { await v.requestPictureInPicture(); } }catch(e){}
+function nextVisual(){
+  if(!visuals.length) return;
+  const url=visuals[vi % visuals.length]; vi++;
+  const img=new Image();
+  img.onload=()=>{
+    const a=document.getElementById('hero-a'), b=document.getElementById('hero-b');
+    const show=heroToggle?b:a, hide=heroToggle?a:b;
+    show.style.backgroundImage="url(\""+url.replace(/"/g,'%22')+"\")";
+    show.classList.add('on'); hide.classList.remove('on');
+    heroToggle=!heroToggle;
+  };
+  img.onerror=()=>{};  // image cassée → on garde l'actuelle, l'image suivante passera au prochain tick
+  img.src=url;
 }
 async function refresh(){
   try{
@@ -408,7 +415,6 @@ async function refresh(){
     document.getElementById('artist').textContent=t.artist||'';
     const l=d.listeners?d.listeners+' personne(s) dans la foule':'';
     document.getElementById('meta').textContent=l;
-    if(d.art){const a=document.getElementById('art');a.src=d.art;a.style.visibility='visible';}
     // Media Session — titre/artiste/cover sur l'écran verrouillé + widgets média de l'OS
     if('mediaSession' in navigator && (t.title||t.artist)){
       navigator.mediaSession.metadata=new MediaMetadata({
@@ -447,17 +453,18 @@ async function vote(v){
  a.addEventListener('play',()=>{b.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
  a.addEventListener('pause',()=>{b.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused';});
  if('mediaSession' in navigator){
-   navigator.mediaSession.setActionHandler('play',()=>{ mode==='video'?startVideo():togglePlay(); });
-   navigator.mediaSession.setActionHandler('pause',()=>{ a.pause(); const c=document.getElementById('clip'); if(c) c.pause(); });
+   navigator.mediaSession.setActionHandler('play',togglePlay);
+   navigator.mediaSession.setActionHandler('pause',()=>document.getElementById('player').pause());
  }})();
 refresh();loadEvents();
-setInterval(refresh,10000);setInterval(loadEvents,30000);
+loadVisuals().then(()=>{ nextVisual(); setInterval(nextVisual,7000); });
+setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,45000);
 </script></body></html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return PAGE.replace("__CLIP_HLS__", CLIP_BASE + "/hls/stream.m3u8")
+    return PAGE
 
 
 if __name__ == "__main__":
