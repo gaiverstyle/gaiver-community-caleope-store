@@ -752,8 +752,8 @@ MODELS_DIR = pathlib.Path(os.environ.get("ESSENTIA_MODELS_DIR", "/essentia-model
 
 DISCOGS_MODELS = {
     "effnet_embed": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb",
-    "genre_multi":  "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs_multi_embeddings-effnet-1.pb",
-    "genre_labels": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs_multi_embeddings-effnet-1.json",
+    "genre_multi":  "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
+    "genre_labels": "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
 }
 
 # Mapping genres Discogs → moods Gaiverland
