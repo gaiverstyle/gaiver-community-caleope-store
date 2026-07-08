@@ -187,14 +187,28 @@ SFTP_PORT="${CALEOPE_PORT_SFTP:-2022}"
 ICECAST_PORT="${CALEOPE_PORT_ICECAST:-8500}"
 API_PORT="${CALEOPE_PORT_API:-8080}"
 
+# ── Secrets (IDEMPOTENT) ───────────────────────────────────────────────
+# Un reinstall (caleope install --force) NE DOIT JAMAIS régénérer les mots de passe :
+# les volumes Postgres/MariaDB existants gardent les anciens, une régénération casserait
+# la connexion à la DB (nouvelle config ≠ ancienne base). On relit donc les valeurs déjà
+# écrites (si l'app est déjà installée) AVANT de réécrire db.env / azuracast.env plus bas.
+_existing() {  # _existing <fichier.env> <clé>  → valeur existante, ou vide
+    [ -f "$1" ] || return 0
+    awk -F= -v k="$2" '$1==k{print substr($0,length(k)+2);exit}' "$1"
+}
+
 # ── Secrets DB ─────────────────────────────────────────────────────────
-DB_PASSWORD=$(openssl rand -hex 20)
+DB_PASSWORD="$(_existing "${CONFIG_DIR}/db.env" POSTGRES_PASSWORD)"
+[ -n "${DB_PASSWORD}" ] || DB_PASSWORD=$(openssl rand -hex 20)
 
 # ── Secrets AzuraCast (mode autonome seulement) ────────────────────────
 AZ_ADMIN_EMAIL="admin@azuracast.local"
-AZ_ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | cut -c1-16)
-AZ_MYSQL_ROOT=$(openssl rand -hex 24)
-AZ_MYSQL_PWD=$(openssl rand -hex 20)
+AZ_ADMIN_PASSWORD="$(_existing "${CONFIG_DIR}/azuracast.env" AZURACAST_ADMIN_PASSWORD)"
+[ -n "${AZ_ADMIN_PASSWORD}" ] || AZ_ADMIN_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | cut -c1-16)
+AZ_MYSQL_ROOT="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_ROOT_PASSWORD)"
+[ -n "${AZ_MYSQL_ROOT}" ] || AZ_MYSQL_ROOT=$(openssl rand -hex 24)
+AZ_MYSQL_PWD="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_PASSWORD)"
+[ -n "${AZ_MYSQL_PWD}" ] || AZ_MYSQL_PWD=$(openssl rand -hex 20)
 
 if [[ "${AZ_EXISTING}" == "true" ]]; then
     AZ_BASE_URL="${AZ_URL}"
