@@ -227,6 +227,14 @@ AZ_MYSQL_PWD="$(_existing "${CONFIG_DIR}/azuracast.env" MYSQL_PASSWORD)"
 AZ_PUBLIC_URL="$(_existing "${CONFIG_DIR}/services.env" GCS_AZ_PUBLIC_URL)"
 [ -n "${AZ_PUBLIC_URL}" ] || AZ_PUBLIC_URL="${CALEOPE_PARAM_AZ_PUBLIC_URL:-}"
 
+# ── Clé API AzuraCast (IDEMPOTENT) ─────────────────────────────────────
+# La clé est ajoutée à la main après l'install (jamais fournie par le store).
+# Un reinstall NE DOIT PAS la remettre à vide : on relit la clé déjà en place
+# (si l'app est déjà installée), sinon le param --param azuracast_api_key=...,
+# sinon vide. Écrase l'assignation param-seul faite plus haut (ligne ~179).
+AZ_API_KEY="$(_existing "${CONFIG_DIR}/services.env" AZURACAST_API_KEY)"
+[ -n "${AZ_API_KEY}" ] || AZ_API_KEY="${CALEOPE_PARAM_AZURACAST_API_KEY:-}"
+
 if [[ "${AZ_EXISTING}" == "true" ]]; then
     AZ_BASE_URL="${AZ_URL}"
 else
