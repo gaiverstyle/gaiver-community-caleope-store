@@ -25,6 +25,12 @@ def main():
     cur.execute("""CREATE TABLE IF NOT EXISTS proposal_decisions (
         title TEXT PRIMARY KEY, verdict TEXT, genre TEXT, artist TEXT,
         canon_title TEXT, votes INT, decided_at TIMESTAMP DEFAULT NOW())""")
+    # title_proposals est alimentée par gcs_web ; on la garantit ici pour pouvoir
+    # tourner même avant la première proposition (sinon SELECT sur table absente).
+    cur.execute("""CREATE TABLE IF NOT EXISTS title_proposals (
+        id SERIAL PRIMARY KEY, user_id VARCHAR(64) NOT NULL,
+        title TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())""")
+    c.commit()
     cur.execute("SELECT title, count(DISTINCT user_id) votes FROM title_proposals GROUP BY title ORDER BY votes DESC")
     props=cur.fetchall(); accepted=[]; na=nr=skip=0
     for p in props:
