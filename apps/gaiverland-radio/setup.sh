@@ -3154,6 +3154,14 @@ def main():
             ensure_smart_crossfade()
         except Exception as e:
             print(f"  ⚠ crossfade non appliqué : {e}")
+        # Voix Rebexis exclue du fondu : fade_in/out=0 sur les fichiers de la
+        # playlist voix, pour que le crossfade ne mange plus l'intro/outro des
+        # annonces (la musique garde son beatmatch, seule la voix est protégée).
+        try:
+            from az_voice import ensure_voice_no_fade
+            ensure_voice_no_fade()
+        except Exception as e:
+            print(f"  ⚠ voix fade non appliqué : {e}")
 
     conn = get_conn()
     # Colonne song_id (hash AzuraCast) : chaînon tracks ↔ votes pour l'effet des
