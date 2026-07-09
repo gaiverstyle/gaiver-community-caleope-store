@@ -158,42 +158,116 @@ def events(limit: int = 12):
 
 _visuals_cache = {"city": "", "at": 0.0, "imgs": []}
 
+# Fichiers à écarter du fond : blasons, cartes, drapeaux, logos, plans, portraits…
+_PHOTO_REJECT = re.compile(
+    r"(blason|armoiries|coat[_ ]?of[_ ]?arms|wappen|logo|drapeau|flag|"
+    r"carte|\bmap\b|plan_|localisation|location_|situation|position|"
+    r"seal|sceau|diagram|graph|chart|\.svg)", re.I)
+
+
+def _wm_upscale(src: str, target: int = 1920) -> str:
+    """Régénère une vignette Wikimedia plus large (URLs .../NNNpx-Nom.jpg, à la volée)."""
+    return re.sub(r"/(\d+)px-", f"/{target}px-", src, count=1)
+
+
+def _good_photo(src: str) -> bool:
+    low = src.lower()
+    if not low.endswith((".jpg", ".jpeg")):
+        return False  # on veut des photos (écarte SVG/PNG cartes/blasons)
+    return not _PHOTO_REJECT.search(src)
+
+
+def _wiki_media(title: str, lang: str = "fr") -> list:
+    """Photos JPG d'une page Wikipedia (media-list), upscalées + filtrées."""
+    out = []
+    try:
+        r = httpx.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/media-list/{title}",
+                      headers={"User-Agent": "GaiverlandRadio/1.0 (festival visuals)"}, timeout=6)
+        if r.status_code == 200:
+            for m in r.json().get("items", []):
+                if m.get("type") != "image":
+                    continue
+                ss = m.get("srcset") or []
+                if not ss:
+                    continue
+                src = ss[-1].get("src", "")
+                if src.startswith("//"):
+                    src = "https:" + src
+                if not _good_photo(src):
+                    continue
+                mw = re.search(r"/(\d+)px-", src)
+                if mw and int(mw.group(1)) < 800:
+                    continue  # trop basse résolution même à l'origine
+                out.append(_wm_upscale(src))
+    except Exception:
+        pass
+    return out
+
+
+def _wiki_coords(city: str):
+    """(lat, lon) de la ville via l'API Wikipedia, sinon (None, None)."""
+    try:
+        r = httpx.get("https://fr.wikipedia.org/w/api.php",
+                      params={"action": "query", "prop": "coordinates",
+                              "titles": city, "format": "json"},
+                      headers={"User-Agent": "GaiverlandRadio/1.0"}, timeout=5)
+        for p in r.json().get("query", {}).get("pages", {}).values():
+            co = p.get("coordinates")
+            if co:
+                return co[0]["lat"], co[0]["lon"]
+    except Exception:
+        pass
+    return None, None
+
+
+def _commons_geosearch(lat, lon, radius_m: int, limit: int = 20) -> list:
+    """Photos Commons autour de coordonnées (élargissement géographique par rayon)."""
+    out = []
+    try:
+        r = httpx.get("https://commons.wikimedia.org/w/api.php",
+                      params={"action": "query", "generator": "geosearch",
+                              "ggscoord": f"{lat}|{lon}", "ggsradius": radius_m,
+                              "ggslimit": limit, "ggsnamespace": 6,
+                              "prop": "imageinfo", "iiprop": "url|size",
+                              "iiurlwidth": 1920, "format": "json"},
+                      headers={"User-Agent": "GaiverlandRadio/1.0"}, timeout=7)
+        for p in r.json().get("query", {}).get("pages", {}).values():
+            ii = (p.get("imageinfo") or [{}])[0]
+            src = ii.get("thumburl") or ii.get("url", "")
+            w = ii.get("width", 0) or 0
+            if src and _good_photo(src) and (w == 0 or w >= 1000):
+                out.append(src)
+    except Exception:
+        pass
+    return out
+
 
 def _city_photos(city: str):
-    """Photos de la ville du festival — via Wikipedia REST media-list (fr), caché 30 min, fail-safe.
-    On filtre sur les JPG (écarte cartes/blasons/SVG) et on prend la plus grande vignette dispo."""
+    """Fond du 'clip'/plein écran : photos de la zone du festival. Caché 30 min, fail-safe.
+    1) page Wikipedia de la ville (upscalée, filtrée) ; 2) si peu de belles photos,
+    élargissement géographique via Commons (rayon croissant ville→agglo→région)."""
     if not city:
         return []
     now = time.time()
     if _visuals_cache["city"] == city and now - _visuals_cache["at"] < 1800:
         return _visuals_cache["imgs"]
-    imgs = []
-    try:
-        r = httpx.get(f"https://fr.wikipedia.org/api/rest_v1/page/media-list/{city}",
-                      headers={"User-Agent": "GaiverlandRadio/1.0 (festival visuals)"},
-                      timeout=6)
-        if r.status_code == 200:
-            for m in r.json().get("items", []):
-                if m.get("type") != "image":
-                    continue
-                srcset = m.get("srcset") or []
-                if not srcset:
-                    continue
-                src = srcset[-1].get("src", "")  # la plus grande vignette dispo
-                if src.startswith("//"):
-                    src = "https:" + src
-                if not src.lower().endswith((".jpg", ".jpeg")):
-                    continue  # écarte cartes/blasons/SVG
-                mw = re.search(r"/(\d+)px-", src)  # largeur de la vignette
-                if mw and int(mw.group(1)) < 1000:
-                    continue  # écarte les basses résolutions (floues en fond)
-                imgs.append(src)
-                if len(imgs) >= 12:
+    imgs = _wiki_media(city)
+    if len(imgs) < 6:
+        lat, lon = _wiki_coords(city)
+        if lat is not None:
+            for radius in (8000, 25000, 60000):  # ~ville, agglo, département/région
+                imgs += _commons_geosearch(lat, lon, radius)
+                if len(imgs) >= 8:
                     break
-    except Exception:
-        pass
-    _visuals_cache.update(city=city, at=now, imgs=imgs)
-    return imgs
+    seen, uniq = set(), []
+    for s in imgs:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+        if len(uniq) >= 14:
+            break
+    _visuals_cache.update(city=city, at=now, imgs=uniq)
+    return uniq
 
 
 @app.get("/api/visuals")
@@ -484,6 +558,45 @@ footer .c15{margin-top:6px;font-size:12px}
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
 #player{display:none}
+/* ── Mode plein écran (tel / TV / PC) ─────────────────────────────── */
+.hero-fs{position:absolute;top:10px;right:10px;z-index:5;width:38px;height:38px;border:none;
+  border-radius:10px;cursor:pointer;font-size:18px;color:var(--cream);
+  background:rgba(0,0,0,.35);backdrop-filter:blur(3px);transition:transform .15s}
+.hero-fs:hover{transform:scale(1.08);background:rgba(0,0,0,.5)}
+#fs{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;overflow:hidden;
+  background:linear-gradient(175deg,var(--nightblue),#3d1d5c 35%,var(--sun3) 65%,var(--sun2) 88%,var(--sun1))}
+#fs.fs-hidden{display:none}
+#fs-bg{position:absolute;inset:0;background-size:cover;background-position:center;
+  filter:brightness(.45) saturate(1.15);transform:scale(1.06);transition:background-image .6s ease}
+#fs-viz{position:absolute;left:0;right:0;bottom:0;width:100%;height:36vh;z-index:1;opacity:.85;pointer-events:none}
+#fs-scrim{position:absolute;inset:0;z-index:2;background:radial-gradient(ellipse at center,rgba(0,0,0,.12),rgba(0,0,0,.55))}
+#fs-center{position:relative;z-index:3;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:2.2vh;padding:4vh 5vw;text-align:center;max-width:1100px}
+#fs-wordmark{font-family:Georgia,serif;font-weight:bold;font-size:clamp(40px,9vw,150px);letter-spacing:2px;line-height:.9;
+  background:linear-gradient(90deg,#ffd29a,#ff8fa3,#c9b6ff);-webkit-background-clip:text;background-clip:text;
+  color:transparent;text-shadow:0 0 60px rgba(255,150,120,.25)}
+#fs-cover{width:min(38vh,42vw);aspect-ratio:1;border-radius:16px;object-fit:cover;
+  box-shadow:0 20px 60px rgba(0,0,0,.7);background:rgba(0,0,0,.35)}
+#fs-title{font-size:clamp(22px,3.6vw,46px);font-weight:bold;line-height:1.15;text-shadow:0 3px 18px rgba(0,0,0,.85);max-width:90%}
+#fs-artist{font-size:clamp(15px,2vw,26px);font-style:italic;opacity:.9;text-shadow:0 2px 12px rgba(0,0,0,.85)}
+#fs-play{width:clamp(62px,8vh,92px);height:clamp(62px,8vh,92px);border-radius:50%;border:none;cursor:pointer;
+  font-size:clamp(24px,3vh,34px);color:var(--ink);background:linear-gradient(135deg,#ffd29a,#ffb56b);
+  box-shadow:0 8px 30px rgba(0,0,0,.4);transition:transform .15s}
+#fs-play:hover{transform:scale(1.06)}
+#fs-bar{width:min(560px,80vw);height:6px;background:rgba(255,244,230,.2);border-radius:4px;overflow:hidden}
+#fs-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffd29a,#ff8fa3);transition:width 1s linear}
+#fs-top{position:absolute;top:16px;right:16px;z-index:4;display:flex;gap:10px}
+#fs-top button{width:44px;height:44px;border-radius:12px;border:none;cursor:pointer;font-size:20px;color:var(--cream);
+  background:rgba(0,0,0,.35);backdrop-filter:blur(3px);transition:transform .15s}
+#fs-top button:hover{transform:scale(1.08);background:rgba(0,0,0,.5)}
+#fs-settings{position:absolute;top:70px;right:16px;z-index:5;background:rgba(20,10,35,.92);
+  border:1px solid rgba(255,244,230,.25);border-radius:14px;padding:16px 18px;font-family:sans-serif;font-size:14px;
+  backdrop-filter:blur(6px);min-width:210px}
+#fs-settings.fs-hidden{display:none}
+#fs-settings .fs-set-title{font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7;margin-bottom:10px}
+#fs-settings label{display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer}
+#fs-settings input{width:16px;height:16px;accent-color:#ff8fa3}
+@media (max-width:600px){#fs-center{gap:1.6vh}#fs-cover{width:min(30vh,55vw)}}
 </style></head><body><div class="wrap">
 
 <header>
@@ -496,6 +609,7 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Mainstage Broadcast <span class="live-badge">EN DIRECT</span></h2>
   <div class="hero">
+    <button class="hero-fs" onclick="openFs()" aria-label="Plein écran" title="Plein écran">⛶</button>
     <div class="hero-bg" id="hero-bg"></div>
     <div class="hero-fg">
       <img class="hero-cover" id="hero-cover" alt="" onerror="this.style.visibility='hidden'">
@@ -569,7 +683,34 @@ footer .c15{margin-top:6px;font-size:12px}
   <div style="margin-top:14px"><a href="/equipe" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">L'équipe du festival →</a></div>
 </footer>
 
-</div><script>
+</div>
+
+<div id="fs" class="fs-hidden">
+  <div id="fs-bg"></div>
+  <canvas id="fs-viz"></canvas>
+  <div id="fs-scrim"></div>
+  <div id="fs-top">
+    <button id="fs-gear" onclick="toggleFsSettings()" aria-label="Réglages" title="Réglages">⚙</button>
+    <button onclick="closeFs()" aria-label="Quitter le plein écran" title="Quitter">✕</button>
+  </div>
+  <div id="fs-settings" class="fs-hidden">
+    <div class="fs-set-title">Affichage</div>
+    <label><input type="checkbox" id="opt-wordmark"> Titre GAIVERLAND</label>
+    <label><input type="checkbox" id="opt-bg"> Fond photos de la zone</label>
+    <label><input type="checkbox" id="opt-bar"> Barre de progression</label>
+    <label><input type="checkbox" id="opt-viz"> Visualizer audio</label>
+  </div>
+  <div id="fs-center">
+    <div id="fs-wordmark">GAIVERLAND</div>
+    <img id="fs-cover" alt="" onerror="this.style.visibility='hidden'">
+    <div id="fs-title">…</div>
+    <div id="fs-artist"></div>
+    <button id="fs-play" onclick="togglePlay()" aria-label="Lecture">▶</button>
+    <div id="fs-bar"><i id="fs-prog"></i></div>
+  </div>
+</div>
+
+<script>
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
 let audioUrl="";
 let cityPhotos=[], bgIdx=0, lastTitle="";
@@ -592,7 +733,9 @@ function setBg(){
   if(!cityPhotos.length) return;
   const url=cityPhotos[bgIdx % cityPhotos.length];
   const img=new Image();
-  img.onload=()=>{ document.getElementById('hero-bg').style.backgroundImage="url('"+url.replace(/'/g,'%27')+"')"; };
+  img.onload=()=>{ const u="url('"+url.replace(/'/g,'%27')+"')";
+    document.getElementById('hero-bg').style.backgroundImage=u;
+    if(fsOpen) document.getElementById('fs-bg').style.backgroundImage=u; };
   img.src=url;
 }
 async function refresh(){
@@ -618,6 +761,7 @@ async function refresh(){
     const s=d.state||{};
     document.getElementById('city').textContent=s.city||'Quelque part';
     document.getElementById('wx').textContent=(s.weather||'')+(s.stage?' — scène active : '+s.stage:'');
+    if(fsOpen) fsSync();
   }catch(e){}
 }
 async function loadEvents(){
@@ -663,9 +807,76 @@ async function proposeTitle(){
   }catch(e){ m.textContent='Le stagiaire a mangé la proposition. Réessaye.'; }
   setTimeout(()=>m.textContent='',6000);
 }
-(function(){const a=document.getElementById('player'),b=document.getElementById('playbtn');
- a.addEventListener('play',()=>{b.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
- a.addEventListener('pause',()=>{b.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused';});
+// ── Mode plein écran (tel / TV / PC) ──────────────────────────────
+const FS_KEY='gvl_fs_opts';
+let fsOpen=false, vizRAF=0, vizBars=[], vizT=0;
+function gid(id){return document.getElementById(id);}
+function fsGetOpts(){let o={};try{o=JSON.parse(localStorage.getItem(FS_KEY))||{};}catch(e){}return Object.assign({wordmark:true,bg:true,bar:true,viz:true},o);}
+function fsApplyOpts(){
+  const o=fsGetOpts();
+  gid('opt-wordmark').checked=o.wordmark; gid('opt-bg').checked=o.bg; gid('opt-bar').checked=o.bar; gid('opt-viz').checked=o.viz;
+  gid('fs-wordmark').style.display=o.wordmark?'':'none';
+  gid('fs-bg').style.display=o.bg?'':'none';
+  gid('fs-bar').style.display=o.bar?'':'none';
+  gid('fs-viz').style.display=o.viz?'':'none';
+  if(fsOpen && o.viz) startViz(); else stopViz();
+}
+function fsSaveOpts(){
+  try{localStorage.setItem(FS_KEY,JSON.stringify({wordmark:gid('opt-wordmark').checked,bg:gid('opt-bg').checked,bar:gid('opt-bar').checked,viz:gid('opt-viz').checked}));}catch(e){}
+  fsApplyOpts();
+}
+function toggleFsSettings(){ gid('fs-settings').classList.toggle('fs-hidden'); }
+function fsSync(){
+  gid('fs-title').textContent=gid('title').textContent;
+  gid('fs-artist').textContent=gid('artist').textContent;
+  const cov=gid('hero-cover').src;
+  if(cov){const c=gid('fs-cover'); c.src=cov; c.style.visibility='';}
+  gid('fs-bg').style.backgroundImage=gid('hero-bg').style.backgroundImage;
+  gid('fs-prog').style.width=gid('prog').style.width;
+  gid('fs-play').textContent=gid('player').paused?'▶':'⏸';
+}
+function openFs(){
+  fsOpen=true; gid('fs').classList.remove('fs-hidden'); fsSync(); fsApplyOpts();
+  const el=document.documentElement; if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+}
+function closeFs(){
+  fsOpen=false; gid('fs').classList.add('fs-hidden'); gid('fs-settings').classList.add('fs-hidden'); stopViz();
+  if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&fsOpen) closeFs(); });
+// Visualizer décoratif : n'accède PAS au flux audio (aucun risque de couper le
+// stream Icecast cross-origin, aucune dépendance CORS). Barres animées, plus
+// vives quand ça joue. Le vrai spectre exigerait du CORS sur Icecast (piste infra).
+function startViz(){
+  if(!vizBars.length){for(let i=0;i<48;i++)vizBars.push({p:Math.random()*6.28,s:0.5+Math.random()});}
+  if(!vizRAF) drawViz();
+}
+function stopViz(){
+  if(vizRAF){cancelAnimationFrame(vizRAF);vizRAF=0;}
+  const c=gid('fs-viz'); if(c){const x=c.getContext('2d'); if(x)x.clearRect(0,0,c.width,c.height);}
+}
+function drawViz(){
+  const c=gid('fs-viz'); if(!c){vizRAF=0;return;}
+  const x=c.getContext('2d'); if(!x){vizRAF=0;return;}
+  const w=c.width=c.clientWidth||1, h=c.height=c.clientHeight||1;
+  const playing=!gid('player').paused;
+  vizT+=playing?0.08:0.02;
+  x.clearRect(0,0,w,h);
+  const n=vizBars.length, bw=w/n;
+  for(let i=0;i<n;i++){
+    const b=vizBars[i];
+    const amp=playing?(0.35+0.55*Math.abs(Math.sin(vizT*b.s+b.p))):(0.10+0.06*Math.sin(vizT*0.5+b.p));
+    const bh=amp*h*0.9;
+    const g=x.createLinearGradient(0,h,0,h-bh);
+    g.addColorStop(0,'rgba(255,210,154,.10)'); g.addColorStop(1,'rgba(255,143,163,.6)');
+    x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);
+  }
+  vizRAF=requestAnimationFrame(drawViz);
+}
+(function(){const a=document.getElementById('player'),b=document.getElementById('playbtn'),fb=document.getElementById('fs-play');
+ a.addEventListener('play',()=>{b.textContent='⏸'; if(fb)fb.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
+ a.addEventListener('pause',()=>{b.textContent='▶'; if(fb)fb.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused';});
+ ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
  if('mediaSession' in navigator){
    navigator.mediaSession.setActionHandler('play',togglePlay);
    navigator.mediaSession.setActionHandler('pause',()=>document.getElementById('player').pause());
