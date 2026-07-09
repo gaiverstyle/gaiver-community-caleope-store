@@ -24,7 +24,8 @@ import psycopg2.extras
 import sys
 sys.path.insert(0, "/app")
 from az_utils import (get_or_create_playlist, batch_assign_playlist, replace_playlist,
-                      set_playlist_order, get_station, now_playing, get_queue, update_playlist)
+                      set_playlist_order, get_station, now_playing, get_queue, update_playlist,
+                      _get_all_files)
 
 DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
@@ -32,6 +33,8 @@ REBEXIS_URL  = "http://gaiverland-rebexis:8081"
 TTS_URL      = "http://gaiverland-tts:8082"
 CYCLE_SEC    = 180  # 3 minutes
 AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
+PROPOSAL_INTERVAL_S = int(os.environ.get("PROPOSAL_CHECK_INTERVAL_S", str(6 * 3600)))  # 6h
+_last_proposal_check = 0.0
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
 REBEXIS_SONGS_INTERVAL = 3
@@ -313,6 +316,15 @@ def record_plays():
                         if tid:
                             cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (tid,))
                             recorded += 1
+                            # Relie le titre au hash AzuraCast (song.id) → clé des votes.
+                            # C'est ce chaînon qui permet à l'effet des votes de viser
+                            # le bon track dans le moteur de rotation.
+                            sid = song.get("id") or ""
+                            if sid:
+                                cur.execute(
+                                    "UPDATE tracks SET song_id=%s WHERE id=%s "
+                                    "AND (song_id IS NULL OR song_id<>%s)",
+                                    (sid, tid, sid))
                     _recorded_sh.add(sh_id)
             conn.commit()
         finally:
@@ -324,6 +336,86 @@ def record_plays():
             print(f"  📝 {recorded} lecture(s) enregistrée(s) dans play_history")
     except Exception as e:
         print(f"  ⚠ record_plays: {e}")
+
+
+def maybe_validate_proposals():
+    """Classe périodiquement les titres proposés par la communauté (accept/reject
+    par genre, via proposal_validator.py). Résultats dans proposal_decisions, à
+    disposition de Régis. Ne télécharge rien : l'import musical reste sa main."""
+    global _last_proposal_check
+    now = time.time()
+    if now - _last_proposal_check < PROPOSAL_INTERVAL_S:
+        return
+    _last_proposal_check = now
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proposal_validator.py")
+    if not os.path.exists(script):
+        return
+    try:
+        print("  🔎 validation des propositions communauté…")
+        subprocess.run([sys.executable, script], timeout=300, check=False)
+    except Exception as e:
+        print(f"  ⚠ validation propositions : {e}")
+
+
+def backfill_song_ids():
+    """Backfill one-shot du song_id (hash AzuraCast) sur toute la librairie depuis
+    l'API fichiers, en matchant titre/artiste normalisés. Rend l'effet des votes
+    opérationnel IMMÉDIATEMENT après un (re)déploiement, sans attendre que chaque
+    titre rejoue (record_plays entretient ensuite au fil de l'eau). No-op si la
+    couverture est déjà bonne."""
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) AS n, count(song_id) AS s FROM tracks WHERE analyzed=TRUE")
+                row = cur.fetchone(); n = row["n"] or 0; s = row["s"] or 0
+            if n == 0 or (s / n) >= 0.5:
+                return  # déjà couvert → on ne rappelle pas l'API à chaque boot
+            files = _get_all_files()
+            if not files:
+                return
+            by_ta, by_art = {}, {}
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, title, artist FROM tracks WHERE analyzed=TRUE")
+                for r in cur.fetchall():
+                    nt = _norm(r["title"])
+                    if not nt:
+                        continue
+                    na = _norm(r.get("artist") or "")
+                    by_ta[(nt, na)] = r["id"]
+                    by_art.setdefault(na, []).append((nt, r["id"]))
+
+            def _match(nt, na):
+                if (nt, na) in by_ta:
+                    return by_ta[(nt, na)]
+                best = None
+                for cnt, cid in by_art.get(na, []):
+                    if len(cnt) < 8 or len(nt) < 8:
+                        continue
+                    if nt.startswith(cnt) or cnt.startswith(nt):
+                        if best is None or len(cnt) > best[1]:
+                            best = (cid, len(cnt))
+                return best[0] if best else None
+
+            upd = 0
+            with conn.cursor() as cur:
+                for f in files:
+                    sid = f.get("song_id")
+                    if not sid:
+                        continue
+                    tid = _match(_norm(f.get("title") or ""), _norm(f.get("artist") or ""))
+                    if tid:
+                        cur.execute(
+                            "UPDATE tracks SET song_id=%s WHERE id=%s "
+                            "AND (song_id IS NULL OR song_id<>%s)", (sid, tid, sid))
+                        upd += cur.rowcount
+            conn.commit()
+            if upd:
+                print(f"  🔗 backfill song_id : {upd} titre(s) reliés (effet votes prêt)")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  ⚠ backfill song_id: {e}")
 
 
 def main():
@@ -338,7 +430,28 @@ def main():
     else:
         print("  ⚠ AzuraCast non joignable — scheduler en mode dégradé (Rebexis + TTS actifs)")
 
+    # Beatmatch niveau 2 : câbler le fondu « smart » de Liquidsoap (idempotent).
+    # L'ordre par BPM proche est fait par playlist.py (Régis) ; ici on active le
+    # crossfade intelligent qui beatmatche les tempos rapprochés. CPU négligeable.
+    if station:
+        try:
+            from az_crossfade import ensure_smart_crossfade
+            ensure_smart_crossfade()
+        except Exception as e:
+            print(f"  ⚠ crossfade non appliqué : {e}")
+
     conn = get_conn()
+    # Colonne song_id (hash AzuraCast) : chaînon tracks ↔ votes pour l'effet des
+    # votes du moteur de rotation. Idempotent — no-op si déjà présente.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS song_id VARCHAR(64)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tracks_song_id ON tracks(song_id)")
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠ migration song_id: {e}")
+        conn.rollback()
+    backfill_song_ids()  # rend l'effet des votes opérationnel dès le boot
     gw_id, rb_id, wd_id, fr_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
@@ -363,6 +476,9 @@ def main():
         if gw_id:
             conn = get_conn()
             update_gaiverland_playlist(conn, gw_id)
+
+        # 5. Classer les propositions de titres de la communauté (toutes les 6 h)
+        maybe_validate_proposals()
 
         time.sleep(CYCLE_SEC)
 

@@ -1291,6 +1291,11 @@ NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
+# Effet des votes (spec Cassy) : score net pondéré Bible (0.6 chef/0.3 users/0.1 IA)
+# sur 14 j. ≤ -0.4 → quarantaine jour (SKIP) ; ≥ +0.4 → boosté (ENCORE).
+VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.4"))
+VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.4"))
+VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -1685,6 +1690,71 @@ def set_mood(mood: str):
     return {"ok": True, "mood": mood}
 
 
+@app.get("/votes/review")
+def review_pile(limit: int = 50):
+    """Pile « à arbitrer » : titres ayant reçu des votes REVIEW (14 j), présentés
+    au chef en lot (pas d'effet auto sur la rotation — spec Cassy)."""
+    conn = get_conn()
+    rows = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.artist, t.title, t.mood, t.genre_top1,
+                       count(*) AS reviews, max(v.created_at) AS last_review
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE v.vote = 'REVIEW'
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id, t.artist, t.title, t.mood, t.genre_top1
+                ORDER BY reviews DESC, last_review DESC
+                LIMIT %s
+            """, (VOTE_WINDOW_DAYS, limit))
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        conn.rollback()
+        return {"review_pile": [], "count": 0, "error": str(e)}
+    finally:
+        conn.close()
+    for r in rows:
+        if r.get("last_review"):
+            r["last_review"] = r["last_review"].isoformat()
+    return {"review_pile": rows, "count": len(rows)}
+
+
+@app.get("/votes/scores")
+def vote_scores_debug(limit: int = 100):
+    """Diagnostic : score voté pondéré (14 j) par titre, + statut jour/quarantaine."""
+    conn = get_conn()
+    rows = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.artist, t.title,
+                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0))::numeric, 3) AS score,
+                   count(*) AS votes
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE t.song_id IS NOT NULL
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id, t.artist, t.title
+                ORDER BY score ASC
+                LIMIT %s
+            """, (VOTE_WINDOW_DAYS, limit))
+            for r in cur.fetchall():
+                d = dict(r); s = float(d["score"])
+                d["statut"] = ("quarantaine" if s <= VOTE_SKIP_THRESHOLD
+                               else "boost" if s >= VOTE_ENCORE_THRESHOLD else "normal")
+                rows.append(d)
+    except Exception as e:
+        conn.rollback()
+        return {"scores": [], "count": 0, "error": str(e)}
+    finally:
+        conn.close()
+    return {"scores": rows, "count": len(rows),
+            "seuils": {"skip": VOTE_SKIP_THRESHOLD, "encore": VOTE_ENCORE_THRESHOLD,
+                       "fenetre_jours": VOTE_WINDOW_DAYS}}
+
+
 @app.get("/playlist/next")
 def generate_playlist(count: int = 20, mood: Optional[str] = None):
     conn = get_conn()
@@ -1701,6 +1771,32 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
         """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
+
+    # --- Effet des votes (spec Cassy) : score net pondéré Bible sur 14 j ---
+    #  SKIP net ≤ -0.4 → quarantaine jour ; ENCORE ≥ +0.4 → boost fréquence.
+    #  Reliés à tracks via song_id (hash AzuraCast capté par record_plays).
+    vote_scores = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id AS id,
+                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0) AS score
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE t.song_id IS NOT NULL
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id
+            """, (VOTE_WINDOW_DAYS,))
+            vote_scores = {r["id"]: float(r["score"]) for r in cur.fetchall()}
+    except Exception as e:
+        # table votes / colonne song_id pas encore là → aucun effet (dégradé propre)
+        print(f"  ⚠ effet votes ignoré: {e}")
+        conn.rollback()
+    quarantined = {tid for tid, s in vote_scores.items() if s <= VOTE_SKIP_THRESHOLD}
+    encored     = [tid for tid, s in vote_scores.items() if s >= VOTE_ENCORE_THRESHOLD]
+    # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
+    exclude_ids = list(set(recent_ids) | quarantined) or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
     excluded_now = get_excluded_genres()
@@ -1725,8 +1821,26 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 != ALL(%s)
               AND genre_top1 = ANY(%s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
+        """, (candidate_moods, exclude_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
         candidates = list(cur.fetchall())
+
+    # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
+    # vivier (priorité de fréquence) SANS forcer un rejeu le jour même (anti-répétition
+    # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
+    if encored:
+        already = {c["id"] for c in candidates}
+        boost_ids = [tid for tid in encored if tid not in already and tid not in set(recent_ids)]
+        if boost_ids:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                           key_note, key_scale
+                    FROM tracks
+                    WHERE id = ANY(%s) AND analyzed=TRUE AND mood = ANY(%s)
+                      AND file_path NOT LIKE %s
+                      AND genre_top1 = ANY(%s)
+                """, (boost_ids, candidate_moods, '%rebexis_%', GENRE_WHITELIST))
+                candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
         with conn.cursor() as cur:
@@ -2523,7 +2637,8 @@ import psycopg2.extras
 import sys
 sys.path.insert(0, "/app")
 from az_utils import (get_or_create_playlist, batch_assign_playlist, replace_playlist,
-                      set_playlist_order, get_station, now_playing, get_queue, update_playlist)
+                      set_playlist_order, get_station, now_playing, get_queue, update_playlist,
+                      _get_all_files)
 
 DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
@@ -2531,6 +2646,8 @@ REBEXIS_URL  = "http://gaiverland-rebexis:8081"
 TTS_URL      = "http://gaiverland-tts:8082"
 CYCLE_SEC    = 180  # 3 minutes
 AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
+PROPOSAL_INTERVAL_S = int(os.environ.get("PROPOSAL_CHECK_INTERVAL_S", str(6 * 3600)))  # 6h
+_last_proposal_check = 0.0
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
 REBEXIS_SONGS_INTERVAL = 3
@@ -2812,6 +2929,15 @@ def record_plays():
                         if tid:
                             cur.execute("INSERT INTO play_history (track_id) VALUES (%s)", (tid,))
                             recorded += 1
+                            # Relie le titre au hash AzuraCast (song.id) → clé des votes.
+                            # C'est ce chaînon qui permet à l'effet des votes de viser
+                            # le bon track dans le moteur de rotation.
+                            sid = song.get("id") or ""
+                            if sid:
+                                cur.execute(
+                                    "UPDATE tracks SET song_id=%s WHERE id=%s "
+                                    "AND (song_id IS NULL OR song_id<>%s)",
+                                    (sid, tid, sid))
                     _recorded_sh.add(sh_id)
             conn.commit()
         finally:
@@ -2823,6 +2949,86 @@ def record_plays():
             print(f"  📝 {recorded} lecture(s) enregistrée(s) dans play_history")
     except Exception as e:
         print(f"  ⚠ record_plays: {e}")
+
+
+def maybe_validate_proposals():
+    """Classe périodiquement les titres proposés par la communauté (accept/reject
+    par genre, via proposal_validator.py). Résultats dans proposal_decisions, à
+    disposition de Régis. Ne télécharge rien : l'import musical reste sa main."""
+    global _last_proposal_check
+    now = time.time()
+    if now - _last_proposal_check < PROPOSAL_INTERVAL_S:
+        return
+    _last_proposal_check = now
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proposal_validator.py")
+    if not os.path.exists(script):
+        return
+    try:
+        print("  🔎 validation des propositions communauté…")
+        subprocess.run([sys.executable, script], timeout=300, check=False)
+    except Exception as e:
+        print(f"  ⚠ validation propositions : {e}")
+
+
+def backfill_song_ids():
+    """Backfill one-shot du song_id (hash AzuraCast) sur toute la librairie depuis
+    l'API fichiers, en matchant titre/artiste normalisés. Rend l'effet des votes
+    opérationnel IMMÉDIATEMENT après un (re)déploiement, sans attendre que chaque
+    titre rejoue (record_plays entretient ensuite au fil de l'eau). No-op si la
+    couverture est déjà bonne."""
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) AS n, count(song_id) AS s FROM tracks WHERE analyzed=TRUE")
+                row = cur.fetchone(); n = row["n"] or 0; s = row["s"] or 0
+            if n == 0 or (s / n) >= 0.5:
+                return  # déjà couvert → on ne rappelle pas l'API à chaque boot
+            files = _get_all_files()
+            if not files:
+                return
+            by_ta, by_art = {}, {}
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, title, artist FROM tracks WHERE analyzed=TRUE")
+                for r in cur.fetchall():
+                    nt = _norm(r["title"])
+                    if not nt:
+                        continue
+                    na = _norm(r.get("artist") or "")
+                    by_ta[(nt, na)] = r["id"]
+                    by_art.setdefault(na, []).append((nt, r["id"]))
+
+            def _match(nt, na):
+                if (nt, na) in by_ta:
+                    return by_ta[(nt, na)]
+                best = None
+                for cnt, cid in by_art.get(na, []):
+                    if len(cnt) < 8 or len(nt) < 8:
+                        continue
+                    if nt.startswith(cnt) or cnt.startswith(nt):
+                        if best is None or len(cnt) > best[1]:
+                            best = (cid, len(cnt))
+                return best[0] if best else None
+
+            upd = 0
+            with conn.cursor() as cur:
+                for f in files:
+                    sid = f.get("song_id")
+                    if not sid:
+                        continue
+                    tid = _match(_norm(f.get("title") or ""), _norm(f.get("artist") or ""))
+                    if tid:
+                        cur.execute(
+                            "UPDATE tracks SET song_id=%s WHERE id=%s "
+                            "AND (song_id IS NULL OR song_id<>%s)", (sid, tid, sid))
+                        upd += cur.rowcount
+            conn.commit()
+            if upd:
+                print(f"  🔗 backfill song_id : {upd} titre(s) reliés (effet votes prêt)")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  ⚠ backfill song_id: {e}")
 
 
 def main():
@@ -2837,7 +3043,28 @@ def main():
     else:
         print("  ⚠ AzuraCast non joignable — scheduler en mode dégradé (Rebexis + TTS actifs)")
 
+    # Beatmatch niveau 2 : câbler le fondu « smart » de Liquidsoap (idempotent).
+    # L'ordre par BPM proche est fait par playlist.py (Régis) ; ici on active le
+    # crossfade intelligent qui beatmatche les tempos rapprochés. CPU négligeable.
+    if station:
+        try:
+            from az_crossfade import ensure_smart_crossfade
+            ensure_smart_crossfade()
+        except Exception as e:
+            print(f"  ⚠ crossfade non appliqué : {e}")
+
     conn = get_conn()
+    # Colonne song_id (hash AzuraCast) : chaînon tracks ↔ votes pour l'effet des
+    # votes du moteur de rotation. Idempotent — no-op si déjà présente.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS song_id VARCHAR(64)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tracks_song_id ON tracks(song_id)")
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠ migration song_id: {e}")
+        conn.rollback()
+    backfill_song_ids()  # rend l'effet des votes opérationnel dès le boot
     gw_id, rb_id, wd_id, fr_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
@@ -2862,6 +3089,9 @@ def main():
         if gw_id:
             conn = get_conn()
             update_gaiverland_playlist(conn, gw_id)
+
+        # 5. Classer les propositions de titres de la communauté (toutes les 6 h)
+        maybe_validate_proposals()
 
         time.sleep(CYCLE_SEC)
 
@@ -4303,18 +4533,36 @@ LORE_STARTER = {
         "On a retrouvé le C15 exactement là où il devait être. Pour une fois.",
         "Le C15 ronronne dans la nuit de {city}. Il veille.",
         "Quelqu'un a lavé le C15. Personne n'avoue.",
+        "Le C15 a démarré au quart de tour ce matin. À {city}, on savoure le miracle.",
+        "Nouvel autocollant sur le pare-chocs du C15. On ne sait pas d'où il vient.",
+        "Le C15 a fait le plein, vérifié les niveaux, et refuse de commenter la suite.",
+        "Le C15 connaît la route de {city} mieux que le GPS. Il ne le dit pas, ça se sent.",
+        "Quelqu'un a laissé un café tiède sur le capot du C15. Il fait avec.",
+        "Le C15 a passé le contrôle technique. Le contrôleur n'en revient toujours pas.",
     ],
     "stagiaire_event": [
         "Le stagiaire a encore perdu la carte SD.",
         "Le stagiaire jure qu'il a tout sauvegardé. On vérifie... non.",
         "Le stagiaire a rebranché un câble à l'envers. Encore.",
         "On cherche le stagiaire. Le stagiaire cherche la sortie.",
+        "Le stagiaire a appris ce qu'est un XLR aujourd'hui. À la dure.",
+        "Le stagiaire a apporté des cafés. Trois sucres partout. Personne n'a demandé.",
+        "Le stagiaire a rangé les câbles. En nœud marin. On salue l'intention.",
+        "Le stagiaire a disparu pile au moment du montage. Comme un vrai pro.",
+        "Le stagiaire a nommé un fichier « final_final_vrai2 ». On n'ose pas l'ouvrir.",
+        "Le stagiaire a trouvé l'interrupteur. Toute la régie a clignoté. On respire.",
     ],
     "festival_moment": [
         "La foule de {city} ne veut pas que ça s'arrête.",
         "Un frisson a traversé {city} sur ce drop.",
         "Quelque part à {city}, quelqu'un danse seul et c'est parfait.",
         "L'air de {city} sent la basse et la nuit.",
+        "Les mains se lèvent à {city} comme une seule vague.",
+        "À {city}, deux inconnus viennent de devenir amis sur un refrain.",
+        "Le sol de {city} vibre encore. On appelle ça la mémoire des enceintes.",
+        "Il est tard à {city} et personne n'a envie de dormir.",
+        "À {city}, même ceux qui ne dansent jamais tapent du pied.",
+        "Une basse a fait trembler une vitre à {city}. On assume.",
     ],
 }
 

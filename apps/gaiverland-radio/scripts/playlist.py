@@ -34,6 +34,11 @@ NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
+# Effet des votes (spec Cassy) : score net pondéré Bible (0.6 chef/0.3 users/0.1 IA)
+# sur 14 j. ≤ -0.4 → quarantaine jour (SKIP) ; ≥ +0.4 → boosté (ENCORE).
+VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.4"))
+VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.4"))
+VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -428,6 +433,71 @@ def set_mood(mood: str):
     return {"ok": True, "mood": mood}
 
 
+@app.get("/votes/review")
+def review_pile(limit: int = 50):
+    """Pile « à arbitrer » : titres ayant reçu des votes REVIEW (14 j), présentés
+    au chef en lot (pas d'effet auto sur la rotation — spec Cassy)."""
+    conn = get_conn()
+    rows = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.artist, t.title, t.mood, t.genre_top1,
+                       count(*) AS reviews, max(v.created_at) AS last_review
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE v.vote = 'REVIEW'
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id, t.artist, t.title, t.mood, t.genre_top1
+                ORDER BY reviews DESC, last_review DESC
+                LIMIT %s
+            """, (VOTE_WINDOW_DAYS, limit))
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        conn.rollback()
+        return {"review_pile": [], "count": 0, "error": str(e)}
+    finally:
+        conn.close()
+    for r in rows:
+        if r.get("last_review"):
+            r["last_review"] = r["last_review"].isoformat()
+    return {"review_pile": rows, "count": len(rows)}
+
+
+@app.get("/votes/scores")
+def vote_scores_debug(limit: int = 100):
+    """Diagnostic : score voté pondéré (14 j) par titre, + statut jour/quarantaine."""
+    conn = get_conn()
+    rows = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id, t.artist, t.title,
+                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0))::numeric, 3) AS score,
+                   count(*) AS votes
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE t.song_id IS NOT NULL
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id, t.artist, t.title
+                ORDER BY score ASC
+                LIMIT %s
+            """, (VOTE_WINDOW_DAYS, limit))
+            for r in cur.fetchall():
+                d = dict(r); s = float(d["score"])
+                d["statut"] = ("quarantaine" if s <= VOTE_SKIP_THRESHOLD
+                               else "boost" if s >= VOTE_ENCORE_THRESHOLD else "normal")
+                rows.append(d)
+    except Exception as e:
+        conn.rollback()
+        return {"scores": [], "count": 0, "error": str(e)}
+    finally:
+        conn.close()
+    return {"scores": rows, "count": len(rows),
+            "seuils": {"skip": VOTE_SKIP_THRESHOLD, "encore": VOTE_ENCORE_THRESHOLD,
+                       "fenetre_jours": VOTE_WINDOW_DAYS}}
+
+
 @app.get("/playlist/next")
 def generate_playlist(count: int = 20, mood: Optional[str] = None):
     conn = get_conn()
@@ -444,6 +514,32 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
         """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
+
+    # --- Effet des votes (spec Cassy) : score net pondéré Bible sur 14 j ---
+    #  SKIP net ≤ -0.4 → quarantaine jour ; ENCORE ≥ +0.4 → boost fréquence.
+    #  Reliés à tracks via song_id (hash AzuraCast capté par record_plays).
+    vote_scores = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.id AS id,
+                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
+                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0) AS score
+                FROM tracks t JOIN votes v ON v.song_id = t.song_id
+                WHERE t.song_id IS NOT NULL
+                  AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+                GROUP BY t.id
+            """, (VOTE_WINDOW_DAYS,))
+            vote_scores = {r["id"]: float(r["score"]) for r in cur.fetchall()}
+    except Exception as e:
+        # table votes / colonne song_id pas encore là → aucun effet (dégradé propre)
+        print(f"  ⚠ effet votes ignoré: {e}")
+        conn.rollback()
+    quarantined = {tid for tid, s in vote_scores.items() if s <= VOTE_SKIP_THRESHOLD}
+    encored     = [tid for tid, s in vote_scores.items() if s >= VOTE_ENCORE_THRESHOLD]
+    # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
+    exclude_ids = list(set(recent_ids) | quarantined) or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
     excluded_now = get_excluded_genres()
@@ -468,8 +564,26 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 != ALL(%s)
               AND genre_top1 = ANY(%s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, recent_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
+        """, (candidate_moods, exclude_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
         candidates = list(cur.fetchall())
+
+    # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
+    # vivier (priorité de fréquence) SANS forcer un rejeu le jour même (anti-répétition
+    # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
+    if encored:
+        already = {c["id"] for c in candidates}
+        boost_ids = [tid for tid in encored if tid not in already and tid not in set(recent_ids)]
+        if boost_ids:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                           key_note, key_scale
+                    FROM tracks
+                    WHERE id = ANY(%s) AND analyzed=TRUE AND mood = ANY(%s)
+                      AND file_path NOT LIKE %s
+                      AND genre_top1 = ANY(%s)
+                """, (boost_ids, candidate_moods, '%rebexis_%', GENRE_WHITELIST))
+                candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
         with conn.cursor() as cur:
