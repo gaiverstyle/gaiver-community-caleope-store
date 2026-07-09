@@ -2774,7 +2774,21 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute("SELECT az_id FROM tracks WHERE az_playlist_assigned=true AND az_id IS NOT NULL")
-            prev_az_ids = [row["az_id"] for row in cur.fetchall()]
+            tracked = [row["az_id"] for row in cur.fetchall()]
+        # Retrait ROBUSTE : on part des membres RÉELS de la playlist côté AzuraCast,
+        # pas seulement de ce qu'on a tracké en base. Un retrait échoué à un cycle
+        # laissait sinon un orphelin collé pour toujours — typiquement un titre
+        # intense/hardstyle d'un cycle de nuit qui polluait la rotation JOUR (Subzero
+        # & co entendus à midi). On purge donc tout ce qui est actuellement dans la
+        # playlist et absent de la nouvelle sélection. Auto-réparant cycle après cycle.
+        try:
+            files = _get_all_files()
+            current_members = [f["id"] for f in files
+                               if any((p.get("id") == gw_playlist_id or p.get("name") == "Gaiverland IA")
+                                      for p in (f.get("playlists") or []))]
+        except Exception:
+            current_members = []
+        prev_az_ids = list({*tracked, *current_members} - set(az_ids))
 
         ok = replace_playlist(az_ids, gw_playlist_id, prev_az_ids=prev_az_ids)
 
