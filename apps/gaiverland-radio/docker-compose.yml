@@ -38,6 +38,12 @@ services:
       gw-db:
         condition: service_healthy
     restart: unless-stopped
+    # Base solide (#3) — priorité à l'antenne. L'analyzer (Essentia = gros CPU par
+    # bursts) tourne en BASSE priorité : cpu_shares 256 (vs azuracast 1024 par défaut
+    # → sous contention, l'audio passe avant 4:1) + cap dur 2.5 cœurs sur 4 (garde
+    # toujours ≥1.5 cœur libre pour le flux Liquidsoap). CPU-only : le flux d'abord.
+    cpu_shares: 256
+    cpus: "2.5"
     networks:
       - gaiverland-internal
       - azuracast-internal
