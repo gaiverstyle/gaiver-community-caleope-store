@@ -3071,6 +3071,65 @@ def backfill_song_ids():
         print(f"  ⚠ backfill song_id: {e}")
 
 
+def backfill_az_ids():
+    """Relie tracks.az_id (id média AzuraCast) aux titres non liés. L'analyzer rate
+    ce liage sur les métadonnées pourries (titres à rallonge SoundCloud/discovery)
+    → ces titres restent INVISIBLES pour la rotation, ce qui rétrécit le pool jour
+    et force des répétitions. On matche titre/artiste normalisés contre l'API
+    fichiers, en respectant la contrainte UNIQUE (un média = un seul track ; les
+    doublons non liés sont ignorés). No-op si tout est déjà lié."""
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) AS miss FROM tracks WHERE analyzed=TRUE AND az_id IS NULL")
+                if (cur.fetchone()["miss"] or 0) == 0:
+                    return
+            files = _get_all_files()
+            if not files:
+                return
+            by_ta, by_art = {}, {}
+            for f in files:
+                nt = _norm(f.get("title"))
+                if not nt:
+                    continue
+                na = _norm(f.get("artist") or "")
+                by_ta[(nt, na)] = f["id"]
+                by_art.setdefault(na, []).append((nt, f["id"]))
+
+            def _mfile(nt, na):
+                if (nt, na) in by_ta:
+                    return by_ta[(nt, na)]
+                best = None
+                for cnt, fid in by_art.get(na, []):
+                    if len(cnt) < 8 or len(nt) < 8:
+                        continue
+                    if nt.startswith(cnt) or cnt.startswith(nt):
+                        if best is None or len(cnt) > best[1]:
+                            best = (fid, len(cnt))
+                return best[0] if best else None
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT az_id FROM tracks WHERE az_id IS NOT NULL")
+                used = {r["az_id"] for r in cur.fetchall()}
+                cur.execute("SELECT id, title, artist FROM tracks WHERE analyzed=TRUE AND az_id IS NULL")
+                rows = cur.fetchall()
+                upd = 0
+                for r in rows:
+                    fid = _mfile(_norm(r["title"]), _norm(r.get("artist") or ""))
+                    if fid is None or fid in used:   # pas de média, ou média déjà pris (doublon)
+                        continue
+                    cur.execute("UPDATE tracks SET az_id=%s WHERE id=%s AND az_id IS NULL", (fid, r["id"]))
+                    used.add(fid); upd += 1
+            conn.commit()
+            if upd:
+                print(f"  🔗 backfill az_id : {upd} titre(s) rendus jouables (pool rotation élargi)")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  ⚠ backfill az_id: {e}")
+
+
 def main():
     print("⚙  Scheduler Gaiverland démarré")
     wait_for(PLAYLIST_URL, "Playlist Engine")
@@ -3105,6 +3164,7 @@ def main():
         print(f"  ⚠ migration song_id: {e}")
         conn.rollback()
     backfill_song_ids()  # rend l'effet des votes opérationnel dès le boot
+    backfill_az_ids()    # relie les titres orphelins → élargit le pool (anti-répétition)
     gw_id, rb_id, wd_id, fr_id = setup_playlists(conn)
 
     print("\n✅ Boucle principale active.\n")
