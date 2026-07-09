@@ -1391,13 +1391,14 @@ def get_excluded_genres() -> list:
     return excluded
 
 MOOD_TRANSITIONS = {
-    # Jour : festival <-> energique uniquement, jamais d'intense
-    "festival":   ["festival", "energique"],
-    "energique":  ["energique", "festival"],
+    # Jour : festival / energique / melodique interchangeables (jamais d'intense).
+    #  melodique = house mélodique énergie ~0.92 (identique à festival) : l'exclure
+    #  du jour rétrécissait le pool de moitié (194 vs 417) → répétitions forcées.
+    "festival":   ["festival", "energique", "melodique"],
+    "energique":  ["energique", "festival", "melodique"],
+    "melodique":  ["melodique", "festival", "energique"],
     # Nuit : intense en priorité, festival comme buffer si stock insuffisant
     "intense":    ["intense", "festival"],
-    # Secondaires (peu utilisés en auto)
-    "melodique":  ["melodique", "energique"],
     "nocturne":   ["nocturne", "melodique"],
 }
 
