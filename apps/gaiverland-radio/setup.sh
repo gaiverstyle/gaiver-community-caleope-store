@@ -1293,8 +1293,10 @@ NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
 # Effet des votes (spec Cassy) : score net pondéré Bible (0.6 chef/0.3 users/0.1 IA)
 # sur 14 j. ≤ -0.4 → quarantaine jour (SKIP) ; ≥ +0.4 → boosté (ENCORE).
-VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.4"))
-VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.4"))
+# ±0.25 (fondateur 09/07) : laisse les votes auditeurs seuls (plafond ±0.3, poids
+# Bible 0.3) basculer un titre — un ENCORE/SKIP auditeur marqué mord désormais.
+VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.25"))
+VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.25"))
 VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
