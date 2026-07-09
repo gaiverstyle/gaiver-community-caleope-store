@@ -2646,7 +2646,7 @@ Stratégie playlist :
   - "Gaiverland IA" (default, weight=3) : 20-30 titres mood-appropriés, mis à jour toutes les 3 min
   - "Rebexis"       (once_per_x_songs)  : jingles de Rebexis générés à l'avance
 """
-import os, sys, subprocess, time, datetime, unicodedata
+import os, sys, subprocess, time, datetime, unicodedata, shutil
 from zoneinfo import ZoneInfo
 LOCAL_TZ = ZoneInfo("Europe/Paris")
 
@@ -2675,6 +2675,9 @@ CYCLE_SEC    = 180  # 3 minutes
 AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
 PROPOSAL_INTERVAL_S = int(os.environ.get("PROPOSAL_CHECK_INTERVAL_S", str(6 * 3600)))  # 6h
 _last_proposal_check = 0.0
+DISK_WARN_PCT = float(os.environ.get("DISK_WARN_PCT", "85"))            # garde-fou disque (#3, P4)
+DISK_CHECK_INTERVAL_S = int(os.environ.get("DISK_CHECK_INTERVAL_S", "3600"))  # 1h
+_last_disk_check = 0.0
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
 REBEXIS_SONGS_INTERVAL = 3
@@ -2994,6 +2997,25 @@ def record_plays():
         print(f"  ⚠ record_plays: {e}")
 
 
+def maybe_check_disk():
+    """Garde-fou disque (#3, P4) : loggue une alerte si l'occupation dépasse le seuil.
+    /app est un bind-mount → reflète le disque hôte (où vit la bibliothèque musicale qui
+    grandit avec les imports). Anticipe le mode de panne disque-plein."""
+    global _last_disk_check
+    now = time.time()
+    if now - _last_disk_check < DISK_CHECK_INTERVAL_S:
+        return
+    _last_disk_check = now
+    try:
+        u = shutil.disk_usage("/app")
+        pct = round(100 * u.used / u.total, 1) if u.total else 0.0
+        if pct >= DISK_WARN_PCT:
+            print(f"  🟠 DISQUE À {pct}% ({round(u.used/1e9,1)}/{round(u.total/1e9,1)} Go) — "
+                  f"seuil {DISK_WARN_PCT}% dépassé. Purge/archivage de la bibliothèque à prévoir.")
+    except Exception as e:
+        print(f"  ⚠ check disque : {e}")
+
+
 def maybe_validate_proposals():
     """Classe périodiquement les titres proposés par la communauté (accept/reject
     par genre, via proposal_validator.py). Résultats dans proposal_decisions, à
@@ -3203,6 +3225,9 @@ def main():
 
         # 5. Classer les propositions de titres de la communauté (toutes les 6 h)
         maybe_validate_proposals()
+
+        # 6. Garde-fou disque (#3, P4) — alerte si occupation > seuil (toutes les 1 h)
+        maybe_check_disk()
 
         time.sleep(CYCLE_SEC)
 
