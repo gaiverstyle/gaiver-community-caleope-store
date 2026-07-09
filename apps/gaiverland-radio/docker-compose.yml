@@ -53,6 +53,12 @@ services:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-playlist
     command: ["python", "-u", "/app/playlist.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
@@ -76,6 +82,12 @@ services:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-rebexis
     command: ["python", "-u", "/app/rebexis.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8081/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
       - {{.BaseDir}}/app-config/gaiverland-radio/rebexis.env
@@ -93,6 +105,12 @@ services:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/api
     container_name: gaiverland-tts
     command: ["python", "-u", "/app/tts_worker.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8082/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
       - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env
@@ -151,6 +169,10 @@ services:
     profiles:
       - with-ollama
     restart: unless-stopped
+    # Base solide (#3) — LLM CPU-only = très gourmand : basse priorité + cap dur pour
+    # ne jamais affamer l'antenne si le mode ollama est activé un jour (dormant sinon).
+    cpu_shares: 256
+    cpus: "2.5"
     networks:
       - gaiverland-internal
 
@@ -302,6 +324,12 @@ services:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-state-engine
     container_name: gaiverland-gcs-state
     command: ["python", "-u", "/app/gcs_state_engine.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8091/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
       - {{.BaseDir}}/app-config/gaiverland-radio/gcs.env
@@ -434,6 +462,12 @@ services:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-api
     container_name: gaiverland-gcs-web
     command: ["python", "-u", "/app/gcs_web.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8099/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
       - {{.BaseDir}}/app-config/gaiverland-radio/gcs.env
