@@ -24,6 +24,13 @@ from fastapi import FastAPI, Body, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 import secrets, hmac, hashlib, base64
 
+# Page « L'équipe » (maquette Cassy, avatars embarqués). Import guardé : si le
+# module manque, le site reste debout, seul /equipe est indisponible.
+try:
+    from team_page import HTML as TEAM_HTML
+except Exception:
+    TEAM_HTML = None
+
 DB_URL      = os.environ["DATABASE_URL"]
 TRACK_URL   = os.environ.get("GCS_TRACK_URL",        "http://gcs-track-service:8090")
 STATE_URL   = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
@@ -559,6 +566,7 @@ footer .c15{margin-top:6px;font-size:12px}
 <footer>
   Gaiverland Radio — présente, comme toujours.
   <div class="c15">Le C15 veille sur ce site. Personne ne sait pourquoi.</div>
+  <div style="margin-top:14px"><a href="/equipe" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">L'équipe du festival →</a></div>
 </footer>
 
 </div><script>
@@ -671,6 +679,18 @@ setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals
 @app.get("/", response_class=HTMLResponse)
 def index():
     return PAGE
+
+
+@app.get("/equipe", response_class=HTMLResponse)
+def equipe():
+    if not TEAM_HTML:
+        return RedirectResponse("/", status_code=302)
+    # Lien retour discret vers la radio, injecté en fin de page.
+    back = ('<a href="/" style="position:fixed;top:16px;left:18px;z-index:99;'
+            'color:#fff4e6;background:rgba(0,0,0,.28);border:1px solid rgba(255,244,230,.35);'
+            'border-radius:20px;padding:7px 14px;font:13px Helvetica,Arial,sans-serif;'
+            'text-decoration:none;backdrop-filter:blur(3px)">← Retour à la radio</a>')
+    return HTMLResponse(TEAM_HTML.replace("</body>", back + "</body>", 1))
 
 
 if __name__ == "__main__":
