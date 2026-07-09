@@ -1298,6 +1298,17 @@ REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
 VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.25"))
 VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.25"))
 VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
+# Garde-fou anti-dur en JOURNÉE par mots-clés de TITRE : rattrape les titres durs
+# mal tagués (ex. bootleg hardstyle classé « Electro House/festival », « Bass Boosted »)
+# que le filtre par genre laisse passer. Appliqué seulement aux moods jour.
+DAY_MOODS = ("festival", "energique", "melodique")
+#  ⚠️ Uniquement des marqueurs de genre DURS sans ambiguïté (pas « hands up » ni
+#  « bass boost » : ça attrape des titres house légitimes — ex. « Put Your Hands Up
+#  for Detroit »). Les genres durs bien tagués restent gérés par GENRE_HOURS.
+HARD_TITLE_RE = os.environ.get("HARD_TITLE_RE",
+    r"(hardstyle|hardcore|happy hardcore|frenchcore|rawstyle|raw hard|gabber|uptempo|"
+    r"speedcore|terrorcore|hard techno|hard trance|hardtek|tekstyle|jumpstyle|"
+    r"hardstyle bootleg|hard bootleg)")
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -1801,6 +1812,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     exclude_ids = list(set(recent_ids) | quarantined) or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
+    # En mood jour, on écarte aussi les titres dont le TITRE trahit un genre dur
+    # (rattrape les mistags que le filtre genre rate). Inactif la nuit.
+    day_mode = current_mood in DAY_MOODS
     excluded_now = get_excluded_genres()
 
     # Appliquer les pauses UI
@@ -1822,8 +1836,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 IS NOT NULL
               AND genre_top1 != ALL(%s)
               AND genre_top1 = ANY(%s)
+              AND (NOT %s OR title !~* %s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, exclude_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 4))
+        """, (candidate_moods, exclude_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -1841,20 +1856,26 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                     WHERE id = ANY(%s) AND analyzed=TRUE AND mood = ANY(%s)
                       AND file_path NOT LIKE %s
                       AND genre_top1 = ANY(%s)
-                """, (boost_ids, candidate_moods, '%rebexis_%', GENRE_WHITELIST))
+                      AND (NOT %s OR title !~* %s)
+                """, (boost_ids, candidate_moods, '%rebexis_%', GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
                 candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
+        # Filet de secours quand le vivier est trop maigre : on relâche l'anti-
+        # répétition et la quarantaine votes, mais on GARDE le mood (jamais d'intense
+        # en journée) et le garde-fou titre — c'était l'ancien vecteur de fuite.
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
                        key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
+                  AND mood = ANY(%s)
                   AND genre_top1 IS NOT NULL
                   AND genre_top1 != ALL(%s)
                   AND genre_top1 = ANY(%s)
+                  AND (NOT %s OR title !~* %s)
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, count * 2))
+            """, ('%rebexis_%', candidate_moods, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
