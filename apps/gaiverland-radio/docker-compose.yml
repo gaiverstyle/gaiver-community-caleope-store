@@ -14,6 +14,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+      # Fenêtre de grâce au démarrage : sous la recréation simultanée de tout le
+      # stack (install --force), postgres peut mettre du temps à accepter les
+      # connexions. Sans start_period, un check tôt échoue et les dépendants
+      # abandonnent (« dependency gw-db failed to start »). 40s = marge sûre.
+      start_period: 40s
     restart: unless-stopped
     networks:
       - gaiverland-internal
