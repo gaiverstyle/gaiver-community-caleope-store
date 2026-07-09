@@ -146,7 +146,9 @@ def update_gaiverland_playlist(conn, gw_playlist_id: int):
         return
 
     try:
-        resp = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 25}, timeout=15)
+        # 40 (pas 25) : playlist plus large → si le moteur cale entre 2 cycles,
+        # AzuraCast boucle sur 40 titres au lieu de 20 (moins de répétition audible).
+        resp = httpx.get(f"{PLAYLIST_URL}/playlist/next", params={"count": 40}, timeout=20)
         data = resp.json()
         tracks = data.get("tracks", [])
         mood   = data.get("mood", "?")
