@@ -1288,6 +1288,9 @@ DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 # aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
 # est assez grand pour remplir la journée (~150 titres pour 10h).
 NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
+# Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
+# de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
+REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -1423,37 +1426,68 @@ def _key_cost(a: dict, b: dict) -> float:
     return 1.0                                            # dissonant
 
 
-def _transition_cost(a: dict, b: dict) -> float:
-    """Coût de passer du morceau a au morceau b (0 = transition idéale)."""
+def _transition_cost(a: dict, b: dict, covered: bool = False) -> float:
+    """Coût de passer du morceau a au morceau b (0 = transition idéale).
+
+    Beatmatch (niveau 2) : hors intervention de Rebexis, le BPM PRIME (transition
+    directe beatmatchée par le smart_cross Liquidsoap → il faut des tempos proches).
+    Si `covered=True`, la transition est couverte par une intervention de Rebexis
+    → on relâche le BPM et on autorise le changement de tempo/style à cet endroit.
+    """
     ba, bb = float(a.get("bpm") or 0), float(b.get("bpm") or 0)
     if ba and bb:
         # tolère le mixage moitié/double tempo (128 <-> 174 en DnB, etc.)
         d = min(abs(ba - bb), abs(ba - 2 * bb), abs(2 * ba - bb))
-        bpm_cost = min(1.0, d / 16.0)                     # ~16 BPM d'écart = coût plein
+        # serré en enchaînement direct (~8 BPM), large sous la voix (~16 BPM)
+        bpm_cost = min(1.0, d / (16.0 if covered else 8.0))
     else:
         bpm_cost = 0.5
     ea, eb = float(a.get("energy") or 0.5), float(b.get("energy") or 0.5)
     energy_cost = min(1.0, abs(ea - eb) / 0.35)
-    return 0.5 * _key_cost(a, b) + 0.3 * bpm_cost + 0.2 * energy_cost
+    kc = _key_cost(a, b)
+    if covered:
+        # sous l'intervention Rebexis : place ici les changements de style/tempo
+        return 0.30 * kc + 0.35 * energy_cost + 0.35 * bpm_cost
+    # enchaînement direct beatmatché : BPM prioritaire, puis tonalité, puis énergie
+    return 0.55 * bpm_cost + 0.30 * kc + 0.15 * energy_cost
 
 
-def order_for_coherence(candidates: list, count: int, start_energy: float) -> list:
-    """Ordonne les candidats en un chemin harmonique fluide (glouton plus proche
-    voisin) : chaque morceau enchaîne sur le plus compatible (clé + BPM +
-    énergie), en évitant de répéter un artiste sur 3 titres consécutifs."""
+def _bpm_gap(a: dict, b: dict) -> float:
+    """Écart de tempo beatmatchable (tolère moitié/double). 99 si BPM inconnu."""
+    ba, bb = float(a.get("bpm") or 0), float(b.get("bpm") or 0)
+    if not (ba and bb):
+        return 99.0
+    return min(abs(ba - bb), abs(ba - 2 * bb), abs(2 * ba - bb))
+
+
+def order_for_coherence(candidates: list, count: int, start_energy: float,
+                        rebexis_every: int = REBEXIS_EVERY) -> list:
+    """Ordonne les candidats en un chemin BEATMATCHÉ (glouton plus proche voisin) :
+    en enchaînement direct, on ne prend QUE des tempos proches (≤10 BPM → le
+    smart_cross beatmatche) ; les sauts de tempo/style sont réservés aux frontières
+    de bloc (tous les `rebexis_every` morceaux), là où Rebexis couvre la transition
+    — ou forcés seulement si aucun tempo proche n'est disponible.
+    Anti-répétition artiste sur 3 titres."""
     pool = [dict(c) for c in candidates]
     if not pool:
         return []
-    # Départ : morceau le plus proche de l'énergie courante → transition douce
-    # depuis ce qui vient de jouer.
+    # Départ : morceau le plus proche de l'énergie courante → transition douce.
     pool.sort(key=lambda t: abs(float(t.get("energy") or 0.5) - start_energy))
     ordered = [pool.pop(0)]
     while pool and len(ordered) < count:
         last = ordered[-1]
+        # Rebexis joue après chaque bloc de rebexis_every morceaux : la transition
+        # vers le prochain titre est "couverte" pile sur ces frontières.
+        covered = rebexis_every > 0 and (len(ordered) % rebexis_every == 0)
         recent_artists = {t["artist"] for t in ordered[-3:]}
-        allowed = [t for t in pool if t.get("artist") not in recent_artists]
-        search = allowed or pool  # relâche l'anti-répétition si bloqué
-        nxt = min(search, key=lambda t: _transition_cost(last, t))
+        allowed = [t for t in pool if t.get("artist") not in recent_artists] or pool
+        if not covered:
+            # enchaînement direct : rester en tempo proche (beatmatch) si possible
+            close = [t for t in allowed if _bpm_gap(last, t) <= 10.0]
+            search = close or allowed   # forcé de sauter seulement si aucun proche
+        else:
+            search = allowed            # sous Rebexis : saut de tempo/style permis
+        nxt = min(search, key=lambda t: _transition_cost(last, t, covered))
         pool.remove(nxt)
         ordered.append(nxt)
     return ordered
