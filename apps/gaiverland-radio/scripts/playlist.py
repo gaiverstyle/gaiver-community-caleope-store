@@ -50,8 +50,7 @@ DAY_MOODS = ("festival", "energique", "melodique")
 #  for Detroit »). Les genres durs bien tagués restent gérés par GENRE_HOURS.
 HARD_TITLE_RE = os.environ.get("HARD_TITLE_RE",
     r"(hardstyle|hardcore|happy hardcore|frenchcore|rawstyle|raw hard|gabber|uptempo|"
-    r"speedcore|terrorcore|hard techno|hard trance|hardtek|tekstyle|tekkno|jumpstyle|"
-    r"hardstyle bootleg|hard bootleg|neurofunk)")
+    r"speedcore|terrorcore|hardstyle bootleg|hard bootleg)")
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -68,7 +67,11 @@ DEFAULT_UI_CONFIG = {
 # Format env GENRE_HOURS : "Genre1,Genre2:HH-HH;Genre3:HH-HH"
 # Exemple : "Hardstyle,Hardcore:22-06" = seulement entre 22h et 6h
 # Genres sans restriction jouent à toute heure.
-_DEFAULT_GENRE_HOURS = "Hardstyle,Hardcore,Happy Hardcore,Hard Techno,Hard Trance,Makina,Donk,Hands Up,Dubstep,Hardbass,Hard Bass,Rawstyle,Uptempo,Gabber,Frenchcore,Speedcore,Terrorcore,Hard Dance,Hard House,Schranz,Industrial,Psy-Trance,Psytrance,Goa,Drum n Bass,Drum & Bass,Drum and Bass,Neurofunk,Tekno,Tekk,Hardtek,Tribecore,Mentalcore:22-06"
+# On ne cantonne à la nuit que le TIER RAW/EXTRÊME (celui de Sub Zero Project) :
+# hardstyle/rawstyle/hardcore/frenchcore/uptempo/gabber/speedcore/terrorcore. Le
+# fondateur (09/07) : « les niveaux du dessous ça passe » → psytrance, DnB, dubstep,
+# hands up, hard techno/trance, tekkno restent AUTORISÉS en journée (électro qui hype).
+_DEFAULT_GENRE_HOURS = "Hardstyle,Rawstyle,Hardcore,Happy Hardcore,Frenchcore,Uptempo,Gabber,Speedcore,Terrorcore,Mentalcore,Tribecore:22-06"
 
 def _parse_genre_hours(raw: str) -> dict:
     """Retourne {genre: (start_h, end_h)} pour chaque genre restreint."""
