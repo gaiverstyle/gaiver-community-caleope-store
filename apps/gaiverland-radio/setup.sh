@@ -49,10 +49,16 @@ EOF
 cat > "${CONFIG_DIR}/dockerfiles/downloader/Dockerfile" <<'EOF'
 FROM python:3.12-slim
 RUN apt-get update -qq && \
-    apt-get install -y -qq ffmpeg && \
+    apt-get install -y -qq ffmpeg curl unzip ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+# Deno = runtime JavaScript requis par yt-dlp pour résoudre le challenge de
+# signature YouTube (nsig / EJS). Sans lui : « Only images available / format not
+# available ». Runtime recommandé par yt-dlp. Cf https://github.com/yt-dlp/yt-dlp/wiki/EJS
+RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip && \
+    unzip -oq /tmp/deno.zip -d /usr/local/bin && \
+    rm /tmp/deno.zip && chmod +x /usr/local/bin/deno
 RUN pip install --no-cache-dir \
-    httpx yt-dlp tzdata psycopg2-binary
+    httpx "yt-dlp[default]" tzdata psycopg2-binary
 EOF
 
 cat > "${CONFIG_DIR}/dockerfiles/analyzer/Dockerfile" <<'EOF'
