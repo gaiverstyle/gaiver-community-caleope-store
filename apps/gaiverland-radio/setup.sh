@@ -107,7 +107,7 @@ echo "  ✓ Dockerfiles créés (legacy + GCS Phase 1-6)"
 # ── Nettoyage containers ───────────────────────────────────────────────
 for _ct in gaiverland-db gaiverland-analyzer gaiverland-playlist \
            gaiverland-rebexis gaiverland-tts gaiverland-scheduler \
-           gaiverland-ollama gaiverland-bootstrap \
+           gaiverland-ollama gaiverland-bootstrap gaiverland-downloader \
            gaiverland-gcs-track gaiverland-gcs-state gaiverland-gcs-rebexis \
            gaiverland-gcs-tts gaiverland-gcs-injector gaiverland-gcs-vote \
            gaiverland-gcs-lore; do
