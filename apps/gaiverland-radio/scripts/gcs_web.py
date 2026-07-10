@@ -37,6 +37,7 @@ STATE_URL   = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:80
 VOTE_URL    = os.environ.get("GCS_VOTE_URL",         "http://gcs-vote-service:8095")
 AZ_URL      = os.environ.get("AZURACAST_URL",        "http://azuracast:80")
 AZ_STATION  = int(os.environ.get("AZURACAST_STATION_ID", "1"))
+CHILL_STATION = int(os.environ.get("GCS_CHILL_STATION", "3"))  # 2ᵉ station (chill)
 STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
 # Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
 # que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
@@ -91,11 +92,13 @@ def health():
 
 
 @app.get("/api/live")
-def live():
-    out = {"track": {}, "state": {}, "stream_url": STREAM_URL, "art": "", "listeners": 0}
+def live(station: str = "main"):
+    az_sid = CHILL_STATION if station == "chill" else AZ_STATION
+    out = {"track": {}, "state": {}, "station": station,
+           "stream_url": "" if station == "chill" else STREAM_URL, "art": "", "listeners": 0}
     # AzuraCast nowplaying (art, listen_url, listeners)
     try:
-        r = httpx.get(f"{AZ_URL}/api/nowplaying/{AZ_STATION}", timeout=4)
+        r = httpx.get(f"{AZ_URL}/api/nowplaying/{az_sid}", timeout=4)
         if r.status_code == 200:
             np = r.json()
             song = np.get("now_playing", {}).get("song", {})
@@ -558,6 +561,10 @@ footer .c15{margin-top:6px;font-size:12px}
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
 #player{display:none}
+/* Scènes cliquables (stations Live) vs à venir (Bientôt) */
+.stage.live{cursor:pointer;border-style:solid;border-color:rgba(255,244,230,.4);transition:all .15s}
+.stage.live:hover{background:rgba(255,244,230,.13);transform:translateY(-2px)}
+.stage.live .st{background:#2fae60}
 /* ── Mode plein écran (tel / TV / PC) ─────────────────────────────── */
 .hero-fs{position:absolute;top:10px;right:10px;z-index:5;width:38px;height:38px;border:none;
   border-radius:10px;cursor:pointer;font-size:18px;color:var(--cream);
@@ -607,7 +614,7 @@ footer .c15{margin-top:6px;font-size:12px}
 </header>
 
 <div class="card">
-  <h2>Mainstage Broadcast <span class="live-badge">EN DIRECT</span></h2>
+  <h2>En direct <span class="live-badge">EN DIRECT</span></h2>
   <div class="hero">
     <button class="hero-fs" onclick="openFs()" aria-label="Plein écran" title="Plein écran">⛶</button>
     <div class="hero-bg" id="hero-bg"></div>
@@ -658,10 +665,11 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Les scènes</h2>
   <div class="stages">
-    <div class="stage on"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div></div>
+    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div></div>
+    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div></div>
     <div class="stage"><div class="ico">⚡</div><div class="nm">Rush Stage</div><div class="st">Bientôt</div></div>
     <div class="stage"><div class="ico">🌅</div><div class="nm">Sunset Stage</div><div class="st">Bientôt</div></div>
-    <div class="stage"><div class="ico">🌙</div><div class="nm">Night Stage</div><div class="st">Bientôt</div></div>
+    <div class="stage"><div class="ico">🌃</div><div class="nm">Night Stage</div><div class="st">Bientôt</div></div>
     <div class="stage"><div class="ico">💫</div><div class="nm">Pulse Stage</div><div class="st">Bientôt</div></div>
   </div>
 </div>
@@ -714,6 +722,7 @@ footer .c15{margin-top:6px;font-size:12px}
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
 let audioUrl="";
 let cityPhotos=[], bgIdx=0, lastTitle="";
+let curStation='main';  // station écoutée : 'main' (Mainstage) ou 'chill'
 
 function togglePlay(){
   const a=document.getElementById('player');
@@ -738,9 +747,19 @@ function setBg(){
     if(fsOpen) document.getElementById('fs-bg').style.backgroundImage=u; };
   img.src=url;
 }
+function selectStation(s){
+  if(s===curStation) return;
+  curStation=s;
+  document.querySelectorAll('.stage[data-st]').forEach(t=>t.classList.toggle('on', t.dataset.st===s));
+  const a=document.getElementById('player');
+  const wasPlaying=!a.paused;
+  a.pause(); a.removeAttribute('src'); a.load();  // détache l'ancien flux
+  audioUrl=''; lastTitle='';                       // force refresh à re-remplir
+  refresh().then(()=>{ if(wasPlaying && audioUrl){ a.src=audioUrl; a.play().catch(()=>{}); } });
+}
 async function refresh(){
   try{
-    const d=await (await fetch('/api/live')).json();
+    const d=await (await fetch('/api/live?station='+curStation)).json();
     const t=d.track||{};
     document.getElementById('title').textContent=t.title||'Gaiverland Radio';
     document.getElementById('artist').textContent=t.artist||'';
