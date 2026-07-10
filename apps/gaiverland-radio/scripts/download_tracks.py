@@ -150,14 +150,20 @@ def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
     """Cherche + télécharge le meilleur audio en MP3 dans target_dir. True si OK."""
     os.makedirs(target_dir, exist_ok=True)
     out = os.path.join(target_dir, "%(artist,uploader)s - %(title)s.%(ext)s")
+    # ytsearch5 + filtre durée : on écarte les résultats hors 45s–15min (compilations
+    # « 12 HOURS », mixes, clips vides) et on prend le PREMIER titre valide (--max-downloads 1).
+    # Sans ça, ytsearch1 peut ramener une compilation de plusieurs heures = disque plein + analyzer étranglé.
     cmd = ["yt-dlp", "--cookies", COOKIES, "-f", "bestaudio",
            "-x", "--audio-format", "mp3", "--audio-quality", "0",
            "--no-playlist", "--embed-metadata", "--no-progress",
-           "-o", out, f"ytsearch1:{query} audio"]
+           "--match-filter", "duration<=900 & duration>=45",
+           "--max-downloads", "1",
+           "-o", out, f"ytsearch5:{query} audio"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         blob = (r.stdout or "") + (r.stderr or "")
-        if r.returncode == 0 or "has already been downloaded" in blob:
+        # 101 = limite --max-downloads atteinte = 1 titre bien téléchargé (succès).
+        if r.returncode in (0, 101) or "has already been downloaded" in blob:
             return True
         tail = blob[-250:]
         if "sign in" in tail.lower() or "cookies" in tail.lower() or "not a bot" in tail.lower():
