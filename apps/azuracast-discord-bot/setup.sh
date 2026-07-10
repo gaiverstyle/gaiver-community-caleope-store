@@ -27,6 +27,7 @@ AUTO_CHANNEL_ID=${CALEOPE_PARAM_AUTO_CHANNEL_ID:-}
 DEFAULT_VOLUME=${CALEOPE_PARAM_DEFAULT_VOLUME:-100}
 NP_CHANNEL_ID=${CALEOPE_PARAM_NP_CHANNEL_ID:-}
 NP_POLL_INTERVAL=${CALEOPE_PARAM_NP_POLL_INTERVAL:-10}
+SITE_URL=${CALEOPE_PARAM_SITE_URL:-}
 EOF
 chmod 600 "${CONFIG_DIR}/secrets.env"
 
@@ -66,6 +67,7 @@ AUTO_CHANNEL_ID      = int(os.environ.get("AUTO_CHANNEL_ID", "0") or "0")
 DEFAULT_VOLUME       = max(0, min(200, int(os.environ.get("DEFAULT_VOLUME", "100") or "100")))
 NP_CHANNEL_ID        = int(os.environ.get("NP_CHANNEL_ID", "0") or "0")
 NP_POLL_INTERVAL     = max(5, int(os.environ.get("NP_POLL_INTERVAL", "10") or "10"))
+SITE_URL             = os.environ.get("SITE_URL", "").strip().rstrip("/")   # site des votes auditeurs (optionnel)
 
 
 # ── Player ───────────────────────────────────────────────────────────────────
@@ -74,7 +76,7 @@ class RadioPlayer:
     def __init__(self):
         self.voice_client: discord.VoiceClient | None = None
         self.volume: float = DEFAULT_VOLUME / 100.0
-        self.station: str = AZURACAST_STATION_ID          # station courante (défaut : Mainstage)
+        self.station: str = AZURACAST_STATION_ID          # station courante (défaut = AZURACAST_STATION_ID)
         self._stream_cache: dict = {AZURACAST_STATION_ID: STREAM_URL_ENV} if STREAM_URL_ENV else {}
 
     # -- AzuraCast API --------------------------------------------------------
@@ -88,18 +90,6 @@ class RadioPlayer:
                     return await r.json()
         except Exception as exc:
             log.warning("AzuraCast GET %s → %s", path, exc)
-            return {}
-
-    async def _post(self, path: str, json: dict | None = None) -> dict:
-        headers = {"X-API-Key": AZURACAST_API_KEY} if AZURACAST_API_KEY else {}
-        url = f"{AZURACAST_URL}{path}"
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(url, headers=headers, json=json or {},
-                                  timeout=aiohttp.ClientTimeout(total=8)) as r:
-                    return await r.json()
-        except Exception as exc:
-            log.warning("AzuraCast POST %s → %s", path, exc)
             return {}
 
     async def fetch_now_playing(self) -> dict:
@@ -116,32 +106,26 @@ class RadioPlayer:
         return out
 
     async def fetch_stream_url(self) -> str:
+        # Override explicite (STREAM_URL) mis en cache à l'init : prioritaire.
         if self._stream_cache.get(self.station):
             return self._stream_cache[self.station]
         np = await self.fetch_now_playing()
-        mounts = np.get("station", {}).get("mounts", [])
-        # Build internal URL: use AZURACAST_URL hostname + Icecast port 8500 + mount path
-        from urllib.parse import urlparse
-        az_host = urlparse(AZURACAST_URL).hostname or "azuracast"
+        station = np.get("station", {})
+        mounts = station.get("mounts", [])
+        # Générique : on utilise l'URL de flux fournie par AzuraCast (pas de port en dur).
+        # Chaque instance annonce ses propres mounts/ports via l'API.
         url = ""
         for m in mounts:
-            path = m.get("path", "")
-            if path:
-                url = f"http://{az_host}:8500{path}"
+            murl = m.get("url", "")
+            if murl:
+                url = murl
                 if m.get("is_default"):
                     break
         if not url:
-            url = np.get("station", {}).get("hls_url", "")
+            url = station.get("listen_url", "") or station.get("hls_url", "")
         if url:
             self._stream_cache[self.station] = url
         return url
-
-    async def skip(self) -> bool:
-        """Skip la piste actuelle (nécessite une clé API)."""
-        if not AZURACAST_API_KEY:
-            return False
-        result = await self._post(f"/api/station/{self.station}/backend/skip")
-        return bool(result)
 
     # -- Lecture vocale -------------------------------------------------------
 
@@ -252,6 +236,8 @@ def np_embed(np: dict) -> discord.Embed:
     if duration:
         embed.add_field(name="Durée", value=f"{fmt_time(elapsed)} / {fmt_time(duration)}", inline=True)
     embed.add_field(name="Auditeurs", value=str(listeners), inline=True)
+    if SITE_URL:
+        embed.add_field(name="🗳️ Voter", value=f"[ENCORE / SKIP sur le site]({SITE_URL})", inline=True)
     if art and art.startswith("https://"):
         embed.set_thumbnail(url=art)
     embed.set_footer(text=station.get("name", AZURACAST_STATION_ID))
@@ -470,20 +456,20 @@ async def cmd_np(interaction: discord.Interaction):
     await interaction.followup.send(embed=np_embed(np))
 
 
-@radio_group.command(name="station", description="Choisis la scène (défaut : Mainstage) — Chill, Hard, Phonk, Lofi…")
-@app_commands.describe(scene="La scène à écouter / annoncer")
-async def cmd_station(interaction: discord.Interaction, scene: str):
+@radio_group.command(name="station", description="Choisis la station à écouter (liste auto-complétée depuis le serveur)")
+@app_commands.describe(station="La station à écouter")
+async def cmd_station(interaction: discord.Interaction, station: str):
     await interaction.response.defer()
-    ok = await player.set_station(scene)
+    ok = await player.set_station(station)
     if not ok:
-        await interaction.followup.send(f"❌ Scène « {scene} » injoignable (flux introuvable).")
+        await interaction.followup.send(f"❌ Station « {station} » injoignable (flux introuvable).")
         return
     np = await player.fetch_now_playing()
-    label = (np.get("station", {}).get("name") if np else None) or scene
-    await interaction.followup.send(f"📻 Scène → **{label}**", embed=np_embed(np))
+    label = (np.get("station", {}).get("name") if np else None) or station
+    await interaction.followup.send(f"📻 Station → **{label}**", embed=np_embed(np))
 
 
-@cmd_station.autocomplete("scene")
+@cmd_station.autocomplete("station")
 async def station_autocomplete(interaction: discord.Interaction, current: str):
     cur = (current or "").lower()
     stations = await player.fetch_stations()
@@ -494,21 +480,22 @@ async def station_autocomplete(interaction: discord.Interaction, current: str):
     ][:25]
 
 
-@radio_group.command(name="skip", description="Passe au titre suivant (clé API requise)")
-async def cmd_skip(interaction: discord.Interaction):
-    if not AZURACAST_API_KEY:
+# NB : pas de commande admin (skip/next/…). Le contrôle de l'antenne — passer un
+# titre, rejouer, etc. — appartient aux AUDITEURS via le vote sur le site, pas à
+# une commande Discord privilégiée. Le bot ne fait qu'écouter et informer.
+@radio_group.command(name="vote", description="Voter pour la suite (ENCORE / SKIP) sur le site des auditeurs")
+async def cmd_vote(interaction: discord.Interaction):
+    if not SITE_URL:
         await interaction.response.send_message(
-            "❌ Clé API AzuraCast non configurée (paramètre AZURACAST_API_KEY).", ephemeral=True
+            "🗳️ Le contrôle de l'antenne (passer un titre, etc.) se fait par le **vote des "
+            "auditeurs** sur le site — pas par une commande Discord.",
+            ephemeral=True,
         )
         return
-    await interaction.response.defer()
-    ok = await player.skip()
-    if ok:
-        await asyncio.sleep(1.5)
-        np = await player.fetch_now_playing()
-        await interaction.followup.send("⏭️ Piste suivante !", embed=np_embed(np))
-    else:
-        await interaction.followup.send("❌ Le skip a échoué. Vérifie les droits de ta clé API.")
+    await interaction.response.send_message(
+        f"🗳️ **Ton avis fait tourner l'antenne** — vote ENCORE ou SKIP ici :\n{SITE_URL}",
+        ephemeral=True,
+    )
 
 
 @radio_group.command(name="status", description="Affiche le statut du bot radio")
@@ -618,10 +605,14 @@ cat > "${CONFIG_DIR}/post-install.txt" << EOF
   │    /radio stop          → arrête et quitte le salon                  │
   │    /radio volume <n>    → règle le volume (0-200%)                   │
   │    /radio np            → titre en cours (embed)                     │
-  │    /radio skip          → passe au suivant (clé API requise)         │
+  │    /radio station <s>   → change de station (auto-complété)          │
+  │    /radio vote          → lien vers le vote des auditeurs (site)     │
   │    /radio status        → statut du bot                              │
   │    /radio pause/resume  → pause sans quitter le salon                │
   │    /radio setnpchannel  → active le message live dans ce salon       │
+  │                                                                      │
+  │  Pas de commande admin (skip/next) : le contrôle de l'antenne        │
+  │  appartient aux auditeurs via le vote sur le site (param SITE_URL).  │
   │                                                                      │
   │  Message auto-update :                                               │
   │    Tape /radio setnpchannel dans n'importe quel salon texte.         │

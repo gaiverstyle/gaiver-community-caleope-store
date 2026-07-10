@@ -26,7 +26,7 @@
   {
     "id": "AZURACAST_API_KEY",
     "label": "Clé API AzuraCast (optionnelle)",
-    "description": "Pour les fonctions admin (skip piste, etc.). Admin → Clés API.",
+    "description": "Seulement pour lire une station privée (API protégée). Le bot ne fait aucune action admin sur l'antenne. Admin → Clés API.",
     "type": "secret",
     "required": false,
     "default": ""
@@ -34,7 +34,7 @@
   {
     "id": "STREAM_URL",
     "label": "URL du stream (optionnelle)",
-    "description": "Si AzuraCast est sur le même serveur : http://azuracast:8500/listen/SHORTCODE/radio.mp3 — Sinon : http://radio.mondomaine.fr:8500/listen/SHORTCODE/radio.mp3",
+    "description": "Par défaut le bot prend l'URL de flux annoncée par l'API AzuraCast (générique). À remplir seulement pour forcer une URL interne, ex. http://azuracast:PORT/listen/SHORTCODE/radio.mp3 (avec TON port Icecast).",
     "type": "string",
     "required": false,
     "default": ""
@@ -70,5 +70,13 @@
     "type": "string",
     "required": false,
     "default": "10"
+  },
+  {
+    "id": "SITE_URL",
+    "label": "URL du site de vote des auditeurs (optionnelle)",
+    "description": "Le contrôle de l'antenne (passer un titre, etc.) se fait par le vote des auditeurs sur le site, pas par une commande admin. Renseigne l'URL du site de vote pour l'afficher dans /radio vote et l'embed 'en ce moment'. Ex : https://gaiverland.mondomaine.fr",
+    "type": "string",
+    "required": false,
+    "default": ""
   }
 ]
