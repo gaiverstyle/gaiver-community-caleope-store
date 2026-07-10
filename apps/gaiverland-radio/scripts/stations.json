@@ -1,0 +1,110 @@
+{
+  "_doc": "Config des stations thématiques Gaiverland — lue par le downloader (remplissage des bacs) ET le moteur de rotation multi-station. Curation musicale (seeds + genres) = Régis (cf carnet-regis). Yann = mécanique. theme = sous-dossier média (tag déterministe, indépendant de la classif Discogs). filter.genres (optionnel) = filtrage par genre_top1 de l'analyzer pour les stations dont le genre est fiable (chill/hard).",
+  "media_root": "/var/azuracast/stations/gaiverlandradio/media/music",
+  "stations": [
+    {
+      "slug": "chill",
+      "az_station_id": 3,
+      "label": "Gaiverland Chill",
+      "theme": "chill",
+      "enabled": true,
+      "bpm": [80, 122],
+      "energy": [0.0, 0.55],
+      "filter": { "genres": ["Deep House", "Chillout", "Downtempo", "Ambient", "Lounge", "Lo-Fi", "Trip Hop"] },
+      "seeds": [
+        "Tycho - A Walk",
+        "Bonobo - Kong",
+        "Emancipator - Soon It Will Be Cold Enough to Build Fires",
+        "Boards of Canada - Roygbiv",
+        "Tycho - Awake",
+        "ODESZA - A Moment Apart",
+        "Nym - Silhouette"
+      ]
+    },
+    {
+      "slug": "hard",
+      "az_station_id": 4,
+      "label": "Gaiverland Hard",
+      "theme": "hard",
+      "enabled": true,
+      "bpm": [148, 200],
+      "energy": [0.6, 1.0],
+      "filter": { "genres": ["Hardstyle", "Hardcore", "Rawstyle", "Frenchcore", "Uptempo", "Gabber", "Happy Hardcore"] },
+      "seeds": []
+    },
+    {
+      "slug": "phonk",
+      "az_station_id": null,
+      "label": "Gaiverland Phonk",
+      "theme": "phonk",
+      "enabled": true,
+      "bpm": [130, 180],
+      "energy": [0.55, 1.0],
+      "filter": { "theme": "phonk" },
+      "seeds": [
+        "Kordhell - Murder In My Mind",
+        "DVRST - Close Eyes",
+        "DVRST - Phonky Town",
+        "INTERWORLD - METAMORPHOSIS",
+        "Ghostface Playa - Why Not",
+        "MoonDeity - Sigma",
+        "Freddie Dredd - Cha Cha",
+        "Kaito Shoma - Zota",
+        "Pharmacist - Trxsh",
+        "KSLV Noh - Empire",
+        "Sxmpra - Cowbell Warrior",
+        "Kordhell - LETSGO",
+        "Sceptautomatic - Devil Eye",
+        "9mm - Sahara"
+      ]
+    },
+    {
+      "slug": "lofi",
+      "az_station_id": null,
+      "label": "Gaiverland Lofi",
+      "theme": "lofi",
+      "enabled": true,
+      "bpm": [70, 95],
+      "energy": [0.0, 0.45],
+      "filter": { "theme": "lofi" },
+      "seeds": [
+        "Nujabes - Feather",
+        "J Dilla - Time The Donut of the Heart",
+        "Idealism - Controlla",
+        "Kupla - Owls of the Night",
+        "Aso - Lull",
+        "Philanthrope - Painting",
+        "L'indecis - Soulful",
+        "Jinsang - Affection",
+        "Tomppabeats - Harbor",
+        "Kudasai - The Girl I Haven't Met",
+        "Saib - Sunday",
+        "Sweet Medicine - Snowfall"
+      ]
+    },
+    {
+      "slug": "synthwave",
+      "az_station_id": null,
+      "label": "Gaiverland Synthwave (80s)",
+      "theme": "synthwave",
+      "enabled": true,
+      "bpm": [95, 125],
+      "energy": [0.4, 0.85],
+      "filter": { "theme": "synthwave", "genres": ["Synthwave", "Italo House", "Electro", "New Wave"] },
+      "seeds": [
+        "The Midnight - Sunset",
+        "FM-84 - Running in the Night",
+        "Timecop1983 - On the Run",
+        "GUNSHIP - Tech Noir",
+        "Kavinsky - Nightcall",
+        "Carpenter Brut - Turbo Killer",
+        "The Midnight - Los Angeles",
+        "Com Truise - Flightwave",
+        "Mitch Murder - Interceptor",
+        "Miami Nights 1984 - Accelerated",
+        "Lazerhawk - So Far Away",
+        "Dance With the Dead - Riot"
+      ]
+    }
+  ]
+}

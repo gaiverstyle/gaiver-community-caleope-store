@@ -16,6 +16,7 @@ Garde-fous (sûr par défaut) :
   - Détecte l'expiration des cookies (« sign in ») et le loggue clairement pour le chef.
 """
 import os
+import json
 import time
 import subprocess
 import psycopg2
@@ -28,6 +29,24 @@ DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR",
 INTERVAL_S   = int(os.environ.get("DOWNLOAD_INTERVAL_S", "600"))    # 10 min entre passes
 DAILY_LIMIT  = int(os.environ.get("DOWNLOAD_DAILY_LIMIT", "20"))
 BATCH        = int(os.environ.get("DOWNLOAD_BATCH", "3"))           # par passe
+
+# ── Bacs thématiques (phonk, lofi, synthwave…) ────────────────────────────────
+# stations.json définit, par station, un `theme` (= sous-dossier média) et une liste
+# de `seeds` (titres à télécharger, curation Régis). On télécharge chaque seed dans
+# music/<theme>/ → tag déterministe par dossier (indépendant de la classif Discogs),
+# l'analyzer capte bpm/énergie/clé, le moteur de rotation multi-station sélectionne
+# ensuite par thème. Partage la MÊME limite quotidienne + les mêmes cookies que les
+# propositions communauté (une seule vanne YouTube).
+STATIONS_CONFIG = os.environ.get("STATIONS_CONFIG", "/app/stations.json")
+
+
+def _load_stations() -> dict:
+    try:
+        with open(STATIONS_CONFIG) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  ⚠ config stations illisible ({STATIONS_CONFIG}): {e}", flush=True)
+        return {}
 
 
 def get_conn():
@@ -48,6 +67,70 @@ def _downloaded_today(cur) -> int:
     return cur.fetchone()["n"]
 
 
+def _thematic_schema(cur):
+    """Table de suivi des seeds thématiques : 1 ligne par (theme, query)."""
+    cur.execute("""CREATE TABLE IF NOT EXISTS thematic_seeds (
+                       theme            TEXT NOT NULL,
+                       query            TEXT NOT NULL,
+                       status           TEXT DEFAULT 'pending',
+                       attempts         INT  DEFAULT 0,
+                       downloaded_at    TIMESTAMP,
+                       PRIMARY KEY (theme, query)
+                   )""")
+
+
+def _sync_seeds(cur, cfg: dict):
+    """Injecte les seeds de stations.json dans thematic_seeds (nouvelles seeds only)."""
+    for st in cfg.get("stations", []):
+        theme = st.get("theme")
+        if not theme or not st.get("enabled", True):
+            continue
+        for q in st.get("seeds", []) or []:
+            cur.execute("""INSERT INTO thematic_seeds (theme, query) VALUES (%s, %s)
+                           ON CONFLICT (theme, query) DO NOTHING""", (theme, q))
+
+
+def _thematic_today(cur) -> int:
+    cur.execute("SELECT count(*) AS n FROM thematic_seeds WHERE downloaded_at::date = CURRENT_DATE")
+    return cur.fetchone()["n"]
+
+
+def _total_today(cur) -> int:
+    """Compteur quotidien COMBINÉ (proposals communauté + seeds thématiques)."""
+    return _downloaded_today(cur) + _thematic_today(cur)
+
+
+def process_thematic_seeds(cur, cfg: dict, budget: int) -> tuple:
+    """Télécharge jusqu'à `budget` seeds thématiques en attente, dans music/<theme>/.
+    Retourne (tried, fails)."""
+    media_root = cfg.get("media_root", "/var/azuracast/stations/gaiverlandradio/media/music")
+    cur.execute("""SELECT theme, query, COALESCE(attempts,0) AS attempts
+                   FROM thematic_seeds
+                   WHERE status IN ('pending','retry') AND downloaded_at IS NULL
+                     AND COALESCE(attempts,0) < %s
+                   ORDER BY attempts ASC, theme ASC LIMIT %s""", (MAX_ATTEMPTS, budget))
+    tried = fails = 0
+    for s in cur.fetchall():
+        target = os.path.join(media_root, s["theme"])
+        ok = download_one(s["query"], target)
+        tried += 1
+        att = s["attempts"] + 1
+        if ok:
+            cur.execute("""UPDATE thematic_seeds SET downloaded_at=NOW(), status='ok',
+                           attempts=%s WHERE theme=%s AND query=%s""", (att, s["theme"], s["query"]))
+        elif att >= MAX_ATTEMPTS:
+            fails += 1
+            cur.execute("""UPDATE thematic_seeds SET downloaded_at=NOW(), status='failed',
+                           attempts=%s WHERE theme=%s AND query=%s""", (att, s["theme"], s["query"]))
+        else:
+            fails += 1
+            cur.execute("""UPDATE thematic_seeds SET status='retry',
+                           attempts=%s WHERE theme=%s AND query=%s""", (att, s["theme"], s["query"]))
+        print(f"  {'✓' if ok else '✗'} [{s['theme']}] {s['query']}"
+              + ("" if ok else f" (essai {att}/{MAX_ATTEMPTS})"), flush=True)
+    return tried, fails
+
+
 def _cookies_ok() -> bool:
     try:
         return os.path.exists(COOKIES) and os.path.getsize(COOKIES) > 0
@@ -55,10 +138,10 @@ def _cookies_ok() -> bool:
         return False
 
 
-def download_one(query: str) -> bool:
-    """Cherche + télécharge le meilleur audio en MP3 dans DOWNLOAD_DIR. True si OK."""
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    out = os.path.join(DOWNLOAD_DIR, "%(artist,uploader)s - %(title)s.%(ext)s")
+def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
+    """Cherche + télécharge le meilleur audio en MP3 dans target_dir. True si OK."""
+    os.makedirs(target_dir, exist_ok=True)
+    out = os.path.join(target_dir, "%(artist,uploader)s - %(title)s.%(ext)s")
     cmd = ["yt-dlp", "--cookies", COOKIES, "-f", "bestaudio",
            "-x", "--audio-format", "mp3", "--audio-quality", "0",
            "--no-playlist", "--embed-metadata", "--no-progress",
@@ -89,15 +172,19 @@ def loop():
             conn.autocommit = True
             with conn.cursor() as cur:
                 _ensure_schema(cur)
+                cfg = _load_stations()
+                _thematic_schema(cur)
+                _sync_seeds(cur, cfg)
                 if not _cookies_ok():
                     if not idle_logged:
                         print("  ⏸ pas de cookies YouTube — downloader en pause "
                               "(cf procedure-cookies-downloader.md)", flush=True)
                         idle_logged = True
-                elif _downloaded_today(cur) >= DAILY_LIMIT:
+                elif _total_today(cur) >= DAILY_LIMIT:
                     print(f"  ⏸ limite quotidienne atteinte ({DAILY_LIMIT})", flush=True)
                 else:
                     idle_logged = False
+                    # ── 1) Propositions communauté (priorité — alimente la Mainstage) ──
                     cur.execute("""SELECT title, artist, canon_title,
                                           COALESCE(download_attempts,0) AS attempts
                                    FROM proposal_decisions
@@ -125,8 +212,14 @@ def loop():
                                            download_attempts=%s WHERE title=%s""", (att, p["title"]))
                         print(f"  {'✓' if ok else '✗'} {q}"
                               + ("" if ok else f" (essai {att}/{MAX_ATTEMPTS})"), flush=True)
-                        if _downloaded_today(cur) >= DAILY_LIMIT:
+                        if _total_today(cur) >= DAILY_LIMIT:
                             break
+                    # ── 2) Seeds thématiques (bacs phonk/lofi/synthwave…) sur le budget restant ──
+                    remaining = DAILY_LIMIT - _total_today(cur)
+                    if remaining > 0:
+                        t2, f2 = process_thematic_seeds(cur, cfg, min(BATCH, remaining))
+                        tried += t2
+                        fails += f2
                     # Alerte maintenance : toute la passe en échec = cookies expirés ou
                     # yt-dlp/Deno à mettre à jour (jeu du chat et de la souris YouTube).
                     if tried and fails == tried:

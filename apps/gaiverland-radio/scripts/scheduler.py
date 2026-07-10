@@ -38,6 +38,8 @@ _last_proposal_check = 0.0
 DISK_WARN_PCT = float(os.environ.get("DISK_WARN_PCT", "85"))            # garde-fou disque (#3, P4)
 DISK_CHECK_INTERVAL_S = int(os.environ.get("DISK_CHECK_INTERVAL_S", "3600"))  # 1h
 _last_disk_check = 0.0
+ROTATION_INTERVAL_S = int(os.environ.get("ROTATION_INTERVAL_S", str(30 * 60)))  # rotation multi-station /30 min
+_last_rotation = 0.0
 
 # Intervalle Rebexis (en nombre de morceaux entre chaque jingle)
 REBEXIS_SONGS_INTERVAL = 3
@@ -395,6 +397,25 @@ def maybe_validate_proposals():
         print(f"  ⚠ validation propositions : {e}")
 
 
+def maybe_rotate_stations():
+    """Rotation multi-station (#8) : (re)construit périodiquement la playlist de chaque
+    station thématique (chill/hard/phonk/lofi/synthwave…) depuis les tracks analysées de
+    son bac, via multi_rotation.py. La Mainstage garde son moteur IA dédié (playlist.py) ;
+    ce moteur-ci s'occupe des stations secondaires. No-op si les bacs sont vides."""
+    global _last_rotation
+    now = time.time()
+    if now - _last_rotation < ROTATION_INTERVAL_S:
+        return
+    _last_rotation = now
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multi_rotation.py")
+    if not os.path.exists(script):
+        return
+    try:
+        subprocess.run([sys.executable, script], timeout=300, check=False)
+    except Exception as e:
+        print(f"  ⚠ rotation multi-station : {e}")
+
+
 def backfill_song_ids():
     """Backfill one-shot du song_id (hash AzuraCast) sur toute la librairie depuis
     l'API fichiers, en matchant titre/artiste normalisés. Rend l'effet des votes
@@ -588,6 +609,9 @@ def main():
 
         # 6. Garde-fou disque (#3, P4) — alerte si occupation > seuil (toutes les 1 h)
         maybe_check_disk()
+
+        # 7. Rotation multi-station (#8) — playlists thématiques chill/hard/phonk/… (/30 min)
+        maybe_rotate_stations()
 
         time.sleep(CYCLE_SEC)
 
