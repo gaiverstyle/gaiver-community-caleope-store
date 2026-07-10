@@ -325,6 +325,14 @@ OLLAMA_MODEL=${REBEXIS_LLM_MODEL}
 EOF
 chmod 600 "${CONFIG_DIR}/services.env"
 
+# ── youtube-cookies.txt (auto-downloader) ──────────────────────────────
+# Placeholder VIDE pour que le montage-fichier du service gw-downloader marche
+# (docker créerait un dossier si le fichier est absent). Le chef y scp les vrais
+# cookies (cf procedure-cookies-downloader.md) ; le downloader reste en pause tant
+# que le fichier est vide. Idempotent : on n'écrase JAMAIS un cookies déjà posé.
+[ -f "${CONFIG_DIR}/youtube-cookies.txt" ] || : > "${CONFIG_DIR}/youtube-cookies.txt"
+chmod 600 "${CONFIG_DIR}/youtube-cookies.txt"
+
 # ── rebexis.env ────────────────────────────────────────────────────────
 cat > "${CONFIG_DIR}/rebexis.env" <<EOF
 REBEXIS_API_KEY=${REBEXIS_API_KEY}
