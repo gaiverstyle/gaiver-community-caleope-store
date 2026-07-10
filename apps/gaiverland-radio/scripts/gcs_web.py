@@ -37,8 +37,14 @@ STATE_URL   = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:80
 VOTE_URL    = os.environ.get("GCS_VOTE_URL",         "http://gcs-vote-service:8095")
 AZ_URL      = os.environ.get("AZURACAST_URL",        "http://azuracast:80")
 AZ_STATION  = int(os.environ.get("AZURACAST_STATION_ID", "1"))
-CHILL_STATION = int(os.environ.get("GCS_CHILL_STATION", "3"))  # 2ᵉ station (chill)
-STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel si besoin
+# Sélecteur de station du site : clé (data-st côté front) → id AzuraCast.
+# Ajouter une station = 1 entrée ici + 1 scène dans le HTML (data-st + onclick).
+STATIONS = {
+    "main":  AZ_STATION,
+    "chill": int(os.environ.get("GCS_CHILL_STATION", "3")),
+    "hard":  int(os.environ.get("GCS_HARD_STATION",  "4")),
+}
+STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel Mainstage si besoin
 # Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
 # que l'API nowplaying renvoie en http://azuracast. Mettre le domaine NPM ici
 # quand il existe ; sinon l'IP LAN. Vide = pas de réécriture.
@@ -93,9 +99,9 @@ def health():
 
 @app.get("/api/live")
 def live(station: str = "main"):
-    az_sid = CHILL_STATION if station == "chill" else AZ_STATION
+    az_sid = STATIONS.get(station, AZ_STATION)
     out = {"track": {}, "state": {}, "station": station,
-           "stream_url": "" if station == "chill" else STREAM_URL, "art": "", "listeners": 0}
+           "stream_url": STREAM_URL if station == "main" else "", "art": "", "listeners": 0}
     # AzuraCast nowplaying (art, listen_url, listeners)
     try:
         r = httpx.get(f"{AZ_URL}/api/nowplaying/{az_sid}", timeout=4)
@@ -667,6 +673,7 @@ footer .c15{margin-top:6px;font-size:12px}
   <div class="stages">
     <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div></div>
     <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div></div>
+    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div></div>
     <div class="stage"><div class="ico">⚡</div><div class="nm">Rush Stage</div><div class="st">Bientôt</div></div>
     <div class="stage"><div class="ico">🌅</div><div class="nm">Sunset Stage</div><div class="st">Bientôt</div></div>
     <div class="stage"><div class="ico">🌃</div><div class="nm">Night Stage</div><div class="st">Bientôt</div></div>
