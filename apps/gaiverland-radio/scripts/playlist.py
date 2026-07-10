@@ -51,6 +51,10 @@ DAY_MOODS = ("festival", "energique", "melodique")
 HARD_TITLE_RE = os.environ.get("HARD_TITLE_RE",
     r"(hardstyle|hardcore|happy hardcore|frenchcore|rawstyle|raw hard|gabber|uptempo|"
     r"speedcore|terrorcore|hardstyle bootleg|hard bootleg)")
+# Dossiers des stations thématiques (chill/phonk/synthwave/hard/lofi) : leur contenu
+# appartient à CES scènes, jamais à la Mainstage — même si l'analyzer les tague
+# festival/energique. Sinon phonk/synthwave bavent sur la Mainstage.
+SCENE_PATH_RE = os.environ.get("SCENE_PATH_RE", r"/music/(chill|phonk|synthwave|hard|lofi|lofi2|phonk2)/")
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -580,12 +584,13 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             FROM tracks
             WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
               AND file_path NOT LIKE %s
+              AND file_path !~ %s
               AND genre_top1 IS NOT NULL
               AND genre_top1 != ALL(%s)
               AND genre_top1 = ANY(%s)
               AND (NOT %s OR title !~* %s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, exclude_ids, '%rebexis_%', excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
+        """, (candidate_moods, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -602,9 +607,10 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                     FROM tracks
                     WHERE id = ANY(%s) AND analyzed=TRUE AND mood = ANY(%s)
                       AND file_path NOT LIKE %s
+                      AND file_path !~ %s
                       AND genre_top1 = ANY(%s)
                       AND (NOT %s OR title !~* %s)
-                """, (boost_ids, candidate_moods, '%rebexis_%', GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
+                """, (boost_ids, candidate_moods, '%rebexis_%', SCENE_PATH_RE, GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
                 candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
@@ -616,13 +622,14 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
                        key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
+                  AND file_path !~ %s
                   AND mood = ANY(%s)
                   AND genre_top1 IS NOT NULL
                   AND genre_top1 != ALL(%s)
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', candidate_moods, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
