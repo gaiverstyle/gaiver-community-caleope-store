@@ -27,8 +27,8 @@ COOKIES      = os.environ.get("YT_COOKIES", "/cookies/youtube-cookies.txt")
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR",
                               "/var/azuracast/stations/gaiverlandradio/media/music/community")
 INTERVAL_S   = int(os.environ.get("DOWNLOAD_INTERVAL_S", "600"))    # 10 min entre passes
-DAILY_LIMIT  = int(os.environ.get("DOWNLOAD_DAILY_LIMIT", "20"))
-BATCH        = int(os.environ.get("DOWNLOAD_BATCH", "3"))           # par passe
+DAILY_LIMIT  = int(os.environ.get("DOWNLOAD_DAILY_LIMIT", "45"))    # communauté peu active → on remplit les bacs plus vite
+BATCH        = int(os.environ.get("DOWNLOAD_BATCH", "5"))           # par passe
 
 # ── Bacs thématiques (phonk, lofi, synthwave…) ────────────────────────────────
 # stations.json définit, par station, un `theme` (= sous-dossier média) et une liste
@@ -80,14 +80,22 @@ def _thematic_schema(cur):
 
 
 def _sync_seeds(cur, cfg: dict):
-    """Injecte les seeds de stations.json dans thematic_seeds (nouvelles seeds only)."""
+    """Synchronise thematic_seeds avec stations.json : ajoute les nouvelles seeds ET
+    retire celles qui ont été enlevées de la config (curation modifiée) tant qu'elles
+    ne sont pas encore téléchargées. Les seeds déjà 'ok' sont conservées."""
     for st in cfg.get("stations", []):
         theme = st.get("theme")
         if not theme or not st.get("enabled", True):
             continue
-        for q in st.get("seeds", []) or []:
+        seeds = st.get("seeds", []) or []
+        for q in seeds:
             cur.execute("""INSERT INTO thematic_seeds (theme, query) VALUES (%s, %s)
                            ON CONFLICT (theme, query) DO NOTHING""", (theme, q))
+        if seeds:
+            # Prune : seeds encore en attente mais plus dans la config → curation changée.
+            cur.execute("""DELETE FROM thematic_seeds
+                           WHERE theme=%s AND status IN ('pending','retry')
+                             AND query <> ALL(%s)""", (theme, seeds))
 
 
 def _thematic_today(cur) -> int:
