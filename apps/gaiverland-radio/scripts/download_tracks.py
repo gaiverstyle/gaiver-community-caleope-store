@@ -34,9 +34,13 @@ def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+MAX_ATTEMPTS = int(os.environ.get("DOWNLOAD_MAX_ATTEMPTS", "3"))  # re-essais avant d'abandonner
+
+
 def _ensure_schema(cur):
     cur.execute("ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS downloaded_at TIMESTAMP")
     cur.execute("ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS download_status TEXT")
+    cur.execute("ALTER TABLE proposal_decisions ADD COLUMN IF NOT EXISTS download_attempts INT DEFAULT 0")
 
 
 def _downloaded_today(cur) -> int:
@@ -94,18 +98,42 @@ def loop():
                     print(f"  ⏸ limite quotidienne atteinte ({DAILY_LIMIT})", flush=True)
                 else:
                     idle_logged = False
-                    cur.execute("""SELECT title, artist, canon_title FROM proposal_decisions
+                    cur.execute("""SELECT title, artist, canon_title,
+                                          COALESCE(download_attempts,0) AS attempts
+                                   FROM proposal_decisions
                                    WHERE verdict='accept' AND downloaded_at IS NULL
-                                   ORDER BY votes DESC NULLS LAST LIMIT %s""", (BATCH,))
+                                     AND COALESCE(download_attempts,0) < %s
+                                   ORDER BY votes DESC NULLS LAST LIMIT %s""", (MAX_ATTEMPTS, BATCH))
+                    tried = fails = 0
                     for p in cur.fetchall():
                         q = f"{p['artist']} {p['canon_title'] or p['title']}".strip() or p["title"]
                         ok = download_one(q)
-                        cur.execute("""UPDATE proposal_decisions
-                                       SET downloaded_at=NOW(), download_status=%s WHERE title=%s""",
-                                    ("ok" if ok else "failed", p["title"]))
-                        print(f"  {'✓' if ok else '✗'} {q}", flush=True)
+                        tried += 1
+                        att = p["attempts"] + 1
+                        if ok:
+                            cur.execute("""UPDATE proposal_decisions SET downloaded_at=NOW(),
+                                           download_status='ok', download_attempts=%s WHERE title=%s""",
+                                        (att, p["title"]))
+                        elif att >= MAX_ATTEMPTS:
+                            fails += 1  # abandon après N essais → marqué traité (plus de reboucle)
+                            cur.execute("""UPDATE proposal_decisions SET downloaded_at=NOW(),
+                                           download_status='failed', download_attempts=%s WHERE title=%s""",
+                                        (att, p["title"]))
+                        else:
+                            fails += 1  # laisse downloaded_at NULL → réessai à la prochaine passe
+                            cur.execute("""UPDATE proposal_decisions SET download_status='retry',
+                                           download_attempts=%s WHERE title=%s""", (att, p["title"]))
+                        print(f"  {'✓' if ok else '✗'} {q}"
+                              + ("" if ok else f" (essai {att}/{MAX_ATTEMPTS})"), flush=True)
                         if _downloaded_today(cur) >= DAILY_LIMIT:
                             break
+                    # Alerte maintenance : toute la passe en échec = cookies expirés ou
+                    # yt-dlp/Deno à mettre à jour (jeu du chat et de la souris YouTube).
+                    if tried and fails == tried:
+                        print(f"  🔴 MAINTENANCE : {fails}/{tried} downloads en échec — vérifier les "
+                              f"cookies (expirés ?) ou mettre à jour l'image downloader "
+                              f"(docker rmi gaiverland-radio-gw-downloader + reinstall = yt-dlp/Deno à jour).",
+                              flush=True)
             conn.close()
         except Exception as e:
             print(f"  ⚠ downloader loop: {e}", flush=True)
