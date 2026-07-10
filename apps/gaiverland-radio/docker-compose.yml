@@ -178,8 +178,9 @@ services:
 
   # ── Auto-downloader communauté (yt-dlp + cookies) ───────────────────────
   # Télécharge les titres validés (proposal_decisions=accept) → média AzuraCast → rotation.
-  # OFF par défaut (profil `downloader`). En pause tant que youtube-cookies.txt est vide
-  # (cf procedure-cookies-downloader.md). cpu_shares bas → jamais devant l'antenne.
+  # Service par défaut mais AUTO-GATÉ : reste en pause tant que youtube-cookies.txt est vide
+  # (cf procedure-cookies-downloader.md) + limite quotidienne + titres validés seulement.
+  # cookies montés en RW (yt-dlp rafraîchit la session). cpu_shares bas → jamais devant l'antenne.
   gw-downloader:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/downloader
     container_name: gaiverland-downloader
@@ -188,13 +189,11 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/services.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
-      - {{.BaseDir}}/app-config/gaiverland-radio/youtube-cookies.txt:/cookies/youtube-cookies.txt:ro
+      - {{.BaseDir}}/app-config/gaiverland-radio/youtube-cookies.txt:/cookies/youtube-cookies.txt
       - {{.BaseDir}}/app-data/azuracast/stations:/var/azuracast/stations
     depends_on:
       gw-db:
         condition: service_healthy
-    profiles:
-      - downloader
     restart: unless-stopped
     cpu_shares: 256
     networks:

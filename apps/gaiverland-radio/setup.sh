@@ -166,14 +166,6 @@ if [[ "${GCS_AUDIO}" == "true" ]]; then
     COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE},gcs-audio"
 fi
 
-# Auto-downloader communauté (gw-downloader, yt-dlp+cookies) — OPT-IN via
-# --param gcs_downloader=true. OFF par défaut : ne démarre que quand le chef l'active
-# (cookies YouTube posés + mécanisme revu). Se met en pause tout seul sans cookies.
-GCS_DOWNLOADER="${CALEOPE_PARAM_GCS_DOWNLOADER:-false}"
-if [[ "${GCS_DOWNLOADER}" == "true" ]]; then
-    COMPOSE_PROFILES_VALUE="${COMPOSE_PROFILES_VALUE},downloader"
-fi
-
 # Écrire le .env Docker Compose (lu depuis le répertoire du compose.yml)
 cat > "${CONFIG_DIR}/.env" <<EOF
 COMPOSE_PROFILES=${COMPOSE_PROFILES_VALUE}
