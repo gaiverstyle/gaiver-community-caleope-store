@@ -112,6 +112,10 @@ def process_thematic_seeds(cur, cfg: dict, budget: int) -> tuple:
     """Télécharge jusqu'à `budget` seeds thématiques en attente, dans music/<theme>/.
     Retourne (tried, fails)."""
     media_root = cfg.get("media_root", "/var/azuracast/stations/gaiverlandradio/media/music")
+    # Suffixe de recherche par thème (ex: "phonk", "lofi") — accolé à la requête YT pour
+    # biaiser vers le bon genre et éviter les mauvais matchs sur des seeds peu connus.
+    suffixes = {st.get("theme"): st.get("search_suffix", "")
+                for st in cfg.get("stations", []) if st.get("theme")}
     cur.execute("""SELECT theme, query, COALESCE(attempts,0) AS attempts
                    FROM thematic_seeds
                    WHERE status IN ('pending','retry') AND downloaded_at IS NULL
@@ -120,7 +124,8 @@ def process_thematic_seeds(cur, cfg: dict, budget: int) -> tuple:
     tried = fails = 0
     for s in cur.fetchall():
         target = os.path.join(media_root, s["theme"])
-        ok = download_one(s["query"], target)
+        q = f'{s["query"]} {suffixes.get(s["theme"], "")}'.strip()
+        ok = download_one(q, target)
         tried += 1
         att = s["attempts"] + 1
         if ok:
