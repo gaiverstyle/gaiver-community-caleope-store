@@ -44,6 +44,10 @@ services:
     # toujours ≥1.5 cœur libre pour le flux Liquidsoap). CPU-only : le flux d'abord.
     cpu_shares: 256
     cpus: "2.5"
+    labels:
+      # Apps prioritaires Caleope : l'analyzer est un BATCH lourd sacrifiable → tier background
+      # (oom_score_adj positif = tué en PREMIER si la RAM manque, bien avant l'antenne).
+      - "caleope.priority=background"
     networks:
       - gaiverland-internal
       - azuracast-internal
@@ -173,6 +177,9 @@ services:
     # ne jamais affamer l'antenne si le mode ollama est activé un jour (dormant sinon).
     cpu_shares: 256
     cpus: "2.5"
+    labels:
+      # Apps prioritaires Caleope : LLM CPU-only très gourmand → tier background (sacrifié en premier).
+      - "caleope.priority=background"
     networks:
       - gaiverland-internal
 
@@ -196,6 +203,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
     cpu_shares: 256
+    labels:
+      # Apps prioritaires Caleope : downloader = batch réseau/disque sacrifiable → tier background.
+      - "caleope.priority=background"
     networks:
       - gaiverland-internal
       - azuracast-internal
@@ -224,6 +234,11 @@ services:
     env_file:
       - {{.BaseDir}}/app-config/gaiverland-radio/azuracast.env
     labels:
+      # AzuraCast = L'ANTENNE. Sa priorité "critical" vient du DÉFAUT de l'app (champ
+      # "priority" du manifeste) — PAS d'un label ici, volontairement : un label modifierait
+      # la définition du container et forcerait sa recréation (= coupure du flux) au prochain
+      # `up`. Le daemon pose donc l'oom_score_adj -800 sur le container azuracast DÉJÀ EN COURS,
+      # sans le recréer. (Les batchs, eux, portent un label "background" car les recréer est indolore.)
       - "traefik.enable=true"
       - "traefik.docker.network=caleope-public"
       - "traefik.http.routers.gaiverland-radio.rule=Host(`${RADIO_DOMAIN:-radio.localhost}`)"

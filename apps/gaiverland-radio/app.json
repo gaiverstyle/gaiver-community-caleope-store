@@ -11,6 +11,7 @@
     "privileged": false
   },
   "network": { "public": true, "internal": true },
+  "priority": "critical",
   "ports": [
     { "name": "web",     "container": 80,   "dynamic": true },
     { "name": "sftp",    "container": 2022,  "dynamic": true },
