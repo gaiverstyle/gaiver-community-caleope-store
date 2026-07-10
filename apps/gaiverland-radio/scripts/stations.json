@@ -10,12 +10,12 @@
       "search_suffix": "chillout",
       "enabled": true,
       "bpm": [
-        80,
-        122
+        60,
+        135
       ],
       "energy": [
         0.0,
-        0.55
+        1.0
       ],
       "filter": {
         "genres": [
@@ -53,11 +53,11 @@
       "search_suffix": "hardstyle",
       "enabled": true,
       "bpm": [
-        148,
-        200
+        130,
+        220
       ],
       "energy": [
-        0.6,
+        0.0,
         1.0
       ],
       "filter": {
@@ -116,11 +116,11 @@
       "search_suffix": "phonk",
       "enabled": true,
       "bpm": [
-        130,
-        180
+        100,
+        190
       ],
       "energy": [
-        0.55,
+        0.0,
         1.0
       ],
       "filter": {
@@ -178,12 +178,12 @@
       "enabled": true,
       "_mood": "TOUT DOUX : lofi hip-hop lent, craquement de vinyle, pour réviser ou se détendre. Curation vers le sleepy/chillhop calme (pas de lofi trap ni upbeat). Filtre énergie serré + tri par énergie croissante = les plus doux passent d'abord.",
       "bpm": [
-        60,
-        92
+        50,
+        125
       ],
       "energy": [
         0.0,
-        0.4
+        1.0
       ],
       "filter": {
         "theme": "lofi"
@@ -239,12 +239,12 @@
       "search_suffix": "synthwave",
       "enabled": true,
       "bpm": [
-        95,
-        125
+        80,
+        140
       ],
       "energy": [
-        0.4,
-        0.85
+        0.0,
+        1.0
       ],
       "filter": {
         "theme": "synthwave",
