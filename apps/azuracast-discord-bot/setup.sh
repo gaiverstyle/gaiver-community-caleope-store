@@ -74,7 +74,8 @@ class RadioPlayer:
     def __init__(self):
         self.voice_client: discord.VoiceClient | None = None
         self.volume: float = DEFAULT_VOLUME / 100.0
-        self._cached_stream_url: str = STREAM_URL_ENV
+        self.station: str = AZURACAST_STATION_ID          # station courante (défaut : Mainstage)
+        self._stream_cache: dict = {AZURACAST_STATION_ID: STREAM_URL_ENV} if STREAM_URL_ENV else {}
 
     # -- AzuraCast API --------------------------------------------------------
 
@@ -102,33 +103,44 @@ class RadioPlayer:
             return {}
 
     async def fetch_now_playing(self) -> dict:
-        return await self._get(f"/api/nowplaying/{AZURACAST_STATION_ID}")
+        return await self._get(f"/api/nowplaying/{self.station}")
+
+    async def fetch_stations(self) -> list:
+        """Liste (shortcode, nom) des stations AzuraCast — alimente /radio station."""
+        data = await self._get("/api/stations")
+        out = []
+        for s in (data if isinstance(data, list) else []):
+            sc = s.get("shortcode") or s.get("id")
+            if sc:
+                out.append((str(sc), str(s.get("name") or sc)))
+        return out
 
     async def fetch_stream_url(self) -> str:
-        if self._cached_stream_url:
-            return self._cached_stream_url
+        if self._stream_cache.get(self.station):
+            return self._stream_cache[self.station]
         np = await self.fetch_now_playing()
         mounts = np.get("station", {}).get("mounts", [])
         # Build internal URL: use AZURACAST_URL hostname + Icecast port 8500 + mount path
         from urllib.parse import urlparse
         az_host = urlparse(AZURACAST_URL).hostname or "azuracast"
+        url = ""
         for m in mounts:
             path = m.get("path", "")
             if path:
-                self._cached_stream_url = f"http://{az_host}:8500{path}"
+                url = f"http://{az_host}:8500{path}"
                 if m.get("is_default"):
                     break
-        if not self._cached_stream_url:
-            hls = np.get("station", {}).get("hls_url", "")
-            if hls:
-                self._cached_stream_url = hls
-        return self._cached_stream_url
+        if not url:
+            url = np.get("station", {}).get("hls_url", "")
+        if url:
+            self._stream_cache[self.station] = url
+        return url
 
     async def skip(self) -> bool:
         """Skip la piste actuelle (nécessite une clé API)."""
         if not AZURACAST_API_KEY:
             return False
-        result = await self._post(f"/api/station/{AZURACAST_STATION_ID}/backend/skip")
+        result = await self._post(f"/api/station/{self.station}/backend/skip")
         return bool(result)
 
     # -- Lecture vocale -------------------------------------------------------
@@ -183,6 +195,20 @@ class RadioPlayer:
         if stream_url:
             source = self._make_source(stream_url)
             self.voice_client.play(source, after=self._after)
+
+    async def set_station(self, station: str) -> bool:
+        """Change la station courante et relance le flux en vocal si en écoute."""
+        if station == self.station:
+            return True
+        self.station = station
+        if self.voice_client and self.voice_client.is_connected():
+            if self.voice_client.is_playing():
+                self.voice_client.stop()
+            url = await self.fetch_stream_url()
+            if not url:
+                return False
+            self.voice_client.play(self._make_source(url), after=self._after)
+        return True
 
     @property
     def is_playing(self) -> bool:
@@ -444,6 +470,30 @@ async def cmd_np(interaction: discord.Interaction):
     await interaction.followup.send(embed=np_embed(np))
 
 
+@radio_group.command(name="station", description="Choisis la scène (défaut : Mainstage) — Chill, Hard, Phonk, Lofi…")
+@app_commands.describe(scene="La scène à écouter / annoncer")
+async def cmd_station(interaction: discord.Interaction, scene: str):
+    await interaction.response.defer()
+    ok = await player.set_station(scene)
+    if not ok:
+        await interaction.followup.send(f"❌ Scène « {scene} » injoignable (flux introuvable).")
+        return
+    np = await player.fetch_now_playing()
+    label = (np.get("station", {}).get("name") if np else None) or scene
+    await interaction.followup.send(f"📻 Scène → **{label}**", embed=np_embed(np))
+
+
+@cmd_station.autocomplete("scene")
+async def station_autocomplete(interaction: discord.Interaction, current: str):
+    cur = (current or "").lower()
+    stations = await player.fetch_stations()
+    return [
+        app_commands.Choice(name=nm, value=sc)
+        for sc, nm in stations
+        if cur in sc.lower() or cur in nm.lower()
+    ][:25]
+
+
 @radio_group.command(name="skip", description="Passe au titre suivant (clé API requise)")
 async def cmd_skip(interaction: discord.Interaction):
     if not AZURACAST_API_KEY:
@@ -475,7 +525,7 @@ async def cmd_status(interaction: discord.Interaction):
     embed.add_field(name="État",    value="▶️ En lecture" if playing else "⏹️ Arrêté", inline=True)
     embed.add_field(name="Salon",   value=channel_mention, inline=True)
     embed.add_field(name="Volume",  value=f"{vol} %", inline=True)
-    embed.add_field(name="Station", value=AZURACAST_STATION_ID, inline=True)
+    embed.add_field(name="Station", value=player.station, inline=True)
     embed.add_field(name="AzuraCast", value=AZURACAST_URL, inline=False)
     await interaction.response.send_message(embed=embed)
 
