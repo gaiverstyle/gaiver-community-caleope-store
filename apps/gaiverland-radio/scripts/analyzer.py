@@ -341,6 +341,16 @@ def main():
         wd_to_dir[wd] = root
     print("  ✓ Surveillance temps réel active")
 
+    # Rescan périodique : l'inotify ci-dessus ne surveille que les dossiers existant AU
+    # DÉMARRAGE. Les bacs thématiques music/<theme>/ (phonk, lofi, synthwave…) sont créés
+    # PLUS TARD par le downloader → leurs fichiers ne déclenchent aucun event. Toutes les
+    # RESCAN_INTERVAL s on re-parcourt l'arbre : on ajoute un watch aux nouveaux dossiers
+    # et on analyse tout fichier encore absent de la base. Indispensable pour que les bacs
+    # se remplissent ET s'analysent sans redéploiement.
+    watched = set(wd_to_dir.values())
+    last_rescan = time.time()
+    RESCAN_INTERVAL = int(os.environ.get("ANALYZER_RESCAN_S", "120"))
+
     while True:
         events = inotify.read(timeout=5000)
         for event in events:
@@ -357,6 +367,33 @@ def main():
                 time.sleep(1)
                 save_track(conn, analyze_file(fp))
                 print(f"  ✓ Analysé : {name}")
+
+        # Rescan périodique (nouveaux bacs thématiques + rattrapage)
+        if time.time() - last_rescan >= RESCAN_INTERVAL:
+            last_rescan = time.time()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
+                    known = {r[0] for r in cur.fetchall()}
+            except Exception:
+                conn = get_conn()
+                known = set()
+            for root, _, files in os.walk(WATCH_DIR):
+                if root not in watched:
+                    try:
+                        wd = inotify.add_watch(root, inotify_simple.flags.CLOSE_WRITE | inotify_simple.flags.MOVED_TO)
+                        wd_to_dir[wd] = root
+                        watched.add(root)
+                        print(f"  ✓ Nouveau dossier surveillé : {root}", flush=True)
+                    except Exception:
+                        pass
+                for f in files:
+                    if os.path.splitext(f)[1].lower() in AUDIO_EXTS and not should_skip(f):
+                        fp = os.path.join(root, f)
+                        if fp not in known:
+                            print(f"  → (rescan) {os.path.basename(fp)}", flush=True)
+                            save_track(conn, analyze_file(fp))
+                            known.add(fp)
 
 
 if __name__ == "__main__":
