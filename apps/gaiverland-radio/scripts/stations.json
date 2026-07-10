@@ -9,9 +9,25 @@
       "theme": "chill",
       "search_suffix": "chillout",
       "enabled": true,
-      "bpm": [80, 122],
-      "energy": [0.0, 0.55],
-      "filter": { "genres": ["Deep House", "Chillout", "Downtempo", "Ambient", "Lounge", "Lo-Fi", "Trip Hop"] },
+      "bpm": [
+        80,
+        122
+      ],
+      "energy": [
+        0.0,
+        0.55
+      ],
+      "filter": {
+        "genres": [
+          "Deep House",
+          "Chillout",
+          "Downtempo",
+          "Ambient",
+          "Lounge",
+          "Lo-Fi",
+          "Trip Hop"
+        ]
+      },
       "seeds": [
         "Tycho - A Walk",
         "Bonobo - Kong",
@@ -36,10 +52,61 @@
       "theme": "hard",
       "search_suffix": "hardstyle",
       "enabled": true,
-      "bpm": [148, 200],
-      "energy": [0.6, 1.0],
-      "filter": { "genres": ["Hardstyle", "Hardcore", "Rawstyle", "Frenchcore", "Uptempo", "Gabber", "Happy Hardcore"] },
-      "seeds": []
+      "bpm": [
+        148,
+        200
+      ],
+      "energy": [
+        0.6,
+        1.0
+      ],
+      "filter": {
+        "genres": [
+          "Hardstyle",
+          "Hardcore",
+          "Rawstyle",
+          "Frenchcore",
+          "Uptempo",
+          "Gabber",
+          "Happy Hardcore"
+        ]
+      },
+      "seeds": [
+        "Headhunterz - Dragonborn",
+        "Headhunterz - Scrap Attack",
+        "Headhunterz - Psychedelic",
+        "Wildstylez - Year of Summer",
+        "Wildstylez - Timeless",
+        "Brennan Heart - Imaginary",
+        "Brennan Heart - Lose My Mind",
+        "Da Tweekaz - Tikkie",
+        "Da Tweekaz - Break of Dawn",
+        "D-Block & S-te-Fan - Music Made Addict",
+        "Coone - Rise Together",
+        "Coone - Faye",
+        "Ran-D - Zombie",
+        "Noisecontrollers - Gimme Love",
+        "Sub Zero Project - Our Church",
+        "Sub Zero Project - The Contract",
+        "Radical Redemption - The Road to Madness",
+        "Warface - Do or Die",
+        "Rejecta - Reanimate",
+        "D-Sturb - Rise of the Rebellion",
+        "Act of Rage - Rampage",
+        "Angerfist - Raise and Revolt",
+        "Angerfist - Incoming",
+        "Partyraiser - Feel The Hardcore",
+        "Dr. Peacock - Trip to Paris",
+        "Dr. Peacock - Time Travel",
+        "Sefa - Beethoven",
+        "Sefa - Vergeef Me",
+        "Billx - Frenchcore Symphony",
+        "Deadly Guns - Devastation",
+        "Darren Styles - Us Against the World",
+        "Gammer - The Drop",
+        "S3RL - Pretty Rave Girl",
+        "Scott Brown - Elysium"
+      ]
     },
     {
       "slug": "phonk",
@@ -48,9 +115,17 @@
       "theme": "phonk",
       "search_suffix": "phonk",
       "enabled": true,
-      "bpm": [130, 180],
-      "energy": [0.55, 1.0],
-      "filter": { "theme": "phonk" },
+      "bpm": [
+        130,
+        180
+      ],
+      "energy": [
+        0.55,
+        1.0
+      ],
+      "filter": {
+        "theme": "phonk"
+      },
       "seeds": [
         "Kordhell - Murder In My Mind",
         "DVRST - Close Eyes",
@@ -102,9 +177,17 @@
       "search_suffix": "lofi",
       "enabled": true,
       "_mood": "TOUT DOUX : lofi hip-hop lent, craquement de vinyle, pour réviser ou se détendre. Curation vers le sleepy/chillhop calme (pas de lofi trap ni upbeat). Filtre énergie serré + tri par énergie croissante = les plus doux passent d'abord.",
-      "bpm": [60, 92],
-      "energy": [0.0, 0.4],
-      "filter": { "theme": "lofi" },
+      "bpm": [
+        60,
+        92
+      ],
+      "energy": [
+        0.0,
+        0.4
+      ],
+      "filter": {
+        "theme": "lofi"
+      },
       "seeds": [
         "Idealism - Both of Us",
         "Idealism - Snowfall",
@@ -155,9 +238,23 @@
       "theme": "synthwave",
       "search_suffix": "synthwave",
       "enabled": true,
-      "bpm": [95, 125],
-      "energy": [0.4, 0.85],
-      "filter": { "theme": "synthwave", "genres": ["Synthwave", "Italo House", "Electro", "New Wave"] },
+      "bpm": [
+        95,
+        125
+      ],
+      "energy": [
+        0.4,
+        0.85
+      ],
+      "filter": {
+        "theme": "synthwave",
+        "genres": [
+          "Synthwave",
+          "Italo House",
+          "Electro",
+          "New Wave"
+        ]
+      },
       "seeds": [
         "The Midnight - Sunset",
         "The Midnight - Los Angeles",
