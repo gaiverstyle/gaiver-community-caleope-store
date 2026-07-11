@@ -135,18 +135,63 @@ def metrics():
     emit("gaiverland_listeners_total", "Auditeurs toutes scenes confondues", "gauge",
          [f"gaiverland_listeners_total {total}"])
 
-    # Catalogue : nombre de titres analysés en base
-    tracks = -1
+    # Métriques issues de la base (1 seule connexion / 1 requête)
+    db = {}
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) AS n FROM tracks")
-            tracks = cur.fetchone()["n"]
+            cur.execute("""
+                SELECT
+                  (SELECT count(*) FROM tracks)          AS tracks,
+                  (SELECT count(*) FROM votes)           AS votes,
+                  (SELECT count(*) FROM lore_events)     AS lore,
+                  (SELECT count(*) FROM title_proposals) AS proposals,
+                  (SELECT count(*) FROM play_history WHERE played_at > now()-interval '1 hour') AS plays_1h,
+                  (SELECT extract(epoch FROM now()-max(played_at)) FROM play_history)   AS last_play_age,
+                  (SELECT chars_used  FROM el_monthly_quota ORDER BY month DESC LIMIT 1) AS el_used,
+                  (SELECT chars_limit FROM el_monthly_quota ORDER BY month DESC LIMIT 1) AS el_limit,
+                  (SELECT energy_avg  FROM radio_state ORDER BY updated_at DESC LIMIT 1) AS energy,
+                  (SELECT extract(epoch FROM (now() AT TIME ZONE 'UTC')-updated_at)
+                     FROM radio_state ORDER BY updated_at DESC LIMIT 1)                  AS state_age
+            """)
+            db = cur.fetchone() or {}
         conn.close()
     except Exception:
         pass
+
+    def num(v, default=-1):
+        try:
+            return round(float(v), 3) if v is not None else default
+        except Exception:
+            return default
+
     emit("gaiverland_tracks_total", "Titres analyses en base (-1 = DB injoignable)", "gauge",
-         [f"gaiverland_tracks_total {tracks}"])
+         [f"gaiverland_tracks_total {num(db.get('tracks'))}"])
+    emit("gaiverland_votes_total", "Votes enregistres", "gauge",
+         [f"gaiverland_votes_total {num(db.get('votes'))}"])
+    emit("gaiverland_lore_events_total", "Evenements de lore generes", "gauge",
+         [f"gaiverland_lore_events_total {num(db.get('lore'))}"])
+    emit("gaiverland_proposals_total", "Propositions de titres recues", "gauge",
+         [f"gaiverland_proposals_total {num(db.get('proposals'))}"])
+    emit("gaiverland_plays_last_hour", "Titres joues dans la derniere heure (activite antenne)", "gauge",
+         [f"gaiverland_plays_last_hour {num(db.get('plays_1h'))}"])
+    emit("gaiverland_last_play_age_seconds", "Secondes depuis le dernier titre joue (heartbeat antenne : haut = probleme)", "gauge",
+         [f"gaiverland_last_play_age_seconds {num(db.get('last_play_age'))}"])
+    emit("gaiverland_state_age_seconds", "Secondes depuis la derniere maj du state-engine (heartbeat pipeline)", "gauge",
+         [f"gaiverland_state_age_seconds {num(db.get('state_age'))}"])
+    emit("gaiverland_state_energy_avg", "Energie moyenne courante de l'antenne (0-1)", "gauge",
+         [f"gaiverland_state_energy_avg {num(db.get('energy'))}"])
+
+    # ElevenLabs : garde-fou credits (ratio restant → alerte <0.15, critique <0.02)
+    el_used, el_limit = db.get("el_used"), db.get("el_limit")
+    emit("gaiverland_elevenlabs_chars_used", "Caracteres ElevenLabs consommes ce mois", "gauge",
+         [f"gaiverland_elevenlabs_chars_used {num(el_used)}"])
+    emit("gaiverland_elevenlabs_chars_limit", "Quota mensuel ElevenLabs", "gauge",
+         [f"gaiverland_elevenlabs_chars_limit {num(el_limit)}"])
+    if el_used is not None and el_limit:
+        remaining = round(max(0.0, 1.0 - float(el_used) / float(el_limit)), 4)
+        emit("gaiverland_elevenlabs_remaining_ratio", "Fraction de credits ElevenLabs restants (0-1)", "gauge",
+             [f"gaiverland_elevenlabs_remaining_ratio {remaining}"])
 
     emit("gaiverland_up", "Endpoint metriques Gaiverland joignable", "gauge", ["gaiverland_up 1"])
     return PlainTextResponse("\n".join(lines) + "\n")
