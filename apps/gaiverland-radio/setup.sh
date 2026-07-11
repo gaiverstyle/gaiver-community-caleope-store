@@ -5348,3 +5348,13 @@ if [[ -z "${AZ_API_KEY}" ]]; then
     echo ""
     echo "   ⚠  Clé API AzuraCast manquante — à configurer dans services.env"
 fi
+
+# ── Durcissement #4 : propriété des env/secrets pour docker compose ────────────
+# Le daemon exécute ce setup.sh en ROOT → les fichiers écrits sont root:root.
+# Or `docker compose` tourne en user-caleope (UID non-root) et doit POUVOIR LIRE
+# db.env / services.env / secrets.env — sinon « permission denied » au boot
+# (cause de l'incident nuit 10/07 : clé AzuraCast illisible, stack à terre).
+# On aligne le propriétaire du CONFIG_DIR sur celui de la racine Caleope
+# (= user-caleope), de façon portable (aucun UID en dur).
+CALEOPE_OWNER="$(stat -c '%u:%g' "${CALEOPE_BASE_DIR}" 2>/dev/null || echo '1000:1000')"
+chown -R "${CALEOPE_OWNER}" "${CONFIG_DIR}" 2>/dev/null || true
