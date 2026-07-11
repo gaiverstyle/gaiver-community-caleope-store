@@ -50,11 +50,15 @@ REBEXIS_PLAYLIST_KEEP = int(os.environ.get("REBEXIS_PLAYLIST_KEEP", "20"))
 # Modèle réglable via env ELEVENLABS_MODEL : eleven_multilingual_v2 = meilleur accent FR ;
 # eleven_v3 = plus expressif mais instable. Vitesse via ELEVENLABS_SPEED (<1 = plus lent).
 EL_VOICE_SETTINGS = {
-    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.50")),
+    # Preset « hyperactive mais nette » : on GARDE l'énergie (style haut) — c'est ça
+    # l'hyperactivité de Rebexis — et on règle l'accent/prononciation FR par le MODÈLE
+    # (ELEVENLABS_MODEL=eleven_multilingual_v2), pas en tuant le style. stability juste
+    # un cran au-dessus de l'original (0.35→0.40) pour un débit un peu moins erratique.
+    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.40")),
     "similarity_boost":  0.80,
-    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.35")),
+    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.50")),
     "use_speaker_boost": True,
-    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "0.92")),
+    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "0.90")),
 }
 
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
