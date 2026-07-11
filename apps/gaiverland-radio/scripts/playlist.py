@@ -41,6 +41,10 @@ REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
 VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.25"))
 VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.25"))
 VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
+# REVIEW n'est plus une pile manuelle (le chef ne l'arbitre plus) : il compte comme
+# soft-négatif dans le score. Gentil (un REVIEW seul ne quarantaine pas), mais REVIEW +
+# SKIP fait basculer. Neutralisable (=0.0) ou ajustable par env.
+VOTE_REVIEW_VALUE     = float(os.environ.get("VOTE_REVIEW_VALUE", "-0.5"))
 # Garde-fou anti-dur en JOURNÉE par mots-clés de TITRE : rattrape les titres durs
 # mal tagués (ex. bootleg hardstyle classé « Electro House/festival », « Bass Boosted »)
 # que le filtre par genre laisse passer. Appliqué seulement aux moods jour.
@@ -491,11 +495,11 @@ def vote_scores_debug(limit: int = 100):
     rows = []
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT t.id, t.artist, t.title,
-                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0))::numeric, 3) AS score,
+                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0))::numeric, 3) AS score,
                    count(*) AS votes
                 FROM tracks t JOIN votes v ON v.song_id = t.song_id
                 WHERE t.song_id IS NOT NULL
@@ -542,11 +546,11 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     vote_scores = {}
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT t.id AS id,
-                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0) AS score
+                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0) AS score
                 FROM tracks t JOIN votes v ON v.song_id = t.song_id
                 WHERE t.song_id IS NOT NULL
                   AND v.created_at > NOW() - (%s * INTERVAL '1 day')

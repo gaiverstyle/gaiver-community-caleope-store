@@ -31,6 +31,16 @@ MAX_TRACKS      = int(os.environ.get("ROTATION_MAX_TRACKS", "250"))
 MEDIA_MARKER    = "/media/"   # tracks.file_path = …/stations/<st>/media/music/<theme>/x.mp3
 _TIMEOUT        = 30
 
+# Effet des votes sur les scènes — mêmes seuils/logique que la Mainstage (playlist.py).
+# Avant, les votes ne touchaient QUE la Mainstage ; désormais ils s'appliquent partout.
+VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
+VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.25"))
+VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.25"))
+# REVIEW n'est plus une pile manuelle : il compte comme soft-négatif dans le score
+# (0 avant). Gentil : un REVIEW seul ne met pas en quarantaine (plafond user 0.3×0.5=0.15
+# < seuil 0.25), mais REVIEW + SKIP fait basculer. Tunable / neutralisable (=0) par env.
+VOTE_REVIEW_VALUE     = float(os.environ.get("VOTE_REVIEW_VALUE", "-0.5"))
+
 
 def _ok() -> bool:
     return bool(AZ_KEY) and AZ_KEY not in ("", "__CONFIGURE__")
@@ -181,6 +191,37 @@ def order_coherent(rows: list, limit: int) -> list:
 
 
 # ─────────────────────────────────────────────
+# Effet des votes (réplique de playlist.py, appliqué par station)
+# ─────────────────────────────────────────────
+def vote_scores(cur) -> dict:
+    """Score voté pondéré (0.6 chef / 0.3 users / 0.1 IA) par track.id sur 14 j.
+    ENCORE=+1, SKIP=-1, REVIEW=VOTE_REVIEW_VALUE. Relié à tracks via song_id.
+    Savepoint : si la table votes/song_id manque, on n'abîme pas la transaction de rotation."""
+    try:
+        cur.execute("SAVEPOINT vs")
+        cur.execute(f"""
+            SELECT t.id AS id,
+               0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+             + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+             + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0) AS score
+            FROM tracks t JOIN votes v ON v.song_id = t.song_id
+            WHERE t.song_id IS NOT NULL
+              AND v.created_at > NOW() - (%s * INTERVAL '1 day')
+            GROUP BY t.id
+        """, (VOTE_WINDOW_DAYS,))
+        res = {r["id"]: float(r["score"]) for r in cur.fetchall()}
+        cur.execute("RELEASE SAVEPOINT vs")
+        return res
+    except Exception as e:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT vs")
+        except Exception:
+            pass
+        print(f"  ⚠ effet votes ignoré (scène): {e}", flush=True)
+        return {}
+
+
+# ─────────────────────────────────────────────
 # Rotation d'une station
 # ─────────────────────────────────────────────
 def rotate_station(cur, st: dict) -> None:
@@ -196,7 +237,21 @@ def rotate_station(cur, st: dict) -> None:
     if not rows:
         print(f"  ∅ {label}: bac vide (0 track analysée pour ce filtre) — rotation inchangée", flush=True)
         return
+
+    # ── Effet des votes (auto, comme la Mainstage) ──
+    vs = vote_scores(cur)
+    n_before = len(rows)
+    quarantined = {tid for tid, s in vs.items() if s <= VOTE_SKIP_THRESHOLD}
+    if quarantined:
+        kept = [r for r in rows if r["id"] not in quarantined]
+        if kept:                      # garde-fou : ne JAMAIS vider une scène sur les seuls votes
+            rows = kept
     ordered = order_coherent(rows, MAX_TRACKS)
+    encored = {tid for tid, s in vs.items() if s >= VOTE_ENCORE_THRESHOLD}
+    if encored:
+        ordered.sort(key=lambda t: 0 if t["id"] in encored else 1)  # tri STABLE → ENCORE en tête, ordre cohérent préservé
+    n_q = n_before - len(rows)
+    n_e = sum(1 for t in ordered if t["id"] in encored)
 
     # Map chemin absolu DB → fichier AzuraCast de CETTE station (média partagé, matché par basename).
     files = az_station_files(sid)
@@ -234,7 +289,8 @@ def rotate_station(cur, st: dict) -> None:
                 removed += 1
     az_set_order(sid, pid, desired_ids)
     print(f"  ✓ {label} (station {sid}): {len(desired_ids)} titres en rotation"
-          + (f", {removed} périmés retirés" if removed else ""), flush=True)
+          + (f", {removed} périmés retirés" if removed else "")
+          + (f" | votes: -{n_q} quarantaine, {n_e} boostés" if (n_q or n_e) else ""), flush=True)
 
 
 def run_once() -> None:

@@ -25,6 +25,8 @@ STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091
 # Poids par rôle d'utilisateur (spec Bible v1.1)
 ROLE_WEIGHTS = {"founder": 0.6, "user": 0.3, "system_ai": 0.1}
 VALID_VOTES  = {"ENCORE", "REVIEW", "SKIP"}
+# REVIEW = soft-négatif (auto, plus de pile manuelle). Cohérent avec playlist.py/multi_rotation.py.
+REVIEW_VALUE = float(os.environ.get("VOTE_REVIEW_VALUE", "-0.5"))
 
 app = FastAPI(title="GCS Vote Service")
 
@@ -68,7 +70,7 @@ def compute_score(song_id: str, conn) -> float:
         return 0.0
     score = 0.0
     for r in rows:
-        delta = 1.0 if r["vote"] == "ENCORE" else (-1.0 if r["vote"] == "SKIP" else 0.0)
+        delta = 1.0 if r["vote"] == "ENCORE" else (-1.0 if r["vote"] == "SKIP" else REVIEW_VALUE)
         score += delta * r["user_weight"]
     return round(score / len(rows), 3)
 
