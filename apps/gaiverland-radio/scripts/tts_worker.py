@@ -213,6 +213,42 @@ def quota_add(conn, chars: int):
     conn.commit()
 
 
+_last_quota_sync = 0.0
+def sync_quota_from_el(conn, force: bool = False) -> None:
+    """Aligne el_monthly_quota sur le VRAI quota ElevenLabs (source de vérité) au lieu
+    de laisser la DB dériver (elle sous-comptait → garde-fou aveugle). Le garde-fou ET
+    la métrique lisent alors le réel. Ne consomme PAS de crédits TTS (endpoint /subscription).
+    Cache : au plus 1 appel / 5 min (sauf force)."""
+    global _last_quota_sync
+    if not EL_API_KEY:
+        return
+    now = time.time()
+    if not force and (now - _last_quota_sync) < 300:
+        return
+    _last_quota_sync = now  # rate-limit même sur échec (pas de martèlement EL)
+    try:
+        r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                      headers={"xi-api-key": EL_API_KEY}, timeout=10)
+        if r.status_code != 200:
+            return
+        d = r.json()
+        used  = int(d.get("character_count", 0))
+        limit = int(d.get("character_limit", EL_CHARS_LIMIT))
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO el_monthly_quota (month, chars_used, chars_limit)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (month) DO UPDATE
+                   SET chars_used  = EXCLUDED.chars_used,
+                       chars_limit = EXCLUDED.chars_limit,
+                       updated_at  = NOW()
+            """, (current_month(), used, limit))
+        conn.commit()
+        print(f"  ↻ quota EL synchronisé : {used}/{limit}", flush=True)
+    except Exception as e:
+        print(f"  warning sync quota EL : {e}", flush=True)
+
+
 # ── Cache bibliothèque ────────────────────────────────────────────────────────
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:32]
@@ -337,6 +373,7 @@ def generate_phrase(text: str, category: str = "custom") -> pathlib.Path:
     # 2. Quota check
     el_text = el_add_playful(text)
     needed  = len(el_text)
+    sync_quota_from_el(conn)          # aligne la DB sur le VRAI quota EL (cache 5 min)
     remaining = quota_remaining(conn)
 
     if remaining < needed:
@@ -444,6 +481,7 @@ def _prune_rebexis_playlist(conn, rb_pl_id: int):
 
 def _worker_loop():
     init_db()
+    _c = get_conn(); sync_quota_from_el(_c, force=True); _c.close()  # quota réel avant pré-gen
     pregen_static()
     global _current_job
     while True:
