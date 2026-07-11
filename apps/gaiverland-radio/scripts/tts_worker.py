@@ -38,13 +38,23 @@ EL_CHARS_LIMIT  = int(os.environ.get("EL_CHARS_LIMIT", "10000"))   # par mois
 TTS_CACHE       = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
+# Nombre de jingles contextuels ('custom') conservés dans la playlist Rebexis.
+# Au-delà, les plus anciens sont retirés de la playlist (pas supprimés de la
+# bibliothèque) pour éviter l'accumulation : répétition de vieux jingles et pool
+# de rotation surchargé. Les phrases statiques (cat3_bloc, templates) restent.
+REBEXIS_PLAYLIST_KEEP = int(os.environ.get("REBEXIS_PLAYLIST_KEEP", "20"))
+
 # Paramètres voix ElevenLabs — validés : jeune, motivée, ton radio
+# TAMED 11/07 (chef : accent/prononciation/débit inégaux) — stability HAUTE + style BAS
+# = prononciation FR fiable + débit stable (l'ancien 0.35/0.55 partait encore en vrille).
+# Modèle réglable via env ELEVENLABS_MODEL : eleven_multilingual_v2 = meilleur accent FR ;
+# eleven_v3 = plus expressif mais instable. Vitesse via ELEVENLABS_SPEED (<1 = plus lent).
 EL_VOICE_SETTINGS = {
-    "stability":         0.35,   # légèrement plus stable = moins précipitée
-    "similarity_boost":  0.75,
-    "style":             0.55,   # moins d'expressivité = rythme plus posé
+    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.50")),
+    "similarity_boost":  0.80,
+    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.35")),
     "use_speaker_boost": True,
-    "speed":             0.85,   # ralentit la voix (~15%)
+    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "0.92")),
 }
 
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
@@ -220,14 +230,21 @@ def library_get(conn, text: str) -> dict | None:
 
 
 def library_random_fallback(conn, category: str) -> dict | None:
-    """Phrase aléatoire de la même catégorie (fallback quota épuisé)."""
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT * FROM tts_library
-            WHERE category=%s AND audio_file IS NOT NULL
-            ORDER BY RANDOM() LIMIT 1
-        """, (category,))
-        return cur.fetchone()
+    """Phrase aléatoire de secours quand le quota EL est épuisé.
+    D'abord la même catégorie, puis la réserve de samples pré-enregistrés
+    ('sample', chargée par seed_rebexis_samples.py) → Rebexis n'est jamais muette.
+    """
+    for cat in (category, "sample"):
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT * FROM tts_library
+                WHERE category=%s AND audio_file IS NOT NULL
+                ORDER BY RANDOM() LIMIT 1
+            """, (cat,))
+            row = cur.fetchone()
+        if row:
+            return row
+    return None
 
 
 def library_save(conn, text: str, category: str, audio_file: str,
@@ -247,10 +264,12 @@ def library_save(conn, text: str, category: str, audio_file: str,
 
 # ── ElevenLabs API ────────────────────────────────────────────────────────────
 def el_add_playful(text: str) -> str:
-    """Ajoute [playful] si pas déjà présent."""
+    """Balise [playful] = audio tag interprété UNIQUEMENT par eleven_v3. Sur les autres
+    modèles (multilingual_v2…) elle serait LUE à voix haute → on la retire."""
+    is_v3 = "v3" in EL_MODEL
     if text.startswith("["):
-        return text
-    return f"[playful] {text}"
+        return text if is_v3 else text.split("]", 1)[-1].strip()
+    return f"[playful] {text}" if is_v3 else text
 
 
 def el_synthesize(text: str) -> bytes:
@@ -397,6 +416,32 @@ def get_rebexis_playlist_id(conn) -> int:
     return (row["az_rb_playlist"] or 0) if row else 0
 
 
+def _prune_rebexis_playlist(conn, rb_pl_id: int):
+    """Ne garde dans la playlist Rebexis que les REBEXIS_PLAYLIST_KEEP jingles
+    contextuels ('custom') les plus récents. Les phrases statiques réutilisables
+    (cat3_bloc, cat*_*) ne sont jamais élaguées. Empêche l'accumulation qui
+    provoque répétitions et clustering de voix."""
+    if not rb_pl_id:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT az_file_id FROM tts_library
+                WHERE az_file_id IS NOT NULL AND category = 'custom'
+                ORDER BY created_at DESC
+                OFFSET %s
+            """, (REBEXIS_PLAYLIST_KEEP,))
+            stale = [r["az_file_id"] for r in cur.fetchall()]
+        if not stale:
+            return
+        from az_utils import remove_files_from_playlist
+        n = remove_files_from_playlist(stale[:20], rb_pl_id)  # cap 20/synthèse
+        if n:
+            print(f"  🧹 playlist Rebexis élaguée — {n} ancien(s) jingle(s) contextuel(s) retiré(s)")
+    except Exception as e:
+        print(f"  ⚠ prune Rebexis: {e}")
+
+
 def _worker_loop():
     init_db()
     pregen_static()
@@ -427,6 +472,7 @@ def _worker_loop():
                 ok = batch_assign_playlist([az_file_id], [rb_pl_id])
                 if ok:
                     print(f"  ✓ az_id={az_file_id} assigné → playlist Rebexis (id={rb_pl_id})")
+                    _prune_rebexis_playlist(conn, rb_pl_id)
                 else:
                     print(f"  ⚠ assignation playlist ÉCHOUÉE pour az_id={az_file_id} (rb_pl_id={rb_pl_id})")
             elif not rb_pl_id:

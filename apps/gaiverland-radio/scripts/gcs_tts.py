@@ -24,17 +24,21 @@ DB_URL        = os.environ["DATABASE_URL"]
 EL_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 EL_VOICE_ID   = os.environ.get("ELEVENLABS_VOICE_ID", "")
 EL_MODEL      = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
+EL_SPEED      = float(os.environ.get("ELEVENLABS_SPEED", "0.96"))  # <1 = plus lent (clarté FR), tunable sans redeploy
 EL_CHARS_LIMIT= int(os.environ.get("EL_CHARS_LIMIT", "10000"))
 TTS_CACHE     = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
 # emotion → voice settings ElevenLabs
+# emotion → voice settings. TAMED 11/07 : l'ancien (style 0.7-0.95 / stability 0.15-0.35)
+# faisait dérailler la voix (accent, prononciation, débit). Stability HAUTE + style BAS
+# = prononciation FR fiable et débit stable, tout en gardant une nuance d'émotion.
 EMOTION_SETTINGS = {
-    "calm":      {"stability": 0.55, "similarity_boost": 0.75, "style": 0.35, "use_speaker_boost": True},
-    "playful":   {"stability": 0.30, "similarity_boost": 0.75, "style": 0.75, "use_speaker_boost": True},
-    "excited":   {"stability": 0.20, "similarity_boost": 0.80, "style": 0.90, "use_speaker_boost": True},
-    "energetic": {"stability": 0.15, "similarity_boost": 0.85, "style": 0.95, "use_speaker_boost": True},
-    "amused":    {"stability": 0.35, "similarity_boost": 0.75, "style": 0.70, "use_speaker_boost": True},
+    "calm":      {"stability": 0.62, "similarity_boost": 0.80, "style": 0.18, "use_speaker_boost": True},
+    "playful":   {"stability": 0.52, "similarity_boost": 0.80, "style": 0.38, "use_speaker_boost": True},
+    "excited":   {"stability": 0.46, "similarity_boost": 0.82, "style": 0.48, "use_speaker_boost": True},
+    "energetic": {"stability": 0.44, "similarity_boost": 0.82, "style": 0.55, "use_speaker_boost": True},
+    "amused":    {"stability": 0.52, "similarity_boost": 0.80, "style": 0.40, "use_speaker_boost": True},
 }
 
 FFMPEG_RADIO = ",".join([
@@ -104,8 +108,16 @@ def quota_add(conn, chars: int):
 
 
 def synthesize_el(text: str, emotion: str) -> bytes:
-    settings = EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["playful"])
-    el_text  = f"[playful] {text}" if not text.startswith("[") else text
+    settings = dict(EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["playful"]))
+    if EL_SPEED and EL_SPEED != 1.0:
+        settings["speed"] = EL_SPEED  # ignoré silencieusement par les modèles qui ne le gèrent pas
+    # Les balises [emotion] ne sont interprétées QUE par eleven_v3 (audio tags). Sur
+    # multilingual_v2 & co, elles seraient LUES à voix haute → on les retire.
+    stripped = text.split("]", 1)[-1].strip() if text.startswith("[") else text
+    if "v3" in EL_MODEL:
+        el_text = text if text.startswith("[") else f"[{emotion}] {text}"
+    else:
+        el_text = stripped
     r = httpx.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}",
         headers={"xi-api-key": EL_API_KEY, "Content-Type": "application/json"},
