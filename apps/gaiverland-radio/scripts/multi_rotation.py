@@ -196,9 +196,9 @@ def order_coherent(rows: list, limit: int) -> list:
 def vote_scores(cur) -> dict:
     """Score voté pondéré (0.6 chef / 0.3 users / 0.1 IA) par track.id sur 14 j.
     ENCORE=+1, SKIP=-1, REVIEW=VOTE_REVIEW_VALUE. Relié à tracks via song_id.
-    Savepoint : si la table votes/song_id manque, on n'abîme pas la transaction de rotation."""
+    Connexion en autocommit : chaque requête est sa propre transaction, donc si la
+    table votes/song_id manque on renvoie {} sans rien abîmer (pas besoin de savepoint)."""
     try:
-        cur.execute("SAVEPOINT vs")
         cur.execute(f"""
             SELECT t.id AS id,
                0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
@@ -209,14 +209,8 @@ def vote_scores(cur) -> dict:
               AND v.created_at > NOW() - (%s * INTERVAL '1 day')
             GROUP BY t.id
         """, (VOTE_WINDOW_DAYS,))
-        res = {r["id"]: float(r["score"]) for r in cur.fetchall()}
-        cur.execute("RELEASE SAVEPOINT vs")
-        return res
+        return {r["id"]: float(r["score"]) for r in cur.fetchall()}
     except Exception as e:
-        try:
-            cur.execute("ROLLBACK TO SAVEPOINT vs")
-        except Exception:
-            pass
         print(f"  ⚠ effet votes ignoré (scène): {e}", flush=True)
         return {}
 
