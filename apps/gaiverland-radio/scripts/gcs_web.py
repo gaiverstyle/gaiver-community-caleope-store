@@ -43,6 +43,9 @@ STATIONS = {
     "main":  AZ_STATION,
     "chill": int(os.environ.get("GCS_CHILL_STATION", "3")),
     "hard":  int(os.environ.get("GCS_HARD_STATION",  "4")),
+    "phonk": int(os.environ.get("GCS_PHONK_STATION", "5")),
+    "lofi":  int(os.environ.get("GCS_LOFI_STATION",  "6")),
+    "synthwave": int(os.environ.get("GCS_SYNTHWAVE_STATION", "7")),
 }
 STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel Mainstage si besoin
 # Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
@@ -566,6 +569,8 @@ footer .c15{margin-top:6px;font-size:12px}
 .playbtn{flex:0 0 auto;width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
+.reloadbtn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.22);background:transparent;cursor:pointer;font-size:18px;color:var(--ink);opacity:.7;transition:transform .3s,opacity .15s}
+.reloadbtn:hover{transform:rotate(180deg);opacity:1}
 #player{display:none}
 /* Scènes cliquables (stations Live) vs à venir (Bientôt) */
 .stage.live{cursor:pointer;border-style:solid;border-color:rgba(255,244,230,.4);transition:all .15s}
@@ -636,6 +641,7 @@ footer .c15{margin-top:6px;font-size:12px}
       <div class="bar"><i id="prog"></i></div>
     </div>
     <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
+    <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)">⟳</button>
   </div>
   <audio id="player" preload="none"></audio>
   <div class="authbar" id="authbar"></div>
@@ -674,10 +680,9 @@ footer .c15{margin-top:6px;font-size:12px}
     <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div></div>
     <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div></div>
     <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div></div>
-    <div class="stage"><div class="ico">⚡</div><div class="nm">Rush Stage</div><div class="st">Bientôt</div></div>
-    <div class="stage"><div class="ico">🌅</div><div class="nm">Sunset Stage</div><div class="st">Bientôt</div></div>
-    <div class="stage"><div class="ico">🌃</div><div class="nm">Night Stage</div><div class="st">Bientôt</div></div>
-    <div class="stage"><div class="ico">💫</div><div class="nm">Pulse Stage</div><div class="st">Bientôt</div></div>
+    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div></div>
+    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div></div>
+    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🌆</div><div class="nm">Synthwave</div><div class="st">Live</div></div>
   </div>
 </div>
 
@@ -731,10 +736,26 @@ let audioUrl="";
 let cityPhotos=[], bgIdx=0, lastTitle="";
 let curStation='main';  // station écoutée : 'main' (Mainstage) ou 'chill'
 
+// Flux LIVE : on ne "reprend" jamais un flux radio (le buffer serait périmé →
+// grésillements/décalage au retour). On repart toujours du DIRECT avec un flux frais.
+function playLive(){
+  const a=document.getElementById('player');
+  if(!audioUrl) return;
+  // anti-cache : force une nouvelle connexion sur le bord live, pas le buffer navigateur
+  a.src = audioUrl + (audioUrl.indexOf('?')>=0?'&':'?') + '_=' + Date.now();
+  a.load();
+  a.play().catch(()=>{});
+}
+function stopStream(){
+  // pause = on COUPE vraiment le flux (on lâche le buffer) → au retour = direct frais
+  const a=document.getElementById('player');
+  a.pause();
+  a.removeAttribute('src');
+  a.load();
+}
 function togglePlay(){
   const a=document.getElementById('player');
-  if(audioUrl && !a.src) a.src=audioUrl;
-  if(a.paused){ a.play().catch(()=>{}); } else { a.pause(); }
+  if(a.paused){ playLive(); } else { stopStream(); }
 }
 // Clip in-page : composition fixe par morceau — fond Toulon + cover devant + titre dessous.
 async function loadVisuals(){
@@ -762,7 +783,7 @@ function selectStation(s){
   const wasPlaying=!a.paused;
   a.pause(); a.removeAttribute('src'); a.load();  // détache l'ancien flux
   audioUrl=''; lastTitle='';                       // force refresh à re-remplir
-  refresh().then(()=>{ if(wasPlaying && audioUrl){ a.src=audioUrl; a.play().catch(()=>{}); } });
+  refresh().then(()=>{ if(wasPlaying) playLive(); });
 }
 async function refresh(){
   try{
@@ -905,7 +926,7 @@ function drawViz(){
  ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
  if('mediaSession' in navigator){
    navigator.mediaSession.setActionHandler('play',togglePlay);
-   navigator.mediaSession.setActionHandler('pause',()=>document.getElementById('player').pause());
+   navigator.mediaSession.setActionHandler('pause',stopStream);
  }})();
 refresh();loadEvents();
 loadVisuals();loadAuth();
