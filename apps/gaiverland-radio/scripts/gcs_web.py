@@ -21,7 +21,7 @@ import json, time, re
 from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 import secrets, hmac, hashlib, base64
 
 # Page « L'équipe » (maquette Cassy, avatars embarqués). Import guardé : si le
@@ -98,6 +98,58 @@ def get_conn():
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "gcs-web"}
+
+
+@app.get("/metrics")
+def metrics():
+    """Métriques Prometheus pour la supervision (Kade/Aphrodite) : listeners par scène,
+    état des stations, taille du catalogue. Données non sensibles (radio publique)."""
+    lines = []
+
+    def emit(name, help_, typ, samples):
+        lines.append(f"# HELP {name} {help_}")
+        lines.append(f"# TYPE {name} {typ}")
+        lines.extend(samples)
+
+    # AzuraCast : listeners + online par scène (1 seul appel /api/nowplaying)
+    by_id = {}
+    try:
+        r = httpx.get(f"{AZ_URL}/api/nowplaying", timeout=6)
+        for np in (r.json() if r.status_code == 200 else []):
+            sid = (np.get("station") or {}).get("id")
+            if sid is not None:
+                by_id[sid] = np
+    except Exception:
+        pass
+
+    lis, onl, total = [], [], 0
+    for key, sid in STATIONS.items():
+        np = by_id.get(sid, {})
+        listeners = int(((np.get("listeners") or {}).get("current")) or 0)
+        online = 1 if np.get("is_online") else 0
+        total += listeners
+        lis.append(f'gaiverland_station_listeners{{station="{key}"}} {listeners}')
+        onl.append(f'gaiverland_station_online{{station="{key}"}} {online}')
+    emit("gaiverland_station_listeners", "Auditeurs actuels par scene", "gauge", lis)
+    emit("gaiverland_station_online", "Scene en ligne (1) ou non (0)", "gauge", onl)
+    emit("gaiverland_listeners_total", "Auditeurs toutes scenes confondues", "gauge",
+         [f"gaiverland_listeners_total {total}"])
+
+    # Catalogue : nombre de titres analysés en base
+    tracks = -1
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS n FROM tracks")
+            tracks = cur.fetchone()["n"]
+        conn.close()
+    except Exception:
+        pass
+    emit("gaiverland_tracks_total", "Titres analyses en base (-1 = DB injoignable)", "gauge",
+         [f"gaiverland_tracks_total {tracks}"])
+
+    emit("gaiverland_up", "Endpoint metriques Gaiverland joignable", "gauge", ["gaiverland_up 1"])
+    return PlainTextResponse("\n".join(lines) + "\n")
 
 
 @app.get("/api/live")
