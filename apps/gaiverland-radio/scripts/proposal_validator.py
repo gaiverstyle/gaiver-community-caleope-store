@@ -2,6 +2,20 @@ import os, re, json, urllib.request, urllib.parse, psycopg2, psycopg2.extras as 
 ACCEPT_GENRES={'dance','electronic','house','techno','trance','dubstep','drum & bass','drum and bass',
   'edm','electro','dance/electronic','breakbeat','garage','ambient','downtempo','nu disco','disco',
   'hardstyle','hardcore','hard dance','future bass','bass','trap','electronica'}
+# Empreinte musique IA / stock / library de fond → rejet MÊME si le genre est électro
+# (une pochette IA « Progressive House Anthem » se fait taguer House et passait le filtre).
+# ⚠️ RÈGLE CHEF (11/07) : NE PAS rejeter sur « no copyright »/« NCS » ni « free download » —
+# NoCopyrightSounds = classiques electro d'internet (Cartoon, Tobu, Elektronomia…) et plein
+# d'edits/bootlegs de DJ légitimes sont en free download. Le marqueur de déchet = l'empreinte
+# library/stock/IA (titres descriptifs génériques, chaînes de stock, gabarits), PAS le libre de droits.
+STOCK_RE=re.compile(
+  r'background music|royalty[ -]?free|ableton template|progressive house anthem'
+  r'|emotional (edm|progressive) anthem|driving techno|stream the vibes|click buy'
+  r'|uplifting (background|corporate)|no\.?\s*copyright\s*(background|music library)'
+  r'|\b(ashamaluevmusic|aivora|ceamusic|odaystar|cyber beat lab|infinite music vault'
+  r'|we make dance music|aky anife|q-?bale|lyvn fade|encourage recordings)\b', re.I)
+def looks_stock(*parts):
+    return bool(STOCK_RE.search(" ".join(p for p in parts if p)))
 def _get(url):
     return json.load(urllib.request.urlopen(url, timeout=10))
 def genre_lookup(q):
@@ -37,13 +51,18 @@ def main():
         cur.execute("SELECT 1 FROM proposal_decisions WHERE title=%s",(p['title'],))
         if cur.fetchone(): skip+=1; continue
         g,artist,canon=genre_lookup(p['title'])
-        verdict='accept' if (g and g.lower() in ACCEPT_GENRES) else 'reject'
+        if looks_stock(p['title'], artist, canon):
+            verdict='reject'; reason='IA/stock'
+        elif g and g.lower() in ACCEPT_GENRES:
+            verdict='accept'; reason=g
+        else:
+            verdict='reject'; reason=g or 'genre inconnu'
         cur.execute("""INSERT INTO proposal_decisions (title,verdict,genre,artist,canon_title,votes)
                        VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (title) DO NOTHING""",
                     (p['title'],verdict,g,artist,canon,p['votes']))
         if verdict=='accept': accepted.append(f"{artist} - {canon}"); na+=1
         else: nr+=1
-        print(f"{'✅ ACCEPT' if verdict=='accept' else '🚫 reject'} [{g}] ({p['votes']} votes)  {p['title']}")
+        print(f"{'✅ ACCEPT' if verdict=='accept' else '🚫 reject'} [{reason}] ({p['votes']} votes)  {p['title']}")
     c.commit()
     print(f"=== {na} acceptés, {nr} rejetés, {skip} déjà décidés ===")
     if accepted:
