@@ -110,7 +110,7 @@
     },
     {
       "slug": "phonk",
-      "az_station_id": null,
+      "az_station_id": 5,
       "label": "Gaiverland Phonk",
       "theme": "phonk",
       "search_suffix": "phonk",
@@ -171,7 +171,7 @@
     },
     {
       "slug": "lofi",
-      "az_station_id": null,
+      "az_station_id": 6,
       "label": "Gaiverland Lofi — étude & détente (vinyle)",
       "theme": "lofi",
       "search_suffix": "lofi",
@@ -233,7 +233,7 @@
     },
     {
       "slug": "synthwave",
-      "az_station_id": null,
+      "az_station_id": 7,
       "label": "Gaiverland Synthwave (80s)",
       "theme": "synthwave",
       "search_suffix": "synthwave",
