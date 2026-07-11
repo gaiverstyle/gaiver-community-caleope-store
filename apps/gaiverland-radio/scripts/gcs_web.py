@@ -150,9 +150,9 @@ def metrics():
                   (SELECT extract(epoch FROM now()-max(played_at)) FROM play_history)   AS last_play_age,
                   (SELECT chars_used  FROM el_monthly_quota ORDER BY month DESC LIMIT 1) AS el_used,
                   (SELECT chars_limit FROM el_monthly_quota ORDER BY month DESC LIMIT 1) AS el_limit,
-                  (SELECT energy_avg  FROM radio_state ORDER BY updated_at DESC LIMIT 1) AS energy,
-                  (SELECT extract(epoch FROM (now() AT TIME ZONE 'UTC')-updated_at)
-                     FROM radio_state ORDER BY updated_at DESC LIMIT 1)                  AS state_age
+                  (SELECT energy_level FROM gcs_state ORDER BY updated_at DESC LIMIT 1) AS energy,
+                  (SELECT extract(epoch FROM now()-updated_at)
+                     FROM gcs_state ORDER BY updated_at DESC LIMIT 1)                   AS state_age
             """)
             db = cur.fetchone() or {}
         conn.close()
@@ -179,8 +179,8 @@ def metrics():
          [f"gaiverland_last_play_age_seconds {num(db.get('last_play_age'))}"])
     emit("gaiverland_state_age_seconds", "Secondes depuis la derniere maj du state-engine (heartbeat pipeline)", "gauge",
          [f"gaiverland_state_age_seconds {num(db.get('state_age'))}"])
-    emit("gaiverland_state_energy_avg", "Energie moyenne courante de l'antenne (0-1)", "gauge",
-         [f"gaiverland_state_energy_avg {num(db.get('energy'))}"])
+    emit("gaiverland_state_energy", "Energie courante de l'antenne (echelle moteur d'etat)", "gauge",
+         [f"gaiverland_state_energy {num(db.get('energy'))}"])
 
     # ElevenLabs : garde-fou credits (ratio restant → alerte <0.15, critique <0.02)
     el_used, el_limit = db.get("el_used"), db.get("el_limit")
