@@ -744,6 +744,7 @@ footer .c15{margin-top:6px;font-size:12px}
 .fx-checks span{opacity:.55;font-size:12px}
 .fx-note{font-size:12px;opacity:.6;margin-top:10px;line-height:1.4}
 .fs-vol{display:flex;align-items:center;gap:9px}
+.main-viz{width:100%;height:56px;display:block;margin:14px 0 2px;border-radius:10px;background:rgba(25,16,54,.25)}
 @media (max-width:600px){#fs-center{gap:1.6vh}#fs-cover{width:min(30vh,55vw)}}
 </style></head><body><div class="wrap">
 
@@ -775,6 +776,7 @@ footer .c15{margin-top:6px;font-size:12px}
   </div>
   <audio id="player" preload="none"></audio>
   <audio id="player-b" preload="none"></audio>
+  <canvas id="main-viz" class="main-viz"></canvas>
   <div class="fxbar">
     <span class="fx-ico" aria-hidden="true">🔊</span>
     <input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume">
@@ -1112,38 +1114,41 @@ function bassEnergy(){
   let s=0; for(let i=0;i<6;i++)s+=AFX.freq[i];
   return (s/6)/255;
 }
-function drawViz(){
-  const showViz = fsOpen && gid('opt-viz') && gid('opt-viz').checked;
-  const playingA = AA()===A && !A.paused;
-  if(!showViz && !playingA){ vizRAF=0; const hc=gid('hero-cover'); if(hc)hc.style.transform=''; return; }
-  if(showViz){
-    const c=gid('fs-viz'), x=c&&c.getContext('2d');
-    if(x){
-      const w=c.width=c.clientWidth||1, h=c.height=c.clientHeight||1; x.clearRect(0,0,w,h);
-      const real=AFX.ready && AA()===A && !A.paused, style=AFX.o.viz||'bars';
-      if(real && style==='wave'){
-        AFX.an.getByteTimeDomainData(AFX.tim); const nn=AFX.tim.length;
-        x.lineWidth=2.5; x.strokeStyle='rgba(255,143,163,.85)'; x.beginPath();
-        for(let i=0;i<nn;i++){const xx=i/nn*w, yy=h/2+((AFX.tim[i]-128)/128)*h*0.42; i?x.lineTo(xx,yy):x.moveTo(xx,yy);}
-        x.stroke();
-      }else if(real && style==='radial'){
-        AFX.an.getByteFrequencyData(AFX.freq); const N=64, cx=w/2, cy=h/2, r0=Math.min(w,h)*0.16;
-        for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, a2=i/N*6.283, len=r0+v*Math.min(w,h)*0.30;
-          x.strokeStyle='rgba(255,'+((120+100*v)|0)+','+((120+40*v)|0)+','+(0.35+0.6*v)+')'; x.lineWidth=3;
-          x.beginPath(); x.moveTo(cx+Math.cos(a2)*r0,cy+Math.sin(a2)*r0); x.lineTo(cx+Math.cos(a2)*len,cy+Math.sin(a2)*len); x.stroke();}
-      }else if(real){
-        AFX.an.getByteFrequencyData(AFX.freq); const N=64, bw=w/N;
-        for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, bh=v*h*0.92;
-          const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.15)'); g.addColorStop(1,'rgba(255,143,163,.78)');
-          x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
-      }else{ // fallback décoratif (scène)
-        const playing=!AA().paused; vizT+=playing?0.08:0.02; const n=vizBars.length, bw=w/n;
-        for(let i=0;i<n;i++){const b=vizBars[i], amp=playing?(0.30+0.45*Math.abs(Math.sin(vizT*b.s+b.p))):(0.10+0.06*Math.sin(vizT*0.5+b.p)), bh=amp*h*0.9;
-          const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.10)'); g.addColorStop(1,'rgba(255,143,163,.5)');
-          x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
-      }
-    }
+function paintViz(c){
+  const x=c&&c.getContext('2d'); if(!x) return;
+  const w=c.width=c.clientWidth||1, h=c.height=c.clientHeight||1; x.clearRect(0,0,w,h);
+  const real=AFX.ready && AA()===A && !A.paused, style=AFX.o.viz||'bars';
+  if(real && style==='wave'){
+    AFX.an.getByteTimeDomainData(AFX.tim); const nn=AFX.tim.length;
+    x.lineWidth=2.5; x.strokeStyle='rgba(255,143,163,.85)'; x.beginPath();
+    for(let i=0;i<nn;i++){const xx=i/nn*w, yy=h/2+((AFX.tim[i]-128)/128)*h*0.42; i?x.lineTo(xx,yy):x.moveTo(xx,yy);}
+    x.stroke();
+  }else if(real && style==='radial'){
+    AFX.an.getByteFrequencyData(AFX.freq); const N=64, cx=w/2, cy=h/2, r0=Math.min(w,h)*0.16;
+    for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, a2=i/N*6.283, len=r0+v*Math.min(w,h)*0.30;
+      x.strokeStyle='rgba(255,'+((120+100*v)|0)+','+((120+40*v)|0)+','+(0.35+0.6*v)+')'; x.lineWidth=3;
+      x.beginPath(); x.moveTo(cx+Math.cos(a2)*r0,cy+Math.sin(a2)*r0); x.lineTo(cx+Math.cos(a2)*len,cy+Math.sin(a2)*len); x.stroke();}
+  }else if(real){
+    AFX.an.getByteFrequencyData(AFX.freq); const N=64, bw=w/N;
+    for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, bh=v*h*0.92;
+      const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.15)'); g.addColorStop(1,'rgba(255,143,163,.78)');
+      x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
+  }else{ // fallback décoratif (pas de Web Audio)
+    const playing=!AA().paused; vizT+=playing?0.08:0.02; const n=vizBars.length, bw=w/n;
+    for(let i=0;i<n;i++){const b=vizBars[i], amp=playing?(0.30+0.45*Math.abs(Math.sin(vizT*b.s+b.p))):(0.10+0.06*Math.sin(vizT*0.5+b.p)), bh=amp*h*0.9;
+      const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.10)'); g.addColorStop(1,'rgba(255,143,163,.5)');
+      x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
   }
+}
+function drawViz(){
+  const showFs = fsOpen && gid('opt-viz') && gid('opt-viz').checked;
+  const playing = !AA().paused;
+  const mv=gid('main-viz');
+  if(!showFs && !playing){ vizRAF=0;
+    if(mv){const mx=mv.getContext('2d'); if(mx)mx.clearRect(0,0,mv.width,mv.height);}
+    const hc=gid('hero-cover'); if(hc)hc.style.transform=''; return; }
+  if(playing && mv) paintViz(mv);      // visualizer DANS le player
+  if(showFs) paintViz(gid('fs-viz'));   // visualizer plein écran
   const be=bassEnergy();
   if(be>0){ const sc='scale('+(1+be*0.06).toFixed(3)+')';
     const hc=gid('hero-cover'); if(hc) hc.style.transform=sc;
@@ -1203,7 +1208,7 @@ if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catc
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return PAGE
+    return HTMLResponse(PAGE, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/equipe", response_class=HTMLResponse)
@@ -1246,18 +1251,22 @@ _MANIFEST = {
 }
 
 # Network-first + fallback cache (shell). N'intercepte NI le flux .mp3 NI les API live.
-_SW_JS = '''const CACHE='gaiverland-v1';
+_SW_JS = '''const CACHE='gaiverland-v2';
 self.addEventListener('install',function(e){self.skipWaiting();});
-self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});
+self.addEventListener('activate',function(e){e.waitUntil(
+  caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k!==CACHE;}).map(function(k){return caches.delete(k);}));}).then(function(){return self.clients.claim();})
+);});
 self.addEventListener('fetch',function(e){
   if(e.request.method!=='GET')return;
   var u=new URL(e.request.url);
-  if(u.pathname.indexOf('/api/')===0||u.pathname.slice(-4)==='.mp3'||u.pathname.indexOf('/live')===0)return;
+  // JAMAIS de cache sur le HTML/navigations, les API et les flux → toujours frais
+  if(e.request.mode==='navigate'||u.pathname==='/'||u.pathname==='/equipe'||u.pathname.indexOf('/api/')===0||u.pathname.slice(-4)==='.mp3'||u.pathname.indexOf('/live')===0) return;
+  // assets statiques (icon/manifest) : network-first + fallback cache offline
   e.respondWith(
     fetch(e.request).then(function(r){
       if(r&&r.status===200&&r.type==='basic'){var cp=r.clone();caches.open(CACHE).then(function(c){c.put(e.request,cp);});}
       return r;
-    }).catch(function(){return caches.match(e.request).then(function(m){return m||caches.match('/');});})
+    }).catch(function(){return caches.match(e.request);})
   );
 });'''
 
