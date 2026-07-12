@@ -46,6 +46,7 @@ STAGE_SEGMENT  = {"mainstage": "announcement", "sunset": "transition",
 MODE_EMOTION = {
     "lore_stagiaire": "amused",
     "lore_c15":       "amused",
+    "lore_festival":  "playful",
     "humor":          "amused",
     "late_night":     "calm",
     "flow":           "calm",
@@ -151,7 +152,12 @@ def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
     entry = modes.get(mode, {})
 
     has_track = bool(track.get("artist") and track.get("title"))
-    if has_track and entry.get("templates_with_next"):
+    tod = (state.get("time_of_day") or "day")
+    # Lore jour/nuit : pioche la sous-liste collant à l'heure courante (catalogue Rebexis)
+    if entry.get("templates_day") or entry.get("templates_night"):
+        pool = entry.get("templates_night") if tod == "night" else entry.get("templates_day")
+        pool = pool or entry.get("templates_day") or entry.get("templates_night")
+    elif has_track and entry.get("templates_with_next"):
         pool = entry["templates_with_next"]
     elif not has_track and entry.get("templates_no_next"):
         pool = entry["templates_no_next"]
@@ -168,6 +174,7 @@ def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
         t = t.replace("{artist}", track.get("artist", "l'artiste") or "l'artiste")
         t = t.replace("{title}", track.get("title", "ce morceau") or "ce morceau")
         t = t.replace("{city}",  state.get("city", "Toulon") or "Toulon")
+        t = t.replace("{ville}", state.get("city", "Toulon") or "Toulon")
         t = t.replace("{genre}", str(genre))
         return t
 
@@ -207,6 +214,7 @@ def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
     # Lore injection — random, low probability
     candidates.append((0.07, "lore_c15"))
     candidates.append((0.05, "lore_stagiaire"))
+    candidates.append((0.06, "lore_festival"))
     candidates.append((0.06, "humor"))
     candidates.append((0.05, "city"))
 

@@ -16,7 +16,10 @@
       ]
     },
     "hype": {
-      "triggers": ["festival", "energique"],
+      "triggers": [
+        "festival",
+        "energique"
+      ],
       "templates_no_next": [
         "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
         "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
@@ -51,7 +54,9 @@
       ]
     },
     "peak": {
-      "triggers": ["intense"],
+      "triggers": [
+        "intense"
+      ],
       "templates_no_next": [
         "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
         "C'est LOUD. C'est voulu. Et c'est pour VOUS TOUS.",
@@ -87,7 +92,10 @@
       ]
     },
     "flow": {
-      "triggers": ["melodique", "nocturne"],
+      "triggers": [
+        "melodique",
+        "nocturne"
+      ],
       "templates_no_next": [
         "On glisse... vers quelque chose de plus profond. Restez avec nous.",
         "Ce changement de rythme... exactement ce qu'il fallait pour tout le monde.",
@@ -226,27 +234,65 @@
       ]
     },
     "lore_c15": {
-      "_note": "Lore C15 — personnage mystérieux du festival. Ne jamais expliquer qui il est.",
-      "templates": [
-        "Le C15 a été vu dans la zone technique. Personne ne sait ce qu'il fait là. Comme d'habitude.",
-        "Quelqu'un a aperçu le C15 près de la régie. Il avait l'air satisfait. C'est bon signe.",
-        "Le C15 est présent ce soir. Ce qui signifie que la soirée se passe bien.",
-        "Aperçu : le C15, backstage, avec une bouteille d'eau et une expression illisible. Normal.",
-        "Le C15 approuve ce morceau. Ce n'est pas une information officielle. Mais c'est VRAI.",
-        "Gaiverland sait que le C15 écoute. Et Gaiverland joue en conséquence.",
-        "Le C15 est quelque part dans ce festival. Il a toujours été là."
+      "_note": "Lore C15 — véhicule/personnage mystérieux du festival. Jour/nuit. Ne jamais expliquer qui il est.",
+      "templates_day": [
+        "Le c15 a démarré du premier coup ce matin. On a applaudi. Il l'a mérité.",
+        "Le c15 est garé de travers derrière la scène. En plein soleil, personne n'ose le déplacer, moi la première.",
+        "Quelqu'un a lavé le c15 pendant la nuit. Ce matin, une enquête est ouverte.",
+        "Le c15 chauffe au soleil et sent le vieux vinyle et l'essence. C'est le parfum officiel du festival, encadrez-le.",
+        "Une mouette s'est posée sur le toit du c15. Elle reste pour l'ambiance, comme tout le monde à cette heure.",
+        "On a chargé le c15 à ras bord pour la journée. Il tient. Il tient toujours. C'est un poète.",
+        "Le c15 a sa place réservée près de la scène, en plein jour. Il l'a prise lui-même.",
+        "Le c15 a plus de kilomètres au compteur que nous d'heures de sommeil. Et en plein soleil, ça ne se voit sur personne.",
+        "On a proposé une remorque au c15 ce matin. Il a refusé. Dignement.",
+        "Le compteur du c15 est bloqué depuis des lustres. Franchement, il a bien raison, surtout un jour pareil.",
+        "Le c15 refuse d'avancer sans musique. Sur ce point, dès le matin, on se comprend.",
+        "Le c15 a un point de rouille qu'on appelle affectueusement « la mélodie ». En pleine lumière, il brille presque."
+      ],
+      "templates_night": [
+        "Le c15 ronronne dans la nuit de {ville}. Il veille.",
+        "Phares éteints, le c15 monte la garde derrière la scène. On dort mieux en le sachant là.",
+        "La nuit, le c15 grince à chaque coup de vent. On dit qu'il chante en sourdine.",
+        "Il paraît que le c15 était déjà là avant le premier morceau. La nuit, on y croit vraiment, et on n'ose pas vérifier.",
+        "Le c15 connaît la route par cœur. La nuit, c'est lui qui la garde au chaud pour demain.",
+        "Dans la boîte à gants du c15 : trois cafés froids et une setlist qui a de la bouteille. Parfait pour la veille.",
+        "Le c15 démarre mieux quand on lui parle gentiment. À voix basse, la nuit, encore mieux.",
+        "Une lueur traîne sur le tableau de bord du c15. Il ne dort pas non plus, on est deux.",
+        "Le c15 n'a jamais raté un festival. La nuit, il compte les étoiles au-dessus de {ville} à notre place.",
+        "On a voulu changer l'autoradio du c15. Il a fait la tête pendant deux nuits.",
+        "La nuit, le c15 sent le café froid et la fatigue heureuse. C'est notre odeur d'after à nous.",
+        "Quelqu'un a proposé de repeindre le c15. Silence gêné dans le noir, sujet clos jusqu'au matin."
       ]
     },
     "lore_stagiaire": {
-      "_note": "Lore stagiaire — le stagiaire perdu du festival. Toujours en retard, jamais au bon endroit.",
-      "templates": [
-        "Le stagiaire a finalement trouvé la bonne scène. Seulement trois tentatives cette fois.",
-        "Notre stagiaire vient de nous passer le mauvais câble. Encore. Mais la musique tourne quand même.",
-        "Le stagiaire est dans la zone. Il ne sait pas laquelle. Mais il y est.",
-        "Le stagiaire a demandé à quelle heure commence le concert. On lui a dit : il a commencé il y a deux heures.",
-        "Quelqu'un a vu le stagiaire ? Dernière fois, il cherchait la scène principale depuis 20 minutes.",
-        "Le stagiaire a finalement capturé la bonne fréquence. Par accident. Mais c'est là.",
-        "Le stagiaire... apprend. Lentement. Mais sincèrement. Et c'est pour ça qu'on l'a gardé."
+      "_note": "Lore stagiaire — le running gag introuvable. Jour/nuit.",
+      "templates_day": [
+        "Le stagiaire a disparu dès l'ouverture. La musique, elle, tient bon.",
+        "On a envoyé le stagiaire chercher un câble ce matin. On garde espoir, mollement.",
+        "Le stagiaire a laissé son gilet sur une chaise en plein soleil. Le gilet est là. Le stagiaire, mystère.",
+        "Quelqu'un jure avoir vu le stagiaire près de la buvette. En plein jour. Information non confirmée, comme toujours.",
+        "On a crié le nom du stagiaire trois fois à midi. Rien. Le classique.",
+        "Le stagiaire aurait appris à faire le café. On demande à voir. On demande surtout à goûter, là, maintenant.",
+        "On a mis une part de pizza de côté pour le stagiaire ce midi. On va devoir se dévouer.",
+        "Bonne nouvelle : le stagiaire n'a rien cassé aujourd'hui. Parce qu'il n'est pas là.",
+        "On a confié une tâche simple au stagiaire au réveil. On a bien fait de préciser « simple ».",
+        "Le stagiaire a coché « présent » ce matin. Nous, on coche « à confirmer ».",
+        "Le badge du stagiaire a été retrouvé sur une table. Le stagiaire qui va avec, toujours pas.",
+        "Si vous croisez le stagiaire aujourd'hui, dites-lui qu'on l'aime bien. Et qu'on attend toujours le câble."
+      ],
+      "templates_night": [
+        "La nuit tombe sur {ville}, et le stagiaire reste introuvable. La régularité, au moins, il l'a.",
+        "Le talkie du stagiaire répond « pschit » dans le noir. C'est déjà plus que d'habitude.",
+        "On a laissé un mot au stagiaire avant la nuit. Le mot a disparu. Cohérent.",
+        "Le stagiaire a promis de revenir dans cinq minutes. C'était il y a plusieurs heures. Belle promesse.",
+        "Quelqu'un a demandé où était le stagiaire à la nuit. Grand moment de solidarité dans le vide.",
+        "Le stagiaire est officiellement notre meilleur fantôme. Et la nuit, c'est sa spécialité.",
+        "On a gardé une lampe allumée pour le stagiaire. Au cas où. On n'y croit pas trop.",
+        "Le stagiaire a un talent rare : être partout où on ne le cherche pas, surtout après minuit.",
+        "La nuit, on jure entendre le stagiaire brancher quelque chose quelque part. Tout le monde retient son souffle.",
+        "On a rangé une chaise pour le stagiaire près de la régie de nuit. Elle est toujours vide, fidèlement.",
+        "Le stagiaire aurait laissé une trace de café encore tiède. Preuve qu'il existe, la nuit s'en contentera.",
+        "Dernière nouvelle avant l'after : toujours pas de stagiaire. On l'aime quand même, ce courant d'air."
       ]
     },
     "city": {
@@ -273,6 +319,37 @@
         "Ce beat... est techniquement défendable. Légalement aussi. On a vérifié.",
         "Quelqu'un dans la salle a dit 'c'est trop fort'. Cette personne a eu tort.",
         "La qualité sonore est maximale. La raison... variable. Le résultat... PARFAIT."
+      ]
+    },
+    "lore_festival": {
+      "_note": "Lore festival_moment — ambiance générale du festival. Jour/nuit.",
+      "templates_day": [
+        "Le soleil cogne, les basses répondent. Voilà, c'est le genre d'après-midi que je préfère.",
+        "Il y a ce moment où tout le monde lève la tête pile en même temps, plein soleil. On y est.",
+        "La poussière danse dans la lumière de {ville}. Nous, on appelle ça la déco.",
+        "Quelque part dans la foule, quelqu'un vient de trouver son nouveau morceau préféré. De rien.",
+        "Les enceintes chauffent, le public aussi. Tout est parfaitement sous contrôle. Ou pas.",
+        "Un inconnu vient de se faire trois amis sur un refrain, en plein jour. C'est exactement ça, ici.",
+        "Les mains sont en l'air avant même le drop. En plein soleil, on appelle ça de la confiance.",
+        "On a monté le son d'un cran cet après-midi. Juste pour voir. On garde, évidemment.",
+        "Le sol vibre, les sourires suivent. Rien de cassé, tout de branché.",
+        "On a compté trois éclats de rire pendant l'intro. En plein jour, bon présage.",
+        "Il y a une odeur de fête dans l'air chaud et un truc qui va lâcher dans les graves. J'adore.",
+        "Quelqu'un danse comme si personne ne regardait. Tout le monde regarde. Tout le monde adore."
+      ],
+      "templates_night": [
+        "La nuit s'installe sur {ville}, les basses baissent la voix mais ne se taisent jamais.",
+        "On a perdu le fil du temps il y a deux morceaux. En pleine nuit, on ne compte pas le chercher.",
+        "Le festival ne dort jamais. Nous non plus, visiblement, et on assume, lueurs aux yeux.",
+        "On dirait que la nuit a décidé de rester un peu plus longtemps sur {ville}. Bonne décision.",
+        "Il est tard, les projecteurs dessinent des ombres qui dansent mieux que nous. On les laisse faire.",
+        "Le silence entre deux morceaux a duré une seconde dans le noir. Personne n'a eu le temps d'avoir peur.",
+        "Ce morceau-là, gardez-le quelque part. La nuit de {ville}, elle, s'en souviendra.",
+        "La régie veille, les cœurs aussi. Rien à signaler, tout à savourer, en douceur.",
+        "Il y a des nuits où tout tombe juste. Devinez quelle nuit on est.",
+        "Les lueurs remplacent le soleil, l'énergie reste. On appelle ça l'heure des vrais.",
+        "Le festival respire plus doucement, là, maintenant. Restez, la nuit vaut le détour.",
+        "Quelqu'un s'endort presque sur un accord et se réveille sur le suivant. Nuit parfaite."
       ]
     }
   }

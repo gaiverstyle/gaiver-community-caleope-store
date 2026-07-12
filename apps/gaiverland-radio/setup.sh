@@ -569,54 +569,357 @@ echo "  ✓ Schéma DB créé (legacy + gcs_state)"
 # ════════════════════════════════════════════════════════════════════════
 cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
 {
-  "_note": "Formatage intentionnel : majuscules = emphase XTTS v2, '...' = pause, phrases courtes = punch",
+  "_note": "Charte Rebexis — style Scott Taylor (FH5). JAMAIS de 'tu'. S'adresser à la foule collectivement. MAJUSCULES = emphase ElevenLabs, '...' = pause, {artist}/{title} = substitution automatique",
   "modes": {
     "normal": {
       "templates": [
-        "Ce morceau... exactement ce qu'il fallait.",
-        "Je reste discrète. La musique, elle, ne l'est pas.",
-        "C'est BIEN. Continuons.",
+        "Ce morceau... exactement ce qu'il fallait pour ce moment.",
+        "Gaiverland Radio. On est là, et la musique aussi.",
+        "C'est BIEN. On continue.",
         "Aucune raison d'interrompre ça. Aucune.",
-        "Parfait... pour ce moment précis."
+        "Parfait... pour ce moment précis. Pour vous tous.",
+        "On reste là. La musique fait le reste.",
+        "Gaiverland... toujours là où il faut être.",
+        "La radio ne dort pas. Et c'est fait EXPRÈS.",
+        "Pour ceux qui écoutent depuis le début... vous savez pourquoi on est là.",
+        "Gaiverland Radio. Présente, comme toujours."
       ]
     },
     "hype": {
-      "triggers": ["festival", "energique"],
-      "templates": [
-        "Ok... là ça commence SÉRIEUSEMENT à accélérer.",
+      "triggers": [
+        "festival",
+        "energique"
+      ],
+      "templates_no_next": [
+        "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
         "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
-        "L'énergie festival... elle est là. Et franchement, ça me va TRÈS bien.",
+        "L'énergie est là, pour VOUS TOUS. Et franchement, ça me va très bien.",
         "Quelqu'un a commandé de l'énergie ? Livraison EXPRESS en cours.",
-        "Je crois que les enceintes viennent de demander une augmentation.",
         "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
-        "Transition PARFAITE. Je ne dis rien. Je profite.",
-        "On monte... on monte encore... et puis on monte UN PEU PLUS."
+        "On monte... on monte encore... et tout le monde monte avec nous.",
+        "Gaiverland Radio, toujours dans les bons mouvements. On accélère.",
+        "Ce set n'a pas l'intention de ralentir. Et nous non plus.",
+        "Le festival... il est là. Peu importe où vous êtes ce soir.",
+        "Ce moment est pour TOUT LE MONDE. Profitez-en."
+      ],
+      "templates_with_next": [
+        "On souffle... deux secondes seulement. Parce que {artist} débarque, et tout le monde doit être PRÊT.",
+        "Ce train ralentit pas. {artist} prend le relais et le volume, lui, il augmente.",
+        "Gaiverland Radio continue sans pause... {artist} arrive. Restez avec nous.",
+        "Accrochez-vous... parce que {artist} débarque et ça va DÉCHIRER.",
+        "On reste dans la bonne direction. {artist} prend le relais et le festival continue.",
+        "Les basses passent à {artist}. C'est PAS fait pour rester assis.",
+        "{artist} en approche. Altitude maximale. Personne ne dort ici.",
+        "Gaiverland... {artist} est là. Ce set, il est pour VOUS."
+      ],
+      "templates": [
+        "Là ça commence SÉRIEUSEMENT à accélérer. Tout le monde est prêt ?",
+        "On est dans la montée. CLAIREMENT dans la montée. Bonne chance aux voisins.",
+        "L'énergie est là, pour VOUS TOUS. Et franchement, ça me va très bien.",
+        "C'est l'heure où on arrête de faire semblant d'être raisonnables.",
+        "On monte... on monte encore... et tout le monde monte avec nous.",
+        "Gaiverland Radio, toujours dans les bons mouvements. On accélère.",
+        "Ce moment est pour TOUT LE MONDE. Profitez-en.",
+        "Le festival... il est là. Peu importe où vous êtes ce soir."
       ]
     },
     "peak": {
-      "triggers": ["intense"],
-      "templates": [
+      "triggers": [
+        "intense"
+      ],
+      "templates_no_next": [
         "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
-        "Je vais faire semblant d'être surprise par ce drop. Voilà. C'est fait.",
-        "C'est LOUD. C'est voulu. C'est TRÈS bien.",
+        "C'est LOUD. C'est voulu. Et c'est pour VOUS TOUS.",
         "On est au sommet. PROFITEZ-EN.",
-        "Le genre de track qui fait changer d'avis sur la vie.",
+        "Le genre de track qui fait changer d'avis sur la nuit.",
         "Hardstyle activé. Tout le reste... peut attendre.",
         "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
-        "Je ne sais pas ce que tu fais là... mais j'espère que c'est PHYSIQUE."
+        "Peu importe où vous êtes ce soir... vous êtes EXACTEMENT au bon endroit.",
+        "Gaiverland Radio au maximum. Ce moment est pour tout le monde.",
+        "Ce set est une déclaration. Et vous en faites partie.",
+        "On n'excuse pas le volume. C'est le but.",
+        "CLAIREMENT pas l'heure de dormir. Quelqu'un a prévenu le voisinage ?",
+        "Le plafond était là. Il vient de partir."
+      ],
+      "templates_with_next": [
+        "On croyait avoir atteint le plafond... et puis {artist} arrive. Le plafond vient de s'envoler.",
+        "Là c'est {artist}. On recule de quelques pas. Par précaution. Bonne chance à vous tous.",
+        "Vous croyiez que c'était fini ? {artist} dit NON. Et {artist} a raison.",
+        "Alerte niveau CRITIQUE. {artist} entre dans la salle. Rester assis est fortement déconseillé.",
+        "C'est pas une radio... c'est une catapulte. Et {artist} appuie sur le bouton.",
+        "Le Hardstyle ne demande pas la permission. {artist} non plus. Vous voilà PRÉVENUS.",
+        "Ce set appartient à TOUT LE MONDE ici. {artist} en est la preuve."
+      ],
+      "templates": [
+        "Celui-là... il n'est CLAIREMENT pas venu pour être discret.",
+        "C'est LOUD. C'est voulu. Et c'est pour VOUS TOUS.",
+        "On est au sommet. PROFITEZ-EN.",
+        "Le genre de track qui fait changer d'avis sur la nuit.",
+        "Hardstyle activé. Tout le reste... peut attendre.",
+        "Ce drop méritait qu'on en parle. Voilà, c'est fait.",
+        "Peu importe où vous êtes ce soir... vous êtes EXACTEMENT au bon endroit.",
+        "Ce set est une déclaration. Et vous en faites partie."
       ]
     },
     "flow": {
-      "triggers": ["melodique", "nocturne"],
-      "templates": [
-        "On glisse... vers quelque chose de plus profond. C'est agréable.",
-        "Ce changement de rythme... exactement ce qu'il fallait.",
-        "Melodic techno à cette heure. Les choix sont DÉFENDABLES.",
+      "triggers": [
+        "melodique",
+        "nocturne"
+      ],
+      "templates_no_next": [
+        "On glisse... vers quelque chose de plus profond. Restez avec nous.",
+        "Ce changement de rythme... exactement ce qu'il fallait pour tout le monde.",
+        "Melodic à cette heure. Les choix sont DÉFENDABLES.",
         "On descend en douceur. Sans perdre l'essentiel.",
-        "Miss Monique approuverait... probablement.",
-        "Progressive. Le mot dit tout.",
-        "C'est le moment où on réalise que la nuit commence VRAIMENT.",
-        "Moins fort. Mais toujours là. C'est ÇA, la profondeur."
+        "Progressive. Le mot dit tout. Et vous le savez.",
+        "C'est le moment où la nuit commence VRAIMENT pour tout le monde.",
+        "Moins fort. Mais toujours là, pour VOUS TOUS. C'est ÇA, la profondeur.",
+        "Gaiverland s'installe dans la nuit. Restez là.",
+        "Cette profondeur... c'est pas un accident. C'est un CHOIX.",
+        "Le festival respire. Et vous avec lui."
+      ],
+      "templates_with_next": [
+        "On laisse la nuit avancer... {artist} accompagne parfaitement ce moment. Restez là.",
+        "Douceur et profondeur. C'est ce que {artist} apporte, et c'est exactement ce qu'il faut.",
+        "Le set prend de la hauteur... {artist} entre et la nuit... elle commence vraiment.",
+        "Moins de bruit, plus de sens. {artist} arrive et ça méritait qu'on le dise.",
+        "Pour ceux qui sont encore là... {artist} est fait pour vous. Bienvenue dans la nuit.",
+        "Gaiverland continue... {artist} prend le relais. Parfait pour ce moment."
+      ],
+      "templates": [
+        "On glisse... vers quelque chose de plus profond. Restez avec nous.",
+        "Ce changement de rythme... exactement ce qu'il fallait pour tout le monde.",
+        "Melodic à cette heure. Les choix sont DÉFENDABLES.",
+        "On descend en douceur. Sans perdre l'essentiel.",
+        "C'est le moment où la nuit commence VRAIMENT pour tout le monde.",
+        "Moins fort. Mais toujours là, pour VOUS TOUS. C'est ÇA, la profondeur.",
+        "Gaiverland s'installe dans la nuit. Restez là."
+      ]
+    },
+    "lore": {
+      "templates_no_next": [
+        "Gaiverland Radio... toujours là, pour TOUS ceux qui écoutent.",
+        "Les algorithmes dorment, mais Gaiverland... reste éveillée. Pour vous.",
+        "Une radio autonome. Une présence continue. Pour tout le monde, partout.",
+        "Gaiverland tourne 24h/24. Peu importe où vous êtes... vous faites partie du set.",
+        "Pas de fin de programme ici. Gaiverland Radio, pour vous tous.",
+        "La musique ne s'arrête pas. Et vous non plus."
+      ],
+      "templates": [
+        "Gaiverland Radio... toujours là, pour TOUS ceux qui écoutent.",
+        "Les algorithmes dorment, mais Gaiverland... reste éveillée. Pour vous.",
+        "Une radio autonome. Une présence continue. Pour tout le monde, partout.",
+        "Gaiverland tourne 24h/24. Peu importe où vous êtes... vous faites partie du set."
+      ]
+    },
+    "track_announcement": {
+      "_note": "Annonces directes artiste/titre — utiliser quand track.artist et track.title sont connus",
+      "templates": [
+        "Prochain morceau : {artist}. {title}. Et ça... ça méritait d'être annoncé.",
+        "{artist} sur Gaiverland Radio. {title}. Pour VOUS.",
+        "On continue avec {artist} — {title}. C'était la bonne décision.",
+        "{title}, signé {artist}. Le festival approuve.",
+        "C'est {artist} qui prend les commandes. {title} — et c'est MAINTENANT.",
+        "Gaiverland présente : {artist}. Morceau : {title}. Volume recommandé : ÉLEVÉ.",
+        "{artist} avec {title}. Ce set ne s'excuse pas.",
+        "Et maintenant {artist}, avec {title}. Exactement ce qu'il fallait.",
+        "La scène appartient à {artist}. {title} commence. Restez là.",
+        "{title} de {artist}. Gaiverland l'avait sélectionné pour une raison."
+      ]
+    },
+    "reaction": {
+      "_note": "Réactions crowd — energy changement fort, pic émotionnel",
+      "templates": [
+        "L'énergie dans cette salle... Gaiverland la SENT. Et ça fait quelque chose.",
+        "Quelque chose change ici. Ça se ressent et c'est exactement le but.",
+        "Ce moment... personne ne l'oubliera. Même ceux qui écoutent seuls ce soir.",
+        "Gaiverland vit ça avec vous. En temps réel. MAINTENANT.",
+        "La foule virtuelle est là. Et elle est LOUD.",
+        "Ce que vous ressentez là... c'est le festival. Il existe vraiment.",
+        "Personne n'a demandé à l'énergie de rester sage. Et elle n'a pas obéi.",
+        "Gaiverland Radio. Présente à chaque moment. Surtout CELUI-CI."
+      ]
+    },
+    "transition_up": {
+      "_note": "Montée en énergie — festival_direction=build_up",
+      "templates": [
+        "L'énergie augmente. Ce n'est pas un hasard. C'est un programme.",
+        "Le festival accélère. Et c'était prévu depuis le début.",
+        "On construit quelque chose ici. Ensemble. Et ça commence MAINTENANT.",
+        "La progression... elle est là. Et vous allez la SENTIR.",
+        "Gaiverland est en train de monter. Attachez-vous.",
+        "L'énergie était à 4. Elle vise 5. Et elle y arrive.",
+        "Le festival a décidé d'accélérer. Personne n'a voté contre.",
+        "Construction en cours. Volume en hausse. C'est fait EXPRÈS."
+      ]
+    },
+    "transition_down": {
+      "_note": "Descente en énergie — wind_down, passage vers zone mélodique/nocturne",
+      "templates": [
+        "Le festival reprend son souffle. Ce n'est pas une fin. C'est une transition.",
+        "L'intensité baisse... légèrement. La qualité, elle... reste TOTALE.",
+        "Gaiverland change de registre. Le festival continue, différemment.",
+        "On redescend. Ensemble. Et c'est aussi une forme d'art.",
+        "La nuit évolue. Et Gaiverland évolue avec elle.",
+        "Moins fort. Plus profond. C'est ça le vrai festival.",
+        "Le peak était là. Maintenant... on respire. Et on écoute."
+      ]
+    },
+    "late_night": {
+      "_note": "Templates pour after-minuit — tod=night, énergie basse",
+      "templates": [
+        "Il est tard. Très tard. Et Gaiverland est encore là pour VOUS.",
+        "Les autres radios dorment. Gaiverland... non.",
+        "Cette heure n'appartient qu'à ceux qui sont encore debout. Vous le savez.",
+        "Minuit passé. Le festival continue. Pour tous ceux qui restent.",
+        "L'after commence. Et Gaiverland est votre guide.",
+        "On ne juge pas l'heure ici. On joue de la musique. C'EST TOUT.",
+        "Pour ceux qui ont décidé que la nuit n'était pas terminée... vous avez raison.",
+        "Gaiverland Radio. Présente à 3h du matin comme à midi. Sans exception."
+      ]
+    },
+    "weather_warm": {
+      "_note": "Météo chaude — temperature >25°C ou condition sunny",
+      "templates": [
+        "Il fait chaud dehors. La musique aussi. Restez hydratés... et Gaiverland fait le reste.",
+        "Petit rappel du festival : hydratez-vous. Même le C15 commence à chercher une bouteille d'eau.",
+        "Chaleur dehors, chaleur dans les basses. C'est une constante ici.",
+        "La météo est de notre côté ce soir. Et Gaiverland en profite avec vous.",
+        "Ambiance festival TOTAL. Le soleil était là, la musique prend le relais.",
+        "Eau, soleil, basses. La formule Gaiverland en mode été.",
+        "Le thermomètre est d'accord avec le set. Tout le monde est en accord.",
+        "Cette chaleur... elle est dans les sons aussi. Ce soir, tout est aligné."
+      ]
+    },
+    "weather_rain": {
+      "_note": "Météo pluvieuse/orageuse — condition rain/storm",
+      "templates": [
+        "Il pleut dehors. Mais ici... personne ne s'en rend compte.",
+        "La pluie est à l'extérieur. Le festival, lui, est imperméable.",
+        "Orage dehors. Et ça donne une atmosphère particulière à ce set.",
+        "Gaiverland Radio. Présente par tous les temps. Surtout quand il pleut.",
+        "L'ambiance électrique de la météo... parfaitement synchronisée avec ce morceau.",
+        "Pour ceux qui écoutent sous la pluie ce soir... ce set est pour vous en particulier.",
+        "Temps de chien dehors. Musique parfaite dedans. L'équilibre est trouvé."
+      ]
+    },
+    "lore_c15": {
+      "_note": "Lore C15 — véhicule/personnage mystérieux du festival. Jour/nuit. Ne jamais expliquer qui il est.",
+      "templates_day": [
+        "Le c15 a démarré du premier coup ce matin. On a applaudi. Il l'a mérité.",
+        "Le c15 est garé de travers derrière la scène. En plein soleil, personne n'ose le déplacer, moi la première.",
+        "Quelqu'un a lavé le c15 pendant la nuit. Ce matin, une enquête est ouverte.",
+        "Le c15 chauffe au soleil et sent le vieux vinyle et l'essence. C'est le parfum officiel du festival, encadrez-le.",
+        "Une mouette s'est posée sur le toit du c15. Elle reste pour l'ambiance, comme tout le monde à cette heure.",
+        "On a chargé le c15 à ras bord pour la journée. Il tient. Il tient toujours. C'est un poète.",
+        "Le c15 a sa place réservée près de la scène, en plein jour. Il l'a prise lui-même.",
+        "Le c15 a plus de kilomètres au compteur que nous d'heures de sommeil. Et en plein soleil, ça ne se voit sur personne.",
+        "On a proposé une remorque au c15 ce matin. Il a refusé. Dignement.",
+        "Le compteur du c15 est bloqué depuis des lustres. Franchement, il a bien raison, surtout un jour pareil.",
+        "Le c15 refuse d'avancer sans musique. Sur ce point, dès le matin, on se comprend.",
+        "Le c15 a un point de rouille qu'on appelle affectueusement « la mélodie ». En pleine lumière, il brille presque."
+      ],
+      "templates_night": [
+        "Le c15 ronronne dans la nuit de {ville}. Il veille.",
+        "Phares éteints, le c15 monte la garde derrière la scène. On dort mieux en le sachant là.",
+        "La nuit, le c15 grince à chaque coup de vent. On dit qu'il chante en sourdine.",
+        "Il paraît que le c15 était déjà là avant le premier morceau. La nuit, on y croit vraiment, et on n'ose pas vérifier.",
+        "Le c15 connaît la route par cœur. La nuit, c'est lui qui la garde au chaud pour demain.",
+        "Dans la boîte à gants du c15 : trois cafés froids et une setlist qui a de la bouteille. Parfait pour la veille.",
+        "Le c15 démarre mieux quand on lui parle gentiment. À voix basse, la nuit, encore mieux.",
+        "Une lueur traîne sur le tableau de bord du c15. Il ne dort pas non plus, on est deux.",
+        "Le c15 n'a jamais raté un festival. La nuit, il compte les étoiles au-dessus de {ville} à notre place.",
+        "On a voulu changer l'autoradio du c15. Il a fait la tête pendant deux nuits.",
+        "La nuit, le c15 sent le café froid et la fatigue heureuse. C'est notre odeur d'after à nous.",
+        "Quelqu'un a proposé de repeindre le c15. Silence gêné dans le noir, sujet clos jusqu'au matin."
+      ]
+    },
+    "lore_stagiaire": {
+      "_note": "Lore stagiaire — le running gag introuvable. Jour/nuit.",
+      "templates_day": [
+        "Le stagiaire a disparu dès l'ouverture. La musique, elle, tient bon.",
+        "On a envoyé le stagiaire chercher un câble ce matin. On garde espoir, mollement.",
+        "Le stagiaire a laissé son gilet sur une chaise en plein soleil. Le gilet est là. Le stagiaire, mystère.",
+        "Quelqu'un jure avoir vu le stagiaire près de la buvette. En plein jour. Information non confirmée, comme toujours.",
+        "On a crié le nom du stagiaire trois fois à midi. Rien. Le classique.",
+        "Le stagiaire aurait appris à faire le café. On demande à voir. On demande surtout à goûter, là, maintenant.",
+        "On a mis une part de pizza de côté pour le stagiaire ce midi. On va devoir se dévouer.",
+        "Bonne nouvelle : le stagiaire n'a rien cassé aujourd'hui. Parce qu'il n'est pas là.",
+        "On a confié une tâche simple au stagiaire au réveil. On a bien fait de préciser « simple ».",
+        "Le stagiaire a coché « présent » ce matin. Nous, on coche « à confirmer ».",
+        "Le badge du stagiaire a été retrouvé sur une table. Le stagiaire qui va avec, toujours pas.",
+        "Si vous croisez le stagiaire aujourd'hui, dites-lui qu'on l'aime bien. Et qu'on attend toujours le câble."
+      ],
+      "templates_night": [
+        "La nuit tombe sur {ville}, et le stagiaire reste introuvable. La régularité, au moins, il l'a.",
+        "Le talkie du stagiaire répond « pschit » dans le noir. C'est déjà plus que d'habitude.",
+        "On a laissé un mot au stagiaire avant la nuit. Le mot a disparu. Cohérent.",
+        "Le stagiaire a promis de revenir dans cinq minutes. C'était il y a plusieurs heures. Belle promesse.",
+        "Quelqu'un a demandé où était le stagiaire à la nuit. Grand moment de solidarité dans le vide.",
+        "Le stagiaire est officiellement notre meilleur fantôme. Et la nuit, c'est sa spécialité.",
+        "On a gardé une lampe allumée pour le stagiaire. Au cas où. On n'y croit pas trop.",
+        "Le stagiaire a un talent rare : être partout où on ne le cherche pas, surtout après minuit.",
+        "La nuit, on jure entendre le stagiaire brancher quelque chose quelque part. Tout le monde retient son souffle.",
+        "On a rangé une chaise pour le stagiaire près de la régie de nuit. Elle est toujours vide, fidèlement.",
+        "Le stagiaire aurait laissé une trace de café encore tiède. Preuve qu'il existe, la nuit s'en contentera.",
+        "Dernière nouvelle avant l'after : toujours pas de stagiaire. On l'aime quand même, ce courant d'air."
+      ]
+    },
+    "city": {
+      "_note": "Références ville — le festival Gaiverland est permanent et se déplace de ville en ville. {city} = ville actuelle du state engine.",
+      "templates": [
+        "Gaiverland est posé à {city} en ce moment. Et {city}... tient le rythme.",
+        "Le festival s'est installé à {city}. Personne ne sait pour combien de temps. C'est le principe.",
+        "Depuis {city}, pour le monde entier. Gaiverland Radio.",
+        "{city} accueille le festival cette semaine. Et franchement... {city} s'en sort BIEN.",
+        "Le convoi Gaiverland s'est arrêté à {city}. Le C15 a validé l'emplacement.",
+        "Quelque part dans {city}, ce son résonne. Et c'est exactement le plan.",
+        "Gaiverland ne reste jamais longtemps au même endroit. Mais ce soir... c'est {city}. Profitez-en.",
+        "{city} by night. Gaiverland aux commandes. La suite s'écoute."
+      ]
+    },
+    "humor": {
+      "_note": "Humour léger — à utiliser sporadiquement, quand l'énergie le permet",
+      "templates": [
+        "Les voisins ont demandé à baisser. On a fait semblant de ne pas entendre.",
+        "Ce set n'a pas de limite de volume. C'est une fonctionnalité, pas un bug.",
+        "Bonne nouvelle : Gaiverland Radio n'a pas de bouton pause. Par conception.",
+        "La liste de morceaux suivants est classifiée. Pour votre bien.",
+        "Gaiverland Radio : on ne sait pas non plus comment on est arrivés ici. Mais on reste.",
+        "Ce beat... est techniquement défendable. Légalement aussi. On a vérifié.",
+        "Quelqu'un dans la salle a dit 'c'est trop fort'. Cette personne a eu tort.",
+        "La qualité sonore est maximale. La raison... variable. Le résultat... PARFAIT."
+      ]
+    },
+    "lore_festival": {
+      "_note": "Lore festival_moment — ambiance générale du festival. Jour/nuit.",
+      "templates_day": [
+        "Le soleil cogne, les basses répondent. Voilà, c'est le genre d'après-midi que je préfère.",
+        "Il y a ce moment où tout le monde lève la tête pile en même temps, plein soleil. On y est.",
+        "La poussière danse dans la lumière de {ville}. Nous, on appelle ça la déco.",
+        "Quelque part dans la foule, quelqu'un vient de trouver son nouveau morceau préféré. De rien.",
+        "Les enceintes chauffent, le public aussi. Tout est parfaitement sous contrôle. Ou pas.",
+        "Un inconnu vient de se faire trois amis sur un refrain, en plein jour. C'est exactement ça, ici.",
+        "Les mains sont en l'air avant même le drop. En plein soleil, on appelle ça de la confiance.",
+        "On a monté le son d'un cran cet après-midi. Juste pour voir. On garde, évidemment.",
+        "Le sol vibre, les sourires suivent. Rien de cassé, tout de branché.",
+        "On a compté trois éclats de rire pendant l'intro. En plein jour, bon présage.",
+        "Il y a une odeur de fête dans l'air chaud et un truc qui va lâcher dans les graves. J'adore.",
+        "Quelqu'un danse comme si personne ne regardait. Tout le monde regarde. Tout le monde adore."
+      ],
+      "templates_night": [
+        "La nuit s'installe sur {ville}, les basses baissent la voix mais ne se taisent jamais.",
+        "On a perdu le fil du temps il y a deux morceaux. En pleine nuit, on ne compte pas le chercher.",
+        "Le festival ne dort jamais. Nous non plus, visiblement, et on assume, lueurs aux yeux.",
+        "On dirait que la nuit a décidé de rester un peu plus longtemps sur {ville}. Bonne décision.",
+        "Il est tard, les projecteurs dessinent des ombres qui dansent mieux que nous. On les laisse faire.",
+        "Le silence entre deux morceaux a duré une seconde dans le noir. Personne n'a eu le temps d'avoir peur.",
+        "Ce morceau-là, gardez-le quelque part. La nuit de {ville}, elle, s'en souviendra.",
+        "La régie veille, les cœurs aussi. Rien à signaler, tout à savourer, en douceur.",
+        "Il y a des nuits où tout tombe juste. Devinez quelle nuit on est.",
+        "Les lueurs remplacent le soleil, l'énergie reste. On appelle ça l'heure des vrais.",
+        "Le festival respire plus doucement, là, maintenant. Restez, la nuit vaut le détour.",
+        "Quelqu'un s'endort presque sur un accord et se réveille sur le suivant. Nuit parfaite."
       ]
     }
   }
@@ -3896,6 +4199,33 @@ ENERGY_MODE    = {1: "flow",  2: "flow",   3: "normal", 4: "hype",    5: "peak"}
 STAGE_SEGMENT  = {"mainstage": "announcement", "sunset": "transition",
                   "rush": "intro", "night": "outro"}
 
+# Bible v1.1 emotion mapping — amused = running gags, calm = sunset/night.
+# Overrides the energy-based default per mode.
+MODE_EMOTION = {
+    "lore_stagiaire": "amused",
+    "lore_c15":       "amused",
+    "lore_festival":  "playful",
+    "humor":          "amused",
+    "late_night":     "calm",
+    "flow":           "calm",
+    "transition_down":"calm",
+    "peak":           "energetic",
+    "transition_up":  "energetic",
+    "hype":           "excited",
+    "track_announcement": "excited",
+    "reaction":       "excited",
+}
+# Bible segment_type per mode (fallback = stage-based)
+MODE_SEGMENT = {
+    "lore_stagiaire": "joke",
+    "humor":          "joke",
+    "track_announcement": "announcement",
+    "transition_up":  "transition",
+    "transition_down":"transition",
+    "late_night":     "outro",
+    "city":           "announcement",
+}
+
 
 def load_tpl():
     global _tpl
@@ -3969,17 +4299,41 @@ def phrase_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
 
-def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set) -> tuple[str, bool]:
+def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
+                         state: dict = None) -> tuple[str, bool]:
     """Pick a phrase from mode pool, avoiding recently used ones.
+    Uses templates_with_next when artist/title are known (RPE announce style),
+    templates_no_next otherwise; falls back to the plain templates list.
     Returns (text, was_fresh). Falls back to any phrase if all used."""
+    state = state or {}
     modes = _tpl.get("modes", {})
-    pool  = modes.get(mode, {}).get("templates") or \
-            modes.get("normal", {}).get("templates", ["La musique continue."])
+    entry = modes.get(mode, {})
 
-    # Expand {artist}/{title} first to compute accurate hashes
+    has_track = bool(track.get("artist") and track.get("title"))
+    tod = (state.get("time_of_day") or "day")
+    # Lore jour/nuit : pioche la sous-liste collant à l'heure courante (catalogue Rebexis)
+    if entry.get("templates_day") or entry.get("templates_night"):
+        pool = entry.get("templates_night") if tod == "night" else entry.get("templates_day")
+        pool = pool or entry.get("templates_day") or entry.get("templates_night")
+    elif has_track and entry.get("templates_with_next"):
+        pool = entry["templates_with_next"]
+    elif not has_track and entry.get("templates_no_next"):
+        pool = entry["templates_no_next"]
+    else:
+        pool = entry.get("templates")
+    if not pool:
+        pool = modes.get("normal", {}).get("templates", ["La musique continue."])
+
+    music_profile = track.get("music_profile", {}) if isinstance(track, dict) else {}
+    genre = (music_profile.get("genre") or track.get("genre_top1") or "électro")
+
+    # Expand all variables first to compute accurate hashes
     def expand(t: str) -> str:
         t = t.replace("{artist}", track.get("artist", "l'artiste") or "l'artiste")
         t = t.replace("{title}", track.get("title", "ce morceau") or "ce morceau")
+        t = t.replace("{city}",  state.get("city", "Toulon") or "Toulon")
+        t = t.replace("{ville}", state.get("city", "Toulon") or "Toulon")
+        t = t.replace("{genre}", str(genre))
         return t
 
     fresh = [t for t in pool if phrase_hash(expand(t)) not in recent_hashes]
@@ -4018,7 +4372,9 @@ def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
     # Lore injection — random, low probability
     candidates.append((0.07, "lore_c15"))
     candidates.append((0.05, "lore_stagiaire"))
+    candidates.append((0.06, "lore_festival"))
     candidates.append((0.06, "humor"))
+    candidates.append((0.05, "city"))
 
     # Festival direction transitions
     if festival_direction == "build_up" and energy >= 3:
@@ -4108,13 +4464,14 @@ def generate(body: dict = None, force: bool = False):
     # Select mode contextually
     mode = select_mode(energy, stage, tod, weather_mood, festival_dir, track)
 
-    emotion      = ENERGY_EMOTION.get(energy, "playful")
-    segment_type = STAGE_SEGMENT.get(stage, "announcement")
+    # Bible mapping: mode-specific emotion/segment first, energy/stage as fallback
+    emotion      = MODE_EMOTION.get(mode) or ENERGY_EMOTION.get(energy, "playful")
+    segment_type = MODE_SEGMENT.get(mode) or STAGE_SEGMENT.get(stage, "announcement")
 
     # Get recent phrase hashes for dedup
     recent_hashes = get_recent_phrase_hashes(conn)
 
-    text, was_fresh = pick_avoiding_recent(mode, track, recent_hashes)
+    text, was_fresh = pick_avoiding_recent(mode, track, recent_hashes, state)
     action       = "announce_track" if track.get("title") else "play_music"
 
     # Record this phrase in memory
@@ -4169,7 +4526,6 @@ def recent_phrases(hours: int = 6, limit: int = 20):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8092)
-
 PYEOF
 
 # ── gcs_tts.py — Phase 3 : cache hash(text+emotion+voice_id) ──────────────────

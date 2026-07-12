@@ -21,7 +21,7 @@ import json, time, re
 from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response
 import secrets, hmac, hashlib, base64
 
 # Page « L'équipe » (maquette Cassy, avatars embarqués). Import guardé : si le
@@ -569,6 +569,14 @@ PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gaiverland — Le festival permanent</title>
+<meta name="theme-color" content="#8b5cf6">
+<meta name="description" content="La radio-festival permanente. Une antenne qui ne dort jamais.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gaiverland">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
 <style>
 :root{
   --sun1:#ff9a5a; --sun2:#ff5e7a; --sun3:#8b5cf6; --nightblue:#191036;
@@ -1028,6 +1036,7 @@ function drawViz(){
 refresh();loadEvents();
 loadVisuals();loadAuth();
 setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}
 </script></body></html>"""
 
 
@@ -1046,6 +1055,68 @@ def equipe():
             'border-radius:20px;padding:7px 14px;font:13px Helvetica,Arial,sans-serif;'
             'text-decoration:none;backdrop-filter:blur(3px)">← Retour à la radio</a>')
     return HTMLResponse(TEAM_HTML.replace("</body>", back + "</body>", 1))
+
+
+# ── PWA : favicon SVG on-brand, manifest installable, service worker ──────────
+_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#191036"/><stop offset=".5" stop-color="#8b5cf6"/>
+<stop offset=".78" stop-color="#ff5e7a"/><stop offset="1" stop-color="#ff9a5a"/>
+</linearGradient></defs>
+<rect width="512" height="512" rx="116" fill="url(#g)"/>
+<circle cx="256" cy="248" r="104" fill="#fff4e6"/>
+<rect x="86" y="330" width="340" height="150" fill="url(#g)"/>
+<rect x="96" y="352" width="320" height="20" rx="10" fill="#fff4e6" opacity=".95"/>
+<rect x="128" y="392" width="256" height="16" rx="8" fill="#fff4e6" opacity=".8"/>
+<rect x="160" y="428" width="192" height="14" rx="7" fill="#fff4e6" opacity=".65"/>
+</svg>'''
+
+_MANIFEST = {
+    "name": "Gaiverland — Le festival permanent",
+    "short_name": "Gaiverland",
+    "description": "La radio-festival permanente. Une antenne qui ne dort jamais.",
+    "start_url": "/", "scope": "/",
+    "display": "standalone", "orientation": "portrait-primary",
+    "background_color": "#191036", "theme_color": "#8b5cf6",
+    "icons": [
+        {"src": "/icon.svg", "sizes": "any",     "type": "image/svg+xml", "purpose": "any"},
+        {"src": "/icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "maskable"},
+    ],
+}
+
+# Network-first + fallback cache (shell). N'intercepte NI le flux .mp3 NI les API live.
+_SW_JS = '''const CACHE='gaiverland-v1';
+self.addEventListener('install',function(e){self.skipWaiting();});
+self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});
+self.addEventListener('fetch',function(e){
+  if(e.request.method!=='GET')return;
+  var u=new URL(e.request.url);
+  if(u.pathname.indexOf('/api/')===0||u.pathname.slice(-4)==='.mp3'||u.pathname.indexOf('/live')===0)return;
+  e.respondWith(
+    fetch(e.request).then(function(r){
+      if(r&&r.status===200&&r.type==='basic'){var cp=r.clone();caches.open(CACHE).then(function(c){c.put(e.request,cp);});}
+      return r;
+    }).catch(function(){return caches.match(e.request).then(function(m){return m||caches.match('/');});})
+  );
+});'''
+
+
+@app.get("/icon.svg")
+def icon_svg():
+    return Response(_ICON_SVG, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return Response(json.dumps(_MANIFEST, ensure_ascii=False),
+                    media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return Response(_SW_JS, media_type="application/javascript",
+                    headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":
