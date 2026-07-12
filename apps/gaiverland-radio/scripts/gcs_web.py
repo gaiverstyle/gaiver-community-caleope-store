@@ -719,6 +719,31 @@ footer .c15{margin-top:6px;font-size:12px}
 #fs-settings .fs-set-title{font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.7;margin-bottom:10px}
 #fs-settings label{display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer}
 #fs-settings input{width:16px;height:16px;accent-color:#ff8fa3}
+/* ── Contrôles audio (Web Audio) ── */
+.fxbar{display:flex;align-items:center;gap:10px;margin:14px 0 0}
+.fx-ico{font-size:16px;opacity:.85}
+.fx-vol{flex:1;height:5px;border-radius:4px;-webkit-appearance:none;appearance:none;background:rgba(255,244,230,.22);cursor:pointer}
+.fx-vol::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--sun1);cursor:pointer;box-shadow:0 0 8px rgba(255,154,90,.6)}
+.fx-vol::-moz-range-thumb{width:16px;height:16px;border:none;border-radius:50%;background:var(--sun1);cursor:pointer}
+.fx-toggle{flex:0 0 auto;border:1px solid rgba(255,244,230,.28);background:transparent;color:var(--cream);border-radius:16px;padding:6px 12px;font:13px inherit;cursor:pointer;transition:background .15s}
+.fx-toggle:hover,.fx-toggle.on{background:rgba(255,244,230,.14)}
+.fx-panel{margin-top:12px;padding:14px;border-radius:14px;background:rgba(25,16,54,.5);border:1px solid rgba(255,244,230,.12)}
+.fx-panel.fx-hidden{display:none}
+.fx-lab{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;opacity:.65;margin:10px 0 6px}
+.fx-lab:first-child{margin-top:0}
+.fx-presets,.fx-viz{display:flex;flex-wrap:wrap;gap:7px}
+.fxb{border:1px solid rgba(255,244,230,.24);background:transparent;color:var(--cream);border-radius:14px;padding:6px 12px;font:12px inherit;cursor:pointer;transition:border-color .15s,background .15s}
+.fxb:hover{border-color:var(--sun1)}
+.fxb.active{background:linear-gradient(120deg,var(--sun2),var(--sun1));border-color:transparent;color:#2a1a33;font-weight:600}
+.fx-range{width:100%;height:5px;border-radius:4px;-webkit-appearance:none;appearance:none;background:rgba(255,244,230,.22);cursor:pointer;margin:2px 0 4px}
+.fx-range::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:var(--sun1);cursor:pointer}
+.fx-range::-moz-range-thumb{width:15px;height:15px;border:none;border-radius:50%;background:var(--sun1)}
+.fx-checks{display:flex;flex-direction:column;gap:8px;margin:4px 0}
+.fx-checks label{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:14px}
+.fx-checks input{width:16px;height:16px;accent-color:var(--sun2)}
+.fx-checks span{opacity:.55;font-size:12px}
+.fx-note{font-size:12px;opacity:.6;margin-top:10px;line-height:1.4}
+.fs-vol{display:flex;align-items:center;gap:9px}
 @media (max-width:600px){#fs-center{gap:1.6vh}#fs-cover{width:min(30vh,55vw)}}
 </style></head><body><div class="wrap">
 
@@ -749,6 +774,26 @@ footer .c15{margin-top:6px;font-size:12px}
     <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)">⟳</button>
   </div>
   <audio id="player" preload="none"></audio>
+  <audio id="player-b" preload="none"></audio>
+  <div class="fxbar">
+    <span class="fx-ico" aria-hidden="true">🔊</span>
+    <input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume">
+    <button class="fx-toggle" onclick="toggleFxPanel()" aria-label="Effets audio">⚙ effets</button>
+  </div>
+  <div id="fx-panel" class="fx-panel fx-hidden">
+    <div class="fx-lab">Ambiance</div>
+    <div class="fx-presets js-presets"></div>
+    <div class="fx-lab">Basses <span class="js-bassval">0</span> dB</div>
+    <input class="fx-range js-bass" type="range" min="0" max="12" step="1" value="0" aria-label="Bass boost">
+    <div class="fx-checks">
+      <label><input type="checkbox" class="js-keepbass"> <b>Keep-bass</b> <span>baisse sans étouffer</span></label>
+      <label><input type="checkbox" class="js-loud"> <b>Loudness</b> <span>niveau constant</span></label>
+      <label><input type="checkbox" class="js-mono"> <b>Mono</b> <span>1 seul HP</span></label>
+    </div>
+    <div class="fx-lab">Visualizer</div>
+    <div class="fx-viz js-vizstyle"></div>
+    <div class="fx-note js-fxnote"></div>
+  </div>
   <div class="authbar" id="authbar"></div>
   <div class="votes">
     <button class="v-encore" onclick="vote('ENCORE')">🔥 ENCORE</button>
@@ -824,6 +869,10 @@ footer .c15{margin-top:6px;font-size:12px}
     <label><input type="checkbox" id="opt-bg"> Fond photos de la zone</label>
     <label><input type="checkbox" id="opt-bar"> Barre de progression</label>
     <label><input type="checkbox" id="opt-viz"> Visualizer audio</label>
+    <div class="fs-set-title" style="margin-top:12px">Son</div>
+    <div class="fs-vol"><span aria-hidden="true">🔊</span><input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume"></div>
+    <div class="fx-presets js-presets" style="margin:6px 0"></div>
+    <div class="fx-viz js-vizstyle"></div>
   </div>
   <div id="fs-center">
     <div id="fs-wordmark">GAIVERLAND</div>
@@ -839,29 +888,78 @@ footer .c15{margin-top:6px;font-size:12px}
 const ICO={rebexis_intervention:'🎙',c15_event:'🚐',stagiaire_event:'🧢',city_transition:'📍'};
 let audioUrl="";
 let cityPhotos=[], bgIdx=0, lastTitle="";
-let curStation='main';  // station écoutée : 'main' (Mainstage) ou 'chill'
+let curStation='main';
+// 2 éléments audio : A routé Web Audio (FX+viz réel, Mainstage same-origin /live.mp3),
+// B direct (scènes cross-origin — Web Audio les muterait sans header CORS).
+const A=document.getElementById('player'), B=document.getElementById('player-b');
+// Kade a posé un lien mp3 same-origin par station → Web Audio lisible PARTOUT.
+const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3'};
+function waOK(st){ return !!ROUTE[st]; }             // toutes les stations = same-origin
+function AA(){ return waOK(curStation)?A:B; }        // élément actif (A = Web Audio)
 
-// Flux LIVE : on ne "reprend" jamais un flux radio (le buffer serait périmé →
-// grésillements/décalage au retour). On repart toujours du DIRECT avec un flux frais.
+// ── Moteur audio (Web Audio) ──
+const FX_KEY='gvl_fx';
+const PRESETS=[['flat','Flat'],['bassboost','Bass boost'],['keepbass','Keep-bass'],['night','Nuit'],['clarity','Clarté'],['club','Club']];
+const VIZS=[['bars','Barres'],['radial','Radial'],['wave','Onde']];
+const AFX={
+  ctx:null,src:null,n:null,an:null,freq:null,tim:null,ready:false,
+  o:Object.assign({vol:1,preset:'flat',bass:0,keepbass:false,loud:false,mono:false,viz:'bars'},
+     (function(){try{return JSON.parse(localStorage.getItem(FX_KEY))||{};}catch(e){return {};}})()),
+  save(){try{localStorage.setItem(FX_KEY,JSON.stringify(this.o));}catch(e){}},
+  setup(){
+    if(this.ready) return true;
+    try{
+      const C=window.AudioContext||window.webkitAudioContext; if(!C) return false;
+      this.ctx=new C();
+      this.src=this.ctx.createMediaElementSource(A);
+      const c=this.ctx;
+      const bass=c.createBiquadFilter(); bass.type='lowshelf'; bass.frequency.value=115;
+      const mid=c.createBiquadFilter(); mid.type='peaking'; mid.frequency.value=2300; mid.Q.value=0.9;
+      const treb=c.createBiquadFilter(); treb.type='highshelf'; treb.frequency.value=6200;
+      const comp=c.createDynamicsCompressor();
+      const mono=c.createGain();
+      const master=c.createGain();
+      const an=c.createAnalyser(); an.fftSize=512; an.smoothingTimeConstant=0.82;
+      this.src.connect(bass); bass.connect(mid); mid.connect(treb); treb.connect(comp);
+      comp.connect(mono); mono.connect(master); master.connect(an); an.connect(c.destination);
+      this.n={bass:bass,mid:mid,treb:treb,comp:comp,mono:mono,master:master}; this.an=an;
+      this.freq=new Uint8Array(an.frequencyBinCount); this.tim=new Uint8Array(an.fftSize);
+      A.volume=1; this.ready=true; this.apply();
+      return true;
+    }catch(e){ return false; }
+  },
+  apply(){
+    const o=this.o;
+    B.volume=o.vol;
+    if(!this.ready){ A.volume=o.vol; return; }
+    const n=this.n; let bG=0,mG=0,tG=0,comp=false;
+    if(o.preset==='bassboost') bG=9;
+    else if(o.preset==='night'){ tG=-7; bG=2; }
+    else if(o.preset==='clarity'){ mG=5; tG=2; }
+    else if(o.preset==='club'){ bG=6; tG=2; comp=true; }
+    bG+=o.bass;
+    if(o.keepbass||o.preset==='keepbass'){ bG+=(1-o.vol)*13; tG+=(1-o.vol)*3; }  // compensation de sonie
+    n.bass.gain.value=bG; n.mid.gain.value=mG; n.treb.gain.value=tG;
+    const uc=comp||o.loud;
+    n.comp.threshold.value=uc?-22:0; n.comp.ratio.value=uc?4:1; n.comp.knee.value=uc?26:0;
+    n.comp.attack.value=0.003; n.comp.release.value=0.25;
+    n.mono.channelCount=o.mono?1:2; n.mono.channelCountMode=o.mono?'explicit':'max'; n.mono.channelInterpretation='speakers';
+    A.volume=1; n.master.gain.value=o.vol;
+  },
+  set(k,v){ this.o[k]=v; this.save(); this.apply(); },
+  resume(){ if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(function(){}); }
+};
+
 function playLive(){
-  const a=document.getElementById('player');
+  const a=AA();
   if(!audioUrl) return;
-  // anti-cache : force une nouvelle connexion sur le bord live, pas le buffer navigateur
   a.src = audioUrl + (audioUrl.indexOf('?')>=0?'&':'?') + '_=' + Date.now();
   a.load();
-  a.play().catch(()=>{});
+  if(a===A){ AFX.setup(); AFX.resume(); }
+  a.play().catch(function(){});
 }
-function stopStream(){
-  // pause = on COUPE vraiment le flux (on lâche le buffer) → au retour = direct frais
-  const a=document.getElementById('player');
-  a.pause();
-  a.removeAttribute('src');
-  a.load();
-}
-function togglePlay(){
-  const a=document.getElementById('player');
-  if(a.paused){ playLive(); } else { stopStream(); }
-}
+function stopStream(){ const a=AA(); a.pause(); a.removeAttribute('src'); a.load(); }
+function togglePlay(){ const a=AA(); if(a.paused){ playLive(); } else { stopStream(); } }
 // Clip in-page : composition fixe par morceau — fond Toulon + cover devant + titre dessous.
 async function loadVisuals(){
   try{
@@ -882,12 +980,13 @@ function setBg(){
 }
 function selectStation(s){
   if(s===curStation) return;
+  const wasPlaying=!AA().paused;
+  A.pause(); A.removeAttribute('src'); A.load();     // couper les deux éléments
+  B.pause(); B.removeAttribute('src'); B.load();
   curStation=s;
   document.querySelectorAll('.stage[data-st]').forEach(t=>t.classList.toggle('on', t.dataset.st===s));
-  const a=document.getElementById('player');
-  const wasPlaying=!a.paused;
-  a.pause(); a.removeAttribute('src'); a.load();  // détache l'ancien flux
-  audioUrl=''; lastTitle='';                       // force refresh à re-remplir
+  audioUrl=''; lastTitle='';
+  updateFxAvail();
   refresh().then(()=>{ if(wasPlaying) playLive(); });
 }
 async function refresh(){
@@ -909,7 +1008,7 @@ async function refresh(){
       });
     }
     if(t.duration>0){document.getElementById('prog').style.width=Math.min(100,100*t.elapsed/t.duration)+'%';}
-    if(d.stream_url){audioUrl=d.stream_url;}
+    audioUrl = ROUTE[curStation] || (d.stream_url||'');  // flux same-origin par station (Web Audio partout)
     const s=d.state||{};
     document.getElementById('city').textContent=s.city||'Quelque part';
     document.getElementById('wx').textContent=(s.weather||'')+(s.stage?' — scène active : '+s.stage:'');
@@ -996,9 +1095,8 @@ function closeFs(){
   if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
 }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&fsOpen) closeFs(); });
-// Visualizer décoratif : n'accède PAS au flux audio (aucun risque de couper le
-// stream Icecast cross-origin, aucune dépendance CORS). Barres animées, plus
-// vives quand ça joue. Le vrai spectre exigerait du CORS sur Icecast (piste infra).
+// Visualizer RÉEL : lit le spectre via l'AnalyserNode (Mainstage /live.mp3 same-origin).
+// Sur une scène (pas de Web Audio), retombe sur une animation décorative douce.
 function startViz(){
   if(!vizBars.length){for(let i=0;i<48;i++)vizBars.push({p:Math.random()*6.28,s:0.5+Math.random()});}
   if(!vizRAF) drawViz();
@@ -1006,33 +1104,96 @@ function startViz(){
 function stopViz(){
   if(vizRAF){cancelAnimationFrame(vizRAF);vizRAF=0;}
   const c=gid('fs-viz'); if(c){const x=c.getContext('2d'); if(x)x.clearRect(0,0,c.width,c.height);}
+  const hc=gid('hero-cover'); if(hc) hc.style.transform='';
+}
+function bassEnergy(){
+  if(!AFX.ready||AA()!==A||A.paused) return 0;
+  AFX.an.getByteFrequencyData(AFX.freq);
+  let s=0; for(let i=0;i<6;i++)s+=AFX.freq[i];
+  return (s/6)/255;
 }
 function drawViz(){
-  const c=gid('fs-viz'); if(!c){vizRAF=0;return;}
-  const x=c.getContext('2d'); if(!x){vizRAF=0;return;}
-  const w=c.width=c.clientWidth||1, h=c.height=c.clientHeight||1;
-  const playing=!gid('player').paused;
-  vizT+=playing?0.08:0.02;
-  x.clearRect(0,0,w,h);
-  const n=vizBars.length, bw=w/n;
-  for(let i=0;i<n;i++){
-    const b=vizBars[i];
-    const amp=playing?(0.35+0.55*Math.abs(Math.sin(vizT*b.s+b.p))):(0.10+0.06*Math.sin(vizT*0.5+b.p));
-    const bh=amp*h*0.9;
-    const g=x.createLinearGradient(0,h,0,h-bh);
-    g.addColorStop(0,'rgba(255,210,154,.10)'); g.addColorStop(1,'rgba(255,143,163,.6)');
-    x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);
+  const showViz = fsOpen && gid('opt-viz') && gid('opt-viz').checked;
+  const playingA = AA()===A && !A.paused;
+  if(!showViz && !playingA){ vizRAF=0; const hc=gid('hero-cover'); if(hc)hc.style.transform=''; return; }
+  if(showViz){
+    const c=gid('fs-viz'), x=c&&c.getContext('2d');
+    if(x){
+      const w=c.width=c.clientWidth||1, h=c.height=c.clientHeight||1; x.clearRect(0,0,w,h);
+      const real=AFX.ready && AA()===A && !A.paused, style=AFX.o.viz||'bars';
+      if(real && style==='wave'){
+        AFX.an.getByteTimeDomainData(AFX.tim); const nn=AFX.tim.length;
+        x.lineWidth=2.5; x.strokeStyle='rgba(255,143,163,.85)'; x.beginPath();
+        for(let i=0;i<nn;i++){const xx=i/nn*w, yy=h/2+((AFX.tim[i]-128)/128)*h*0.42; i?x.lineTo(xx,yy):x.moveTo(xx,yy);}
+        x.stroke();
+      }else if(real && style==='radial'){
+        AFX.an.getByteFrequencyData(AFX.freq); const N=64, cx=w/2, cy=h/2, r0=Math.min(w,h)*0.16;
+        for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, a2=i/N*6.283, len=r0+v*Math.min(w,h)*0.30;
+          x.strokeStyle='rgba(255,'+((120+100*v)|0)+','+((120+40*v)|0)+','+(0.35+0.6*v)+')'; x.lineWidth=3;
+          x.beginPath(); x.moveTo(cx+Math.cos(a2)*r0,cy+Math.sin(a2)*r0); x.lineTo(cx+Math.cos(a2)*len,cy+Math.sin(a2)*len); x.stroke();}
+      }else if(real){
+        AFX.an.getByteFrequencyData(AFX.freq); const N=64, bw=w/N;
+        for(let i=0;i<N;i++){const v=AFX.freq[i*2]/255, bh=v*h*0.92;
+          const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.15)'); g.addColorStop(1,'rgba(255,143,163,.78)');
+          x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
+      }else{ // fallback décoratif (scène)
+        const playing=!AA().paused; vizT+=playing?0.08:0.02; const n=vizBars.length, bw=w/n;
+        for(let i=0;i<n;i++){const b=vizBars[i], amp=playing?(0.30+0.45*Math.abs(Math.sin(vizT*b.s+b.p))):(0.10+0.06*Math.sin(vizT*0.5+b.p)), bh=amp*h*0.9;
+          const g=x.createLinearGradient(0,h,0,h-bh); g.addColorStop(0,'rgba(255,210,154,.10)'); g.addColorStop(1,'rgba(255,143,163,.5)');
+          x.fillStyle=g; x.fillRect(i*bw+bw*0.15, h-bh, bw*0.7, bh);}
+      }
+    }
   }
+  const be=bassEnergy();
+  if(be>0){ const sc='scale('+(1+be*0.06).toFixed(3)+')';
+    const hc=gid('hero-cover'); if(hc) hc.style.transform=sc;
+    const fc=gid('fs-cover'); if(fc&&fsOpen) fc.style.transform=sc; }
   vizRAF=requestAnimationFrame(drawViz);
 }
-(function(){const a=document.getElementById('player'),b=document.getElementById('playbtn'),fb=document.getElementById('fs-play');
- a.addEventListener('play',()=>{b.textContent='⏸'; if(fb)fb.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing';});
- a.addEventListener('pause',()=>{b.textContent='▶'; if(fb)fb.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused';});
- ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
- if('mediaSession' in navigator){
-   navigator.mediaSession.setActionHandler('play',togglePlay);
-   navigator.mediaSession.setActionHandler('pause',stopStream);
- }})();
+// ── UI des effets audio ──
+function toggleFxPanel(){ const p=gid('fx-panel'); if(!p)return; p.classList.toggle('fx-hidden');
+  document.querySelectorAll('.fx-toggle').forEach(b=>b.classList.toggle('on', !p.classList.contains('fx-hidden'))); }
+function updateFxAvail(){
+  document.querySelectorAll('.js-fxnote').forEach(el=>{ el.textContent='Effets + visualizer réactif sur toutes les scènes. Réglages sauvés sur cet appareil.'; });
+}
+function syncFxUI(){
+  const o=AFX.o;
+  document.querySelectorAll('.js-vol').forEach(el=>el.value=Math.round(o.vol*100));
+  document.querySelectorAll('.js-bass').forEach(el=>el.value=o.bass);
+  document.querySelectorAll('.js-bassval').forEach(el=>el.textContent=o.bass);
+  document.querySelectorAll('.js-keepbass').forEach(el=>el.checked=o.keepbass);
+  document.querySelectorAll('.js-loud').forEach(el=>el.checked=o.loud);
+  document.querySelectorAll('.js-mono').forEach(el=>el.checked=o.mono);
+  document.querySelectorAll('[data-preset]').forEach(el=>el.classList.toggle('active', el.dataset.preset===o.preset));
+  document.querySelectorAll('[data-viz]').forEach(el=>el.classList.toggle('active', el.dataset.viz===o.viz));
+}
+function initFxUI(){
+  document.querySelectorAll('.js-presets').forEach(box=>{ box.innerHTML=PRESETS.map(p=>'<button class="fxb" data-preset="'+p[0]+'">'+p[1]+'</button>').join(''); });
+  document.querySelectorAll('.js-vizstyle').forEach(box=>{ box.innerHTML=VIZS.map(v=>'<button class="fxb" data-viz="'+v[0]+'">'+v[1]+'</button>').join(''); });
+  document.addEventListener('click',e=>{
+    const pb=e.target.closest&&e.target.closest('[data-preset]'); if(pb){ AFX.set('preset',pb.dataset.preset); syncFxUI(); return; }
+    const vb=e.target.closest&&e.target.closest('[data-viz]'); if(vb){ AFX.set('viz',vb.dataset.viz); syncFxUI(); }
+  });
+  document.addEventListener('input',e=>{
+    if(e.target.classList.contains('js-vol')){ AFX.set('vol',(+e.target.value)/100); syncFxUI(); }
+    else if(e.target.classList.contains('js-bass')){ AFX.set('bass',+e.target.value); syncFxUI(); }
+  });
+  document.addEventListener('change',e=>{
+    if(e.target.classList.contains('js-keepbass')) AFX.set('keepbass',e.target.checked);
+    else if(e.target.classList.contains('js-loud')) AFX.set('loud',e.target.checked);
+    else if(e.target.classList.contains('js-mono')) AFX.set('mono',e.target.checked);
+  });
+  syncFxUI(); updateFxAvail(); AFX.apply();
+}
+(function(){
+  const bmain=gid('playbtn'), bfs=gid('fs-play');
+  function onPlay(){ if(bmain)bmain.textContent='⏸'; if(bfs)bfs.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'; startViz(); }
+  function onPause(){ if(bmain)bmain.textContent='▶'; if(bfs)bfs.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'; }
+  [A,B].forEach(el=>{ el.addEventListener('play',onPlay); el.addEventListener('pause',onPause); });
+  ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
+  if('mediaSession' in navigator){ navigator.mediaSession.setActionHandler('play',togglePlay); navigator.mediaSession.setActionHandler('pause',stopStream); }
+  initFxUI();
+})();
 refresh();loadEvents();
 loadVisuals();loadAuth();
 setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);
