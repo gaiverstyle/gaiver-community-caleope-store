@@ -1,7 +1,6 @@
 """
 GCS Vote Service — Phase 5.
 ENCORE / REVIEW / SKIP — weighted scoring.
-Influence sur gcs-state-engine via event.
 """
 import os, sys, subprocess
 
@@ -17,16 +16,21 @@ except ImportError:
 
 import psycopg2.extras
 from fastapi import FastAPI, HTTPException
-from typing import Optional
 
 DB_URL    = os.environ["DATABASE_URL"]
 STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
 
-# Poids par rôle d'utilisateur (spec Bible v1.1)
 ROLE_WEIGHTS = {"founder": 0.6, "user": 0.3, "system_ai": 0.1}
 VALID_VOTES  = {"ENCORE", "REVIEW", "SKIP"}
-# REVIEW = soft-négatif (auto, plus de pile manuelle). Cohérent avec playlist.py/multi_rotation.py.
-REVIEW_VALUE = float(os.environ.get("VOTE_REVIEW_VALUE", "-0.5"))
+
+# --- Skip démocratique : ≥ SKIP_VOTE_RATIO des auditeurs votent SKIP sur le titre
+#     EN COURS → on passe automatiquement (POST AzuraCast backend/skip). ---
+AZ_URL       = os.environ.get("AZURACAST_URL", "http://azuracast:80")
+AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
+AZ_STATION   = os.environ.get("AZURACAST_STATION_ID", "1")
+AZ_SHORTCODE = os.environ.get("AZURACAST_SHORTCODE", "gaiverlandradio")
+SKIP_VOTE_RATIO    = float(os.environ.get("SKIP_VOTE_RATIO", "0.5"))   # 50% par défaut
+SKIP_MIN_LISTENERS = int(os.environ.get("SKIP_MIN_LISTENERS", "1"))    # garde-fou mini auditeurs
 
 app = FastAPI(title="GCS Vote Service")
 
@@ -45,7 +49,7 @@ def init_db():
                 vote        VARCHAR(10)  NOT NULL CHECK (vote IN ('ENCORE','REVIEW','SKIP')),
                 user_role   VARCHAR(20)  NOT NULL DEFAULT 'user',
                 user_weight FLOAT        NOT NULL DEFAULT 0.3,
-                created_at  TIMESTAMPTZ  DEFAULT NOW()
+                created_at  TIMESTAMPTZ DEFAULT NOW()
             )
         """)
         cur.execute("""
@@ -53,35 +57,61 @@ def init_db():
                 song_id     VARCHAR(100) PRIMARY KEY,
                 score       FLOAT        NOT NULL DEFAULT 0.0,
                 vote_count  INTEGER      NOT NULL DEFAULT 0,
-                last_vote   TIMESTAMPTZ  DEFAULT NOW()
+                last_vote   TIMESTAMPTZ DEFAULT NOW()
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_song ON votes(song_id)")
+        # Migration : identité du votant (pour le skip démocratique 1 identité = 1 voix)
+        cur.execute("ALTER TABLE votes ADD COLUMN IF NOT EXISTS user_id VARCHAR(64)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_skip ON votes(song_id, vote, created_at)")
     conn.commit()
     conn.close()
 
 
+def _democratic_skip(song_id: str, conn) -> dict:
+    """Passe le titre EN COURS si ≥ SKIP_VOTE_RATIO des auditeurs ont voté SKIP dessus."""
+    import urllib.request, json, math
+    try:
+        with urllib.request.urlopen(f"{AZ_URL}/api/nowplaying/{AZ_SHORTCODE}", timeout=5) as r:
+            np = json.load(r)
+    except Exception as e:
+        return {"skipped": False, "reason": f"nowplaying err: {e}"}
+    npn    = np.get("now_playing") or {}
+    cur_id = (npn.get("song") or {}).get("id")
+    if cur_id != song_id:
+        return {"skipped": False, "reason": "vote sur un titre plus en cours"}
+    listeners = int((np.get("listeners") or {}).get("current", 0) or 0)
+    if listeners < SKIP_MIN_LISTENERS:
+        return {"skipped": False, "reason": "trop peu d'auditeurs", "listeners": listeners}
+    started = npn.get("played_at", 0)
+    with conn.cursor() as cur:
+        cur.execute("""SELECT COUNT(DISTINCT user_id) AS n FROM votes
+                       WHERE song_id=%s AND vote='SKIP' AND user_id IS NOT NULL
+                         AND created_at >= to_timestamp(%s)""", (song_id, started))
+        skips = cur.fetchone()["n"]
+    needed = math.ceil(SKIP_VOTE_RATIO * listeners)
+    if skips >= needed:
+        try:
+            req = urllib.request.Request(
+                f"{AZ_URL}/api/station/{AZ_STATION}/backend/skip",
+                method="POST", headers={"X-API-Key": AZ_KEY})
+            urllib.request.urlopen(req, timeout=5).read()
+            print(f"  ⏭ SKIP DÉMOCRATIQUE : {skips}/{listeners} auditeurs → titre passé")
+            return {"skipped": True, "skips": skips, "listeners": listeners}
+        except Exception as e:
+            return {"skipped": False, "reason": f"skip API: {e}", "skips": skips, "listeners": listeners}
+    return {"skipped": False, "skips": skips, "listeners": listeners, "needed": needed}
+
+
 def compute_score(song_id: str, conn) -> float:
-    """Weighted score: ENCORE=+1, REVIEW=0, SKIP=-1, weighted by role."""
     with conn.cursor() as cur:
         cur.execute("SELECT vote, user_weight FROM votes WHERE song_id=%s", (song_id,))
         rows = cur.fetchall()
     if not rows:
         return 0.0
-    score = 0.0
-    for r in rows:
-        delta = 1.0 if r["vote"] == "ENCORE" else (-1.0 if r["vote"] == "SKIP" else REVIEW_VALUE)
-        score += delta * r["user_weight"]
+    score = sum((1.0 if r["vote"]=="ENCORE" else -1.0 if r["vote"]=="SKIP" else 0.0)
+                * r["user_weight"] for r in rows)
     return round(score / len(rows), 3)
-
-
-def notify_state_engine(score: float, vote: str):
-    """Push score signal to gcs-state-engine to influence energy."""
-    try:
-        if vote == "ENCORE" and score > 0.5:
-            httpx.post(f"{STATE_URL}/state/phase", json={"festival_phase": "live"}, timeout=2)
-    except Exception:
-        pass
 
 
 @app.on_event("startup")
@@ -96,49 +126,41 @@ def health():
 
 @app.post("/vote")
 def cast_vote(body: dict):
-    """
-    Body: { song_id, vote: ENCORE|REVIEW|SKIP, user_role?: founder|user|system_ai }
-    """
     song_id   = body.get("song_id", "").strip()
     vote      = body.get("vote", "").upper()
     user_role = body.get("user_role", "user")
-
+    user_id   = (body.get("user_id") or "").strip() or None
     if not song_id:
         raise HTTPException(400, "song_id required")
     if vote not in VALID_VOTES:
         raise HTTPException(400, f"vote must be one of {VALID_VOTES}")
     if user_role not in ROLE_WEIGHTS:
         user_role = "user"
-
     weight = ROLE_WEIGHTS[user_role]
     conn   = get_conn()
-
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO votes (song_id, vote, user_role, user_weight)
-            VALUES (%s,%s,%s,%s)
-        """, (song_id, vote, user_role, weight))
+        cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight,user_id) VALUES (%s,%s,%s,%s,%s)",
+                    (song_id, vote, user_role, weight, user_id))
     conn.commit()
-
+    # Skip démocratique : sur un SKIP, on regarde si le seuil d'auditeurs est atteint
+    skip = {"skipped": False}
+    if vote == "SKIP":
+        try:
+            skip = _democratic_skip(song_id, conn)
+        except Exception as e:
+            print("  skip check err:", e)
     score = compute_score(song_id, conn)
-
-    # Upsert track_scores
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO track_scores (song_id, score, vote_count)
+            INSERT INTO track_scores (song_id,score,vote_count)
             VALUES (%s,%s,1)
             ON CONFLICT (song_id) DO UPDATE SET
-                score      = EXCLUDED.score,
-                vote_count = track_scores.vote_count + 1,
-                last_vote  = NOW()
+                score=EXCLUDED.score, vote_count=track_scores.vote_count+1, last_vote=NOW()
         """, (song_id, score))
     conn.commit()
     conn.close()
-
-    notify_state_engine(score, vote)
-    print(f"  ✓ vote [{user_role}] {vote} → {song_id[:20]} score={score}")
-
-    return {"ok": True, "song_id": song_id, "vote": vote, "score": score}
+    print(f"  ✓ vote [{user_role}] {vote} score={score} skip={skip.get('skipped')}")
+    return {"ok": True, "song_id": song_id, "vote": vote, "score": score, "skip": skip}
 
 
 @app.get("/track/{song_id}/score")
@@ -155,25 +177,7 @@ def track_score(song_id: str):
 def leaderboard(limit: int = 10):
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT song_id, score, vote_count
-            FROM track_scores ORDER BY score DESC LIMIT %s
-        """, (limit,))
-        rows = cur.fetchall()
-    conn.close()
-    return {"tracks": [dict(r) for r in rows]}
-
-
-@app.get("/skip-candidates")
-def skip_candidates(limit: int = 5):
-    """Tracks with most SKIP votes — useful for playlist filtering."""
-    conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT song_id, score, vote_count
-            FROM track_scores WHERE score < -0.3
-            ORDER BY score ASC LIMIT %s
-        """, (limit,))
+        cur.execute("SELECT song_id,score,vote_count FROM track_scores ORDER BY score DESC LIMIT %s", (limit,))
         rows = cur.fetchall()
     conn.close()
     return {"tracks": [dict(r) for r in rows]}

@@ -457,6 +457,7 @@ services:
     restart: unless-stopped
     networks:
       - gaiverland-internal
+      - azuracast-internal   # skip démocratique : joindre AzuraCast (nowplaying + backend/skip)
 
   gcs-lore-service:
     build: {{.BaseDir}}/app-config/gaiverland-radio/dockerfiles/gcs-api
