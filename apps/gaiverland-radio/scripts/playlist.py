@@ -30,7 +30,7 @@ DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 # de la sélection. 11h couvre toute la journée de travail (8h-18h) avec marge →
 # aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
 # est assez grand pour remplir la journée (~150 titres pour 10h).
-NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
+NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "6"))
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
