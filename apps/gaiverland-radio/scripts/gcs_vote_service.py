@@ -82,6 +82,16 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_passes ON passes(song_id, created_at)")
+        # 1 VOTE PAR PERSONNE PAR MUSIQUE (anti-spam) : dédup (garder le PLUS RÉCENT par
+        # (song_id, user_id) identifié) + index unique partiel. Revoter = changer son vote
+        # (UPSERT dans cast_vote), pas empiler → un spammeur ne peut plus gonfler la moyenne.
+        cur.execute("""
+            DELETE FROM votes a USING votes b
+            WHERE a.user_id IS NOT NULL AND a.user_id = b.user_id AND a.song_id = b.song_id
+              AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id))
+        """)
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_votes_user_song
+                       ON votes(song_id, user_id) WHERE user_id IS NOT NULL""")
         # Denylist mainstage : titres bannis DÉFINITIVEMENT de la rotation jour par le fondateur
         # (bouton blacklist). Distinct de la quarantaine votes (14j) : ici c'est permanent, et
         # ça capture la finesse d'« ambiance » qu'aucun feature ne mesure. playlist.py l'exclut.
@@ -201,7 +211,13 @@ def cast_vote(body: dict):
     weight = ROLE_WEIGHTS[user_role]
     conn   = get_conn()
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight,user_id) VALUES (%s,%s,%s,%s,%s)",
+        # UPSERT : 1 vote par (song_id, user_id) → revoter change le vote (anti-spam).
+        # user_id NULL (anonyme/legacy) : pas de conflit sur l'index partiel → insert simple.
+        cur.execute("""INSERT INTO votes (song_id,vote,user_role,user_weight,user_id)
+                       VALUES (%s,%s,%s,%s,%s)
+                       ON CONFLICT (song_id, user_id) WHERE user_id IS NOT NULL
+                       DO UPDATE SET vote=EXCLUDED.vote, user_role=EXCLUDED.user_role,
+                                     user_weight=EXCLUDED.user_weight, created_at=NOW()""",
                     (song_id, vote, user_role, weight, user_id))
     conn.commit()
     # NB : « j'aime pas » (SKIP) est un pur vote (quarantaine 14j via le score) — il ne saute
