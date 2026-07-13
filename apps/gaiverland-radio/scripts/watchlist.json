@@ -1,0 +1,60 @@
+{
+  "_note": "Watchlist artistes pour la découverte auto (discover_tracks.py). Par scène. La découverte cherche les NOUVEAUX titres/sets de ces artistes (SoundCloud primaire, YouTube fallback), QC durée-vs-original + no-IA + style. L'algo pondère en plus par les votes (ENCORE=boost, blacklist/SKIP=évite). Éditable à chaud.",
+  "_sources": ["soundcloud", "youtube"],
+  "scenes": {
+    "main": {
+      "theme": "Mainstage / festival EDM — Tomorrowland & Ultra headliners + house qui pète (Forza)",
+      "artists": [
+        "David Guetta", "Martin Garrix", "Hardwell", "Tiesto", "Armin van Buuren",
+        "Dimitri Vegas & Like Mike", "Alesso", "Afrojack", "Steve Aoki", "Nicky Romero",
+        "Don Diablo", "Oliver Heldens", "W&W", "Vini Vici", "Timmy Trumpet", "Alok",
+        "KSHMR", "Lost Frequencies", "Robin Schulz", "Kungs", "Swedish House Mafia",
+        "Axwell", "Sebastian Ingrosso", "Zedd", "Marshmello", "Meduza",
+        "Fisher", "Dom Dolla", "CamelPhat", "John Summit", "Vintage Culture", "ACRAZE",
+        "James Hype", "Cassian", "Anfisa Letyago", "Peggy Gou"
+      ]
+    },
+    "hard": {
+      "theme": "Hardstyle / raw / hard techno — Sub Zero Project, Fenko + Defqon têtes",
+      "artists": [
+        "Sub Zero Project", "Fenko", "D-Block & S-te-Fan", "Headhunterz", "Wildstylez",
+        "Da Tweekaz", "Rebelion", "Warface", "Sefa", "Vertile", "Ran-D", "Coone",
+        "Brennan Heart", "Sound Rush", "Phuture Noize", "Radical Redemption", "Act of Rage",
+        "D-Sturb", "Gunz For Hire", "Charlotte de Witte", "Amelie Lens", "I Hate Models"
+      ]
+    },
+    "phonk": {
+      "theme": "Drift/aggressive phonk",
+      "artists": [
+        "Kordhell", "MoonDeity", "DVRST", "Hensonn", "INTERWORLD", "KSLV Noh",
+        "Ghostface Playa", "Freddie Dredd", "Kaito Shoma", "PlayaPhonk", "Dxrk",
+        "Sxmped", "Svniivvle", "pharmacist", "9mm"
+      ]
+    },
+    "lofi": {
+      "theme": "Lo-fi / chillhop (étude, détente)",
+      "artists": [
+        "idealism", "Kupla", "jinsang", "potsu", "sleepy fish", "Aso", "Philanthrope",
+        "engelwood", "Purrple Cat", "Mondo Loops", "Nymano", "L'indecis", "Tomppabeats",
+        "Kudasai", "dryhope", "Stan Forebee"
+      ]
+    },
+    "synthwave": {
+      "theme": "Synthwave / retrowave 80s (darksynth = soir)",
+      "artists": [
+        "The Midnight", "GUNSHIP", "Timecop1983", "FM-84", "Lazerhawk",
+        "Miami Nights 1984", "Robert Parker", "Kavinsky", "Com Truise", "Mitch Murder",
+        "Scandroid", "The Bloody Beetroots", "Dance With the Dead", "Carpenter Brut", "Perturbator"
+      ]
+    },
+    "chill": {
+      "theme": "Melodic / deep / organic house (chill, coucher de soleil)",
+      "artists": [
+        "Ben Bohmer", "Lane 8", "Tinlicker", "Nora En Pure", "Massane", "Tycho",
+        "Bicep", "Bonobo", "Maribou State", "Kiasmos", "Olafur Arnalds", "Rufus Du Sol",
+        "Yotto", "Nils Hoffmann", "Le Youth", "Marsh", "Anyma", "Kolsch",
+        "Argy", "Keinemusik", "&ME", "Rampa", "Adam Port"
+      ]
+    }
+  }
+}
