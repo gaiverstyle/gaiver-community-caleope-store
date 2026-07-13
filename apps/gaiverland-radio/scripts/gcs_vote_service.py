@@ -71,52 +71,83 @@ def init_db():
         # Migration : identité du votant (pour le skip démocratique 1 identité = 1 voix)
         cur.execute("ALTER TABLE votes ADD COLUMN IF NOT EXISTS user_id VARCHAR(64)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_skip ON votes(song_id, vote, created_at)")
+        # « passer » = action de saut du titre EN COURS, DISTINCTE du vote « j'aime pas » (SKIP).
+        # 1 identité = 1 passer sur le titre courant (seuil démocratique = SKIP_VOTE_RATIO × auditeurs).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS passes (
+                id         SERIAL PRIMARY KEY,
+                song_id    VARCHAR(100) NOT NULL,
+                user_id    VARCHAR(64),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_passes ON passes(song_id, created_at)")
     conn.commit()
     conn.close()
 
 
-def _democratic_skip(song_id: str, conn) -> dict:
-    """Passe le titre EN COURS si ≥ SKIP_VOTE_RATIO des auditeurs ont voté SKIP dessus."""
-    import urllib.request, json, math
+def _now_playing() -> dict:
+    import urllib.request, json
     try:
         with urllib.request.urlopen(f"{AZ_URL}/api/nowplaying/{AZ_SHORTCODE}", timeout=5) as r:
-            np = json.load(r)
+            return json.load(r)
     except Exception as e:
-        return {"skipped": False, "reason": f"nowplaying err: {e}"}
-    npn    = np.get("now_playing") or {}
-    cur_id = (npn.get("song") or {}).get("id")
-    if cur_id != song_id:
-        return {"skipped": False, "reason": "vote sur un titre plus en cours"}
-    listeners = int((np.get("listeners") or {}).get("current", 0) or 0)
-    if listeners < SKIP_MIN_LISTENERS:
-        return {"skipped": False, "reason": "trop peu d'auditeurs", "listeners": listeners}
-    # Garde-fou pépite : un titre ENCORE-é par le fondateur (net positif 14j) est inskippable démocratiquement.
+        return {"_err": str(e)}
+
+
+def _is_current(song_id: str, np: dict) -> bool:
+    return ((np.get("now_playing") or {}).get("song") or {}).get("id") == song_id
+
+
+def _do_skip() -> bool:
+    """POST backend/skip sur AzuraCast (saute le titre EN COURS). True si OK."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"{AZ_URL}/api/station/{AZ_STATION}/backend/skip",
+                                     method="POST", headers={"X-API-Key": AZ_KEY})
+        urllib.request.urlopen(req, timeout=5).read()
+        return True
+    except Exception as e:
+        print(f"  ⚠ skip API: {e}")
+        return False
+
+
+def _founder_gem(song_id: str, conn) -> bool:
+    """Titre au vote fondateur net positif (ENCORE>SKIP, 14j) = pépite protégée du passer démocratique."""
     with conn.cursor() as cur:
         cur.execute("""SELECT COUNT(*) FILTER (WHERE vote='ENCORE') AS enc,
                               COUNT(*) FILTER (WHERE vote='SKIP')   AS skp
                        FROM votes WHERE song_id=%s AND user_role='founder'
                          AND created_at >= NOW() - INTERVAL '14 days'""", (song_id,))
         f = cur.fetchone()
-    if (f["enc"] or 0) > (f["skp"] or 0):
+    return (f["enc"] or 0) > (f["skp"] or 0)
+
+
+def _democratic_pass(song_id: str, conn) -> dict:
+    """Passe le titre EN COURS si ≥ SKIP_VOTE_RATIO des auditeurs ont cliqué « passer » dessus.
+    Compte la table `passes` (action « passer »), PAS les votes SKIP (« j'aime pas » = quarantaine)."""
+    import math
+    np = _now_playing()
+    if np.get("_err"):
+        return {"skipped": False, "reason": f"nowplaying err: {np['_err']}"}
+    if not _is_current(song_id, np):
+        return {"skipped": False, "reason": "titre plus en cours"}
+    listeners = int((np.get("listeners") or {}).get("current", 0) or 0)
+    if listeners < SKIP_MIN_LISTENERS:
+        return {"skipped": False, "reason": "trop peu d'auditeurs", "listeners": listeners}
+    if _founder_gem(song_id, conn):
         return {"skipped": False, "reason": "pépite protégée (ENCORE fondateur)", "listeners": listeners}
-    started = npn.get("played_at", 0)
+    started = (np.get("now_playing") or {}).get("played_at", 0)
     with conn.cursor() as cur:
-        cur.execute("""SELECT COUNT(DISTINCT user_id) AS n FROM votes
-                       WHERE song_id=%s AND vote='SKIP' AND user_id IS NOT NULL
+        cur.execute("""SELECT COUNT(DISTINCT user_id) AS n FROM passes
+                       WHERE song_id=%s AND user_id IS NOT NULL
                          AND created_at >= to_timestamp(%s)""", (song_id, started))
-        skips = cur.fetchone()["n"]
+        n = cur.fetchone()["n"]
     needed = max(SKIP_MIN_VOTES, math.ceil(SKIP_VOTE_RATIO * listeners))
-    if skips >= needed:
-        try:
-            req = urllib.request.Request(
-                f"{AZ_URL}/api/station/{AZ_STATION}/backend/skip",
-                method="POST", headers={"X-API-Key": AZ_KEY})
-            urllib.request.urlopen(req, timeout=5).read()
-            print(f"  ⏭ SKIP DÉMOCRATIQUE : {skips}/{listeners} auditeurs → titre passé")
-            return {"skipped": True, "skips": skips, "listeners": listeners}
-        except Exception as e:
-            return {"skipped": False, "reason": f"skip API: {e}", "skips": skips, "listeners": listeners}
-    return {"skipped": False, "skips": skips, "listeners": listeners, "needed": needed}
+    if n >= needed and _do_skip():
+        print(f"  ⏭ PASSER DÉMOCRATIQUE : {n}/{listeners} auditeurs → titre passé")
+        return {"skipped": True, "passes": n, "listeners": listeners}
+    return {"skipped": False, "passes": n, "listeners": listeners, "needed": needed}
 
 
 def compute_score(song_id: str, conn) -> float:
@@ -161,13 +192,8 @@ def cast_vote(body: dict):
         cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight,user_id) VALUES (%s,%s,%s,%s,%s)",
                     (song_id, vote, user_role, weight, user_id))
     conn.commit()
-    # Skip démocratique : sur un SKIP, on regarde si le seuil d'auditeurs est atteint
-    skip = {"skipped": False}
-    if vote == "SKIP":
-        try:
-            skip = _democratic_skip(song_id, conn)
-        except Exception as e:
-            print("  skip check err:", e)
+    # NB : « j'aime pas » (SKIP) est un pur vote (quarantaine 14j via le score) — il ne saute
+    # PLUS le titre en cours. Sauter = action « passer » distincte (endpoint /pass ci-dessous).
     score = compute_score(song_id, conn)
     with conn.cursor() as cur:
         cur.execute("""
@@ -178,8 +204,33 @@ def cast_vote(body: dict):
         """, (song_id, score))
     conn.commit()
     conn.close()
-    print(f"  ✓ vote [{user_role}] {vote} score={score} skip={skip.get('skipped')}")
-    return {"ok": True, "song_id": song_id, "vote": vote, "score": score, "skip": skip}
+    print(f"  ✓ vote [{user_role}] {vote} score={score}")
+    return {"ok": True, "song_id": song_id, "vote": vote, "score": score}
+
+
+@app.post("/pass")
+def pass_track(body: dict):
+    """« Passer » le titre EN COURS. Fondateur = saut immédiat (autorité). Public = démocratique
+    (≥ SKIP_VOTE_RATIO des auditeurs, plancher SKIP_MIN_LISTENERS/SKIP_MIN_VOTES, pépite protégée)."""
+    song_id = (body.get("song_id") or "").strip()
+    user_id = (body.get("user_id") or "").strip() or None
+    if not song_id:
+        raise HTTPException(400, "song_id required")
+    conn = get_conn()
+    try:
+        if user_id and user_id in FOUNDER_IDS:
+            np = _now_playing()
+            if np.get("_err") or not _is_current(song_id, np):
+                return {"ok": True, "skipped": False, "reason": "titre plus en cours"}
+            ok = _do_skip()
+            print(f"  ⏭ PASSER FONDATEUR → {'passé' if ok else 'échec'}")
+            return {"ok": True, "skipped": ok, "founder": True}
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO passes (song_id, user_id) VALUES (%s,%s)", (song_id, user_id))
+        conn.commit()
+        return {"ok": True, **_democratic_pass(song_id, conn)}
+    finally:
+        conn.close()
 
 
 @app.get("/track/{song_id}/score")

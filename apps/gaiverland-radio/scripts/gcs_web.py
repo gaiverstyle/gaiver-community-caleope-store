@@ -422,6 +422,12 @@ def _uid(request: Request) -> str:
     ident = _verify(request.cookies.get("gsid", ""))
     return hashlib.sha256(ident.encode()).hexdigest()[:32] if ident else ""
 
+# Empreintes fondateur (sha256("provider:sub")[:32]) → bouton blacklist + « passer » immédiat.
+# Miroir de gcs_vote_service.FOUNDER_IDS (même env FOUNDER_IDS).
+FOUNDER_IDS = {f.strip() for f in os.environ.get("FOUNDER_IDS",
+    "e49e9b4f66961841181c2fa7751fdabc,bc29f0601314241ebd7a6974a8541f88,2194b5b1bd76539a5aac0dd5fb314f25"
+    ).split(",") if f.strip()}
+
 def _login_ok(provider: str, sub: str):
     r = RedirectResponse("/?login=ok", status_code=302)
     r.set_cookie("gsid", _sign(f"{provider}:{sub}"), max_age=2592000,
@@ -488,7 +494,8 @@ def auth_discord_cb(request: Request, code: str = "", state: str = ""):
 @app.get("/api/me")
 def me(request: Request):
     ident = _verify(request.cookies.get("gsid", ""))
-    return {"logged_in": bool(ident), "provider": ident.split(":", 1)[0] if ident else ""}
+    return {"logged_in": bool(ident), "provider": ident.split(":", 1)[0] if ident else "",
+            "founder": _uid(request) in FOUNDER_IDS}
 
 @app.get("/api/logout")
 def logout():
@@ -521,6 +528,30 @@ def vote(request: Request, body: dict = Body(...)):
                        timeout=5)
         if r.status_code == 200:
             return {"ok": True, "vote": v}
+        return {"ok": False, "error": f"vote-service {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:60]}
+
+
+@app.post("/api/pass")
+def api_pass(request: Request):
+    """« Passer » le titre en cours : fondateur = immédiat, public = démocratique (côté vote-service)."""
+    uid = _uid(request)
+    if not uid:
+        return {"ok": False, "error": "login requis", "need_login": True}
+    song_id = ""
+    try:
+        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
+        if r.status_code == 200:
+            song_id = r.json().get("song_id", "")
+    except Exception:
+        pass
+    if not song_id:
+        return {"ok": False, "error": "pas de morceau en cours"}
+    try:
+        r = httpx.post(f"{VOTE_URL}/pass", json={"song_id": song_id, "user_id": uid}, timeout=6)
+        if r.status_code == 200:
+            return {"ok": True, **r.json()}
         return {"ok": False, "error": f"vote-service {r.status_code}"}
     except Exception as e:
         return {"ok": False, "error": str(e)[:60]}
@@ -645,8 +676,10 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 }
 .votes button:hover{transform:translateY(-3px) rotate(-1deg)}
 .v-encore{background:linear-gradient(135deg,#ffd29a,#ffb56b)}
-.v-review{background:linear-gradient(135deg,#c9b6ff,#a48fff)}
+.v-review{background:linear-gradient(135deg,#e6ddc9,#c9bfa6)}
 .v-skip{background:linear-gradient(135deg,#ffb1c0,#ff8fa3)}
+.v-pass{background:linear-gradient(135deg,#bfe0ff,#8fc4ff)}
+.v-blacklist{background:linear-gradient(135deg,#5a5a5a,#2e2e2e);color:#ffe;font-weight:700}
 .votemsg{font-size:14px;margin-top:10px;font-style:italic;min-height:18px;opacity:.9}
 .authbar{margin-top:16px;font-size:14px;font-family:sans-serif;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .authtxt,.authok{opacity:.88}
@@ -827,9 +860,10 @@ footer .c15{margin-top:6px;font-size:12px}
   </div>
   <div class="authbar" id="authbar"></div>
   <div class="votes">
-    <button class="v-encore" onclick="vote('ENCORE')">🔥 ENCORE</button>
-    <button class="v-review" onclick="vote('REVIEW')">🤔 À REVOIR</button>
-    <button class="v-skip"   onclick="vote('SKIP')">⏭ PASSER</button>
+    <button class="v-encore" onclick="vote('ENCORE')">🔥 j'adore</button>
+    <button class="v-review" onclick="vote('REVIEW')">😐 bof</button>
+    <button class="v-skip"   onclick="vote('SKIP')">👎 j'aime pas</button>
+    <button class="v-pass"   onclick="passTrack()">⏭ passer</button>
   </div>
   <div class="votemsg" id="votemsg"></div>
 </div>
@@ -1070,15 +1104,29 @@ async function loadLoved(){
       '<span class="loved-fire">🔥 '+t.votes+'</span></div>').join('');
   }catch(e){}
 }
+const VLABEL={ENCORE:"j'adore",REVIEW:"bof",SKIP:"j'aime pas"};
 async function vote(v){
   const m=document.getElementById('votemsg');
   try{
     const r=await (await fetch('/api/vote',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({vote:v})})).json();
     if(r.need_login){ m.textContent='Connecte-toi pour voter 👇'; return; }
-    m.textContent=r.ok?'Vote "'+v+'" enregistré. Le festival vous a entendu. ✦'
+    m.textContent=r.ok?'« '+(VLABEL[v]||v)+' » enregistré. Le festival vous a entendu. ✦'
                        :'Hmm… '+(r.error||'réessayez');
   }catch(e){m.textContent='Le stagiaire a débranché quelque chose. Réessayez.';}
+  setTimeout(()=>m.textContent='',6000);
+}
+async function passTrack(){
+  const m=document.getElementById('votemsg');
+  try{
+    const r=await (await fetch('/api/pass',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();
+    if(r.need_login){ m.textContent='Connecte-toi pour passer un titre 👇'; return; }
+    if(r.skipped){ m.textContent=r.founder?'Titre passé. ⏭':'Assez de monde a voté : titre passé ! ⏭'; }
+    else if(r.reason && r.reason.indexOf('pépite')>=0){ m.textContent='Titre protégé (coup de cœur du chef) — pas passé.'; }
+    else if(r.ok){ m.textContent='« Passer » noté'+(r.needed?' ('+(r.passes||1)+'/'+r.needed+' pour sauter)':'')+'. ⏭'; }
+    else { m.textContent='Hmm… '+(r.error||'réessayez'); }
+  }catch(e){ m.textContent='Le stagiaire a débranché quelque chose. Réessayez.'; }
   setTimeout(()=>m.textContent='',6000);
 }
 async function loadAuth(){
