@@ -82,6 +82,18 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_passes ON passes(song_id, created_at)")
+        # Denylist mainstage : titres bannis DÉFINITIVEMENT de la rotation jour par le fondateur
+        # (bouton blacklist). Distinct de la quarantaine votes (14j) : ici c'est permanent, et
+        # ça capture la finesse d'« ambiance » qu'aucun feature ne mesure. playlist.py l'exclut.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mainstage_denylist (
+                song_id  VARCHAR(100) PRIMARY KEY,
+                artist   TEXT,
+                title    TEXT,
+                added_by VARCHAR(64),
+                added_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
     conn.commit()
     conn.close()
 
@@ -231,6 +243,33 @@ def pass_track(body: dict):
         return {"ok": True, **_democratic_pass(song_id, conn)}
     finally:
         conn.close()
+
+
+@app.post("/blacklist")
+def blacklist(body: dict):
+    """Bannir DÉFINITIVEMENT le titre EN COURS de la mainstage (fondateur uniquement)."""
+    song_id = (body.get("song_id") or "").strip()
+    user_id = (body.get("user_id") or "").strip() or None
+    if not song_id:
+        raise HTTPException(400, "song_id required")
+    if not (user_id and user_id in FOUNDER_IDS):
+        raise HTTPException(403, "founder only")
+    np   = _now_playing()
+    song = ((np.get("now_playing") or {}).get("song")) or {}
+    artist = (body.get("artist") or song.get("artist") or "").strip()
+    title  = (body.get("title")  or song.get("title")  or "").strip()
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO mainstage_denylist (song_id, artist, title, added_by)
+                           VALUES (%s,%s,%s,%s) ON CONFLICT (song_id) DO NOTHING""",
+                        (song_id, artist, title, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    skipped = _do_skip() if _is_current(song_id, np) else False
+    print(f"  🚫 BLACKLIST {artist} - {title} (skip={skipped})")
+    return {"ok": True, "blacklisted": True, "skipped": skipped, "artist": artist, "title": title}
 
 
 @app.get("/track/{song_id}/score")

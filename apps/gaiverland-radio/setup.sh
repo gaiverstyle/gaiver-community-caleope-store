@@ -2298,8 +2298,17 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
         conn.rollback()
     quarantined = {tid for tid, s in vote_scores.items() if s <= VOTE_SKIP_THRESHOLD}
     encored     = [tid for tid, s in vote_scores.items() if s >= VOTE_ENCORE_THRESHOLD]
+    # Denylist mainstage (bouton blacklist fondateur) : bannis DÉFINITIFS, résolus song_id → track id.
+    denylisted = set()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT t.id FROM tracks t JOIN mainstage_denylist d ON d.song_id = t.song_id")
+            denylisted = {r["id"] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"  ⚠ denylist ignorée: {e}")
+        conn.rollback()
     # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
-    exclude_ids = list(set(recent_ids) | quarantined) or [0]
+    exclude_ids = list(set(recent_ids) | quarantined | denylisted) or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
     # En mood jour, on écarte aussi les titres dont le TITRE trahit un genre dur
@@ -2340,7 +2349,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
     if encored:
         already = {c["id"] for c in candidates}
-        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost]
+        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost and tid not in denylisted]
         if boost_ids:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -2367,6 +2376,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                        key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND file_path !~ %s
+                  AND id != ALL(%s)
                   AND ( mood = ANY(%s)
                         OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
                   AND genre_top1 IS NOT NULL
@@ -2374,7 +2384,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
@@ -5179,6 +5189,18 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_passes ON passes(song_id, created_at)")
+        # Denylist mainstage : titres bannis DÉFINITIVEMENT de la rotation jour par le fondateur
+        # (bouton blacklist). Distinct de la quarantaine votes (14j) : ici c'est permanent, et
+        # ça capture la finesse d'« ambiance » qu'aucun feature ne mesure. playlist.py l'exclut.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mainstage_denylist (
+                song_id  VARCHAR(100) PRIMARY KEY,
+                artist   TEXT,
+                title    TEXT,
+                added_by VARCHAR(64),
+                added_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
     conn.commit()
     conn.close()
 
@@ -5328,6 +5350,33 @@ def pass_track(body: dict):
         return {"ok": True, **_democratic_pass(song_id, conn)}
     finally:
         conn.close()
+
+
+@app.post("/blacklist")
+def blacklist(body: dict):
+    """Bannir DÉFINITIVEMENT le titre EN COURS de la mainstage (fondateur uniquement)."""
+    song_id = (body.get("song_id") or "").strip()
+    user_id = (body.get("user_id") or "").strip() or None
+    if not song_id:
+        raise HTTPException(400, "song_id required")
+    if not (user_id and user_id in FOUNDER_IDS):
+        raise HTTPException(403, "founder only")
+    np   = _now_playing()
+    song = ((np.get("now_playing") or {}).get("song")) or {}
+    artist = (body.get("artist") or song.get("artist") or "").strip()
+    title  = (body.get("title")  or song.get("title")  or "").strip()
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO mainstage_denylist (song_id, artist, title, added_by)
+                           VALUES (%s,%s,%s,%s) ON CONFLICT (song_id) DO NOTHING""",
+                        (song_id, artist, title, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    skipped = _do_skip() if _is_current(song_id, np) else False
+    print(f"  🚫 BLACKLIST {artist} - {title} (skip={skipped})")
+    return {"ok": True, "blacklisted": True, "skipped": skipped, "artist": artist, "title": title}
 
 
 @app.get("/track/{song_id}/score")

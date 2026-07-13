@@ -557,6 +557,32 @@ def api_pass(request: Request):
         return {"ok": False, "error": str(e)[:60]}
 
 
+@app.post("/api/blacklist")
+def api_blacklist(request: Request):
+    """Bannir DÉFINITIVEMENT le titre en cours de la mainstage. Réservé au fondateur."""
+    uid = _uid(request)
+    if not uid:
+        return {"ok": False, "error": "login requis", "need_login": True}
+    if uid not in FOUNDER_IDS:
+        return {"ok": False, "error": "réservé au chef"}
+    song_id = ""
+    try:
+        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
+        if r.status_code == 200:
+            song_id = r.json().get("song_id", "")
+    except Exception:
+        pass
+    if not song_id:
+        return {"ok": False, "error": "pas de morceau en cours"}
+    try:
+        r = httpx.post(f"{VOTE_URL}/blacklist", json={"song_id": song_id, "user_id": uid}, timeout=6)
+        if r.status_code == 200:
+            return {"ok": True, **r.json()}
+        return {"ok": False, "error": f"vote-service {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:60]}
+
+
 @app.post("/api/propose")
 def propose(request: Request, body: dict = Body(...)):
     uid = _uid(request)
@@ -864,6 +890,7 @@ footer .c15{margin-top:6px;font-size:12px}
     <button class="v-review" onclick="vote('REVIEW')">😐 bof</button>
     <button class="v-skip"   onclick="vote('SKIP')">👎 j'aime pas</button>
     <button class="v-pass"   onclick="passTrack()">⏭ passer</button>
+    <button class="v-blacklist" id="btnBlacklist" style="display:none" onclick="blacklistTrack()">🚫 blacklist</button>
   </div>
   <div class="votemsg" id="votemsg"></div>
 </div>
@@ -1138,7 +1165,20 @@ async function loadAuth(){
     }else{
       bar.innerHTML='<span class="authtxt">Connecte-toi pour voter :</span> <a class="authbtn g" href="/api/auth/google">Google</a> <a class="authbtn d" href="/api/auth/discord">Discord</a>';
     }
+    const bl=document.getElementById('btnBlacklist');
+    if(bl) bl.style.display = d.founder ? '' : 'none';
   }catch(e){}
+}
+async function blacklistTrack(){
+  const m=document.getElementById('votemsg');
+  if(!confirm('Bannir DÉFINITIVEMENT ce titre de la mainstage ?')) return;
+  try{
+    const r=await (await fetch('/api/blacklist',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();
+    if(r.need_login){ m.textContent='Connecte-toi 👇'; return; }
+    m.textContent=r.ok?('🚫 Banni de la mainstage'+(r.skipped?' + titre passé.':'.')):('Hmm… '+(r.error||'réessaye'));
+  }catch(e){ m.textContent='Le stagiaire a débranché quelque chose. Réessaye.'; }
+  setTimeout(()=>m.textContent='',6000);
 }
 async function proposeTitle(){
   const inp=document.getElementById('proptitle'), m=document.getElementById('propmsg');

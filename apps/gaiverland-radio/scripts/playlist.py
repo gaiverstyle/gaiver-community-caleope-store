@@ -600,8 +600,17 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
         conn.rollback()
     quarantined = {tid for tid, s in vote_scores.items() if s <= VOTE_SKIP_THRESHOLD}
     encored     = [tid for tid, s in vote_scores.items() if s >= VOTE_ENCORE_THRESHOLD]
+    # Denylist mainstage (bouton blacklist fondateur) : bannis DÉFINITIFS, résolus song_id → track id.
+    denylisted = set()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT t.id FROM tracks t JOIN mainstage_denylist d ON d.song_id = t.song_id")
+            denylisted = {r["id"] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"  ⚠ denylist ignorée: {e}")
+        conn.rollback()
     # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
-    exclude_ids = list(set(recent_ids) | quarantined) or [0]
+    exclude_ids = list(set(recent_ids) | quarantined | denylisted) or [0]
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
     # En mood jour, on écarte aussi les titres dont le TITRE trahit un genre dur
@@ -642,7 +651,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
     if encored:
         already = {c["id"] for c in candidates}
-        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost]
+        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost and tid not in denylisted]
         if boost_ids:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -669,6 +678,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                        key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND file_path !~ %s
+                  AND id != ALL(%s)
                   AND ( mood = ANY(%s)
                         OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
                   AND genre_top1 IS NOT NULL
@@ -676,7 +686,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
