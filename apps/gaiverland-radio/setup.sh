@@ -806,17 +806,17 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
     "lore_c15": {
       "_note": "Lore C15 — véhicule/personnage mystérieux du festival. Jour/nuit. Ne jamais expliquer qui il est.",
       "templates_day": [
-        "Le c15 a démarré du premier coup ce matin. On a applaudi. Il l'a mérité.",
+        "Le c15 a démarré du premier coup aujourd'hui. On a applaudi. Il l'a mérité.",
         "Le c15 est garé de travers derrière la scène. En plein soleil, personne n'ose le déplacer, moi la première.",
-        "Quelqu'un a lavé le c15 pendant la nuit. Ce matin, une enquête est ouverte.",
+        "Quelqu'un a lavé le c15 en douce. Aujourd'hui, une enquête est ouverte.",
         "Le c15 chauffe au soleil et sent le vieux vinyle et l'essence. C'est le parfum officiel du festival, encadrez-le.",
         "Une mouette s'est posée sur le toit du c15. Elle reste pour l'ambiance, comme tout le monde à cette heure.",
         "On a chargé le c15 à ras bord pour la journée. Il tient. Il tient toujours. C'est un poète.",
         "Le c15 a sa place réservée près de la scène, en plein jour. Il l'a prise lui-même.",
         "Le c15 a plus de kilomètres au compteur que nous d'heures de sommeil. Et en plein soleil, ça ne se voit sur personne.",
-        "On a proposé une remorque au c15 ce matin. Il a refusé. Dignement.",
+        "On a proposé une remorque au c15 aujourd'hui. Il a refusé. Dignement.",
         "Le compteur du c15 est bloqué depuis des lustres. Franchement, il a bien raison, surtout un jour pareil.",
-        "Le c15 refuse d'avancer sans musique. Sur ce point, dès le matin, on se comprend.",
+        "Le c15 refuse d'avancer sans musique. Sur ce point, en plein jour, on se comprend.",
         "Le c15 a un point de rouille qu'on appelle affectueusement « la mélodie ». En pleine lumière, il brille presque."
       ],
       "templates_night": [
@@ -831,22 +831,22 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
         "Le c15 n'a jamais raté un festival. La nuit, il compte les étoiles au-dessus de {ville} à notre place.",
         "On a voulu changer l'autoradio du c15. Il a fait la tête pendant deux nuits.",
         "La nuit, le c15 sent le café froid et la fatigue heureuse. C'est notre odeur d'after à nous.",
-        "Quelqu'un a proposé de repeindre le c15. Silence gêné dans le noir, sujet clos jusqu'au matin."
+        "Quelqu'un a proposé de repeindre le c15. Silence gêné dans le noir, sujet clos pour la nuit."
       ]
     },
     "lore_stagiaire": {
       "_note": "Lore stagiaire — le running gag introuvable. Jour/nuit.",
       "templates_day": [
-        "Le stagiaire a disparu dès l'ouverture. La musique, elle, tient bon.",
-        "On a envoyé le stagiaire chercher un câble ce matin. On garde espoir, mollement.",
+        "Le stagiaire a disparu en plein jour. La musique, elle, tient bon.",
+        "On a envoyé le stagiaire chercher un câble aujourd'hui. On garde espoir, mollement.",
         "Le stagiaire a laissé son gilet sur une chaise en plein soleil. Le gilet est là. Le stagiaire, mystère.",
         "Quelqu'un jure avoir vu le stagiaire près de la buvette. En plein jour. Information non confirmée, comme toujours.",
-        "On a crié le nom du stagiaire trois fois à midi. Rien. Le classique.",
+        "On a crié le nom du stagiaire trois fois en plein jour. Rien. Le classique.",
         "Le stagiaire aurait appris à faire le café. On demande à voir. On demande surtout à goûter, là, maintenant.",
-        "On a mis une part de pizza de côté pour le stagiaire ce midi. On va devoir se dévouer.",
+        "On a mis une part de pizza de côté pour le stagiaire aujourd'hui. On va devoir se dévouer.",
         "Bonne nouvelle : le stagiaire n'a rien cassé aujourd'hui. Parce qu'il n'est pas là.",
-        "On a confié une tâche simple au stagiaire au réveil. On a bien fait de préciser « simple ».",
-        "Le stagiaire a coché « présent » ce matin. Nous, on coche « à confirmer ».",
+        "On a confié une tâche simple au stagiaire en plein jour. On a bien fait de préciser « simple ».",
+        "Le stagiaire a coché « présent » aujourd'hui. Nous, on coche « à confirmer ».",
         "Le badge du stagiaire a été retrouvé sur une table. Le stagiaire qui va avec, toujours pas.",
         "Si vous croisez le stagiaire aujourd'hui, dites-lui qu'on l'aime bien. Et qu'on attend toujours le câble."
       ],
@@ -858,11 +858,11 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
         "Quelqu'un a demandé où était le stagiaire à la nuit. Grand moment de solidarité dans le vide.",
         "Le stagiaire est officiellement notre meilleur fantôme. Et la nuit, c'est sa spécialité.",
         "On a gardé une lampe allumée pour le stagiaire. Au cas où. On n'y croit pas trop.",
-        "Le stagiaire a un talent rare : être partout où on ne le cherche pas, surtout après minuit.",
+        "Le stagiaire a un talent rare : être partout où on ne le cherche pas, surtout la nuit.",
         "La nuit, on jure entendre le stagiaire brancher quelque chose quelque part. Tout le monde retient son souffle.",
         "On a rangé une chaise pour le stagiaire près de la régie de nuit. Elle est toujours vide, fidèlement.",
         "Le stagiaire aurait laissé une trace de café encore tiède. Preuve qu'il existe, la nuit s'en contentera.",
-        "Dernière nouvelle avant l'after : toujours pas de stagiaire. On l'aime quand même, ce courant d'air."
+        "Dernière nouvelle de la nuit : toujours pas de stagiaire. On l'aime quand même, ce courant d'air."
       ]
     },
     "city": {
@@ -894,14 +894,14 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
     "lore_festival": {
       "_note": "Lore festival_moment — ambiance générale du festival. Jour/nuit.",
       "templates_day": [
-        "Le soleil cogne, les basses répondent. Voilà, c'est le genre d'après-midi que je préfère.",
+        "Le soleil cogne, les basses répondent. Voilà, c'est le genre de journée que je préfère.",
         "Il y a ce moment où tout le monde lève la tête pile en même temps, plein soleil. On y est.",
         "La poussière danse dans la lumière de {ville}. Nous, on appelle ça la déco.",
         "Quelque part dans la foule, quelqu'un vient de trouver son nouveau morceau préféré. De rien.",
         "Les enceintes chauffent, le public aussi. Tout est parfaitement sous contrôle. Ou pas.",
         "Un inconnu vient de se faire trois amis sur un refrain, en plein jour. C'est exactement ça, ici.",
         "Les mains sont en l'air avant même le drop. En plein soleil, on appelle ça de la confiance.",
-        "On a monté le son d'un cran cet après-midi. Juste pour voir. On garde, évidemment.",
+        "On a monté le son d'un cran, tiens. Juste pour voir. On garde, évidemment.",
         "Le sol vibre, les sourires suivent. Rien de cassé, tout de branché.",
         "On a compté trois éclats de rire pendant l'intro. En plein jour, bon présage.",
         "Il y a une odeur de fête dans l'air chaud et un truc qui va lâcher dans les graves. J'adore.",
