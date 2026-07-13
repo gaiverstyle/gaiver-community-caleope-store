@@ -35,6 +35,18 @@ NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "6"))
 # pépites que le chef/auditeurs soutiennent reviennent plus souvent (toutes les ~2h
 # au lieu de 6h) → l'antenne penche vers les bangers votés au lieu du random dilué.
 BOOST_NO_REPEAT_HOURS = float(os.environ.get("BOOST_NO_REPEAT_HOURS", "2"))
+# Préférence mainstage du chef : « ça se chante » — les vocal anthems (vocalness haut,
+# modèle Essentia) remontent, la techno/électro INSTRUMENTALE (vocalness bas + mood
+# 'energique' = Techno/Tech House/Minimal) est reléguée aux moments creux (pas bannie).
+# Tri random pondéré (Efraimidis-Spirakis) : poids = 1 + VOCAL_BIAS·vocalness − pénalité.
+# vocalness NULL (pas encore backfillé) = neutre 0.5. Mettre VOCAL_BIAS=0 pour désactiver.
+VOCAL_BIAS            = float(os.environ.get("VOCAL_BIAS", "2.5"))
+INSTR_TECHNO_PENALTY  = float(os.environ.get("INSTR_TECHNO_PENALTY", "1.5"))
+INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
+# Fragment SQL de poids réutilisé dans les requêtes candidats (3 params : bias, pénalité, seuil).
+_VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
+                     "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' "
+                     "THEN 1 ELSE 0 END))")
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
@@ -621,8 +633,8 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 != ALL(%s)
               AND genre_top1 = ANY(%s)
               AND (NOT %s OR title !~* %s)
-            ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
+            ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
+        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -663,8 +675,8 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   AND genre_top1 != ALL(%s)
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
-                ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
+                ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
+            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),

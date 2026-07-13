@@ -9,8 +9,11 @@ MODELS_DIR = pathlib.Path(os.environ.get("ESSENTIA_MODELS_DIR", "/essentia-model
 
 DISCOGS_MODELS = {
     "effnet_embed": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb",
-    
+
     "genre_labels": "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.json",
+    # Voix/instrumental (réutilise les embeddings effnet) → vocalness 0→1 (« ça se chante »).
+    "voice_model":  "https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-discogs-effnet-1.pb",
+    "voice_labels": "https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-discogs-effnet-1.json",
 }
 
 # Mapping genres Discogs → moods Gaiverland
@@ -71,17 +74,31 @@ WATCH_DIR = "/var/azuracast/stations"
 _genre_labels = []
 _effnet_model = None
 _genre_model = None
+_embed_model = None      # effnet embeddings (PartitionedCall:1) — entrée du modèle voix
+_voice_model = None      # classifieur voix/instrumental
+_voice_classes = []      # ordre des classes (typiquement ["instrumental", "voice"])
 
 
 def download_models():
     global _genre_labels
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    import urllib.request
     for name, url in DISCOGS_MODELS.items():
         dest = MODELS_DIR / pathlib.Path(url).name
         if not dest.exists():
             print(f"  → Téléchargement modèle Essentia : {dest.name} (~{40 if 'effnet' in name else 2}Mo)...")
-            import urllib.request; print(f"  → download {url}"); urllib.request.urlretrieve(url, str(dest))
-            print(f"  ✓ {dest.name}")
+            # Best-effort : un modèle injoignable (404, réseau) ne doit JAMAIS crash-looper
+            # l'analyzer. On loggue et on continue ; load_models() dégrade proprement si un
+            # modèle manque (ex. voix absente → vocalness désactivé, genre/BPM intacts).
+            try:
+                print(f"  → download {url}")
+                urllib.request.urlretrieve(url, str(dest))
+                print(f"  ✓ {dest.name}")
+            except Exception as edl:
+                if dest.exists():
+                    try: dest.unlink()
+                    except Exception: pass
+                print(f"  ⚠ modèle {dest.name} indisponible ({edl}) — ignoré, analyse dégradée", flush=True)
     # Charger les labels genre
     labels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["genre_labels"]).name
     if labels_path.exists():
@@ -99,6 +116,22 @@ def load_models():
         graphFilename=str(effnet_path), output="PartitionedCall:0"
     )
     _genre_model = _effnet_model  # Alias — même modèle, output direct
+    # ── Voix/instrumental : embeddings effnet (PartitionedCall:1) → classifieur 2D ──
+    global _embed_model, _voice_model, _voice_classes
+    try:
+        _embed_model = es.TensorflowPredictEffnetDiscogs(
+            graphFilename=str(effnet_path), output="PartitionedCall:1")
+        voice_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["voice_model"]).name
+        _voice_model = es.TensorflowPredict2D(
+            graphFilename=str(voice_path), output="model/Softmax")
+        vlabels_path = MODELS_DIR / pathlib.Path(DISCOGS_MODELS["voice_labels"]).name
+        if vlabels_path.exists():
+            with open(vlabels_path) as f:
+                _voice_classes = json.load(f).get("classes", ["instrumental", "voice"])
+        print(f"  ✓ Modèle voix/instrumental chargé (classes: {_voice_classes})")
+    except Exception as ev:
+        _embed_model = _voice_model = None
+        print(f"  ⚠ modèle voix indisponible ({ev}) — vocalness désactivé (analyse continue)")
     print("  ✓ Modèles Essentia chargés en mémoire")
 
 
@@ -204,6 +237,20 @@ def analyze_file(path: str) -> dict:
         low_e   = float(np.mean(spec[freqs <= 300])) + 1e-9
         has_vocals = (vocal_e / low_e) > 0.25
 
+        # ── Vocalness (modèle Essentia voix/instrumental, 0→1) : « ça se chante » ──
+        # Signal fiable pour la préférence mainstage du chef (vocal anthems > instrumental
+        # techno). Réutilise audio_16k. Dégradé-safe : None si le modèle n'est pas dispo.
+        vocalness = None
+        if _embed_model is not None and _voice_model is not None:
+            try:
+                emb   = _embed_model(audio_16k)
+                vpred = _voice_model(emb)
+                vmean = np.mean(vpred, axis=0)
+                idx   = _voice_classes.index("voice") if "voice" in _voice_classes else -1
+                vocalness = round(max(0.0, min(1.0, float(vmean[idx]))), 3)
+            except Exception as evv:
+                print(f"  ⚠ vocalness ({os.path.basename(path)}): {evv}")
+
         # ── Genre Discogs (Essentia ML) ───────────────────────────────
         genre_top1 = genre_top2 = ""
         genre_scores = {}
@@ -260,7 +307,8 @@ def analyze_file(path: str) -> dict:
             "file_path": path, "title": title, "artist": artist, "album": album,
             "duration": round(duration, 1), "bpm": round(bpm, 1),
             "energy": round(energy_norm, 3), "danceability": round(danceability, 3),
-            "has_vocals": has_vocals, "key_note": key_note, "key_scale": key_scale,
+            "has_vocals": has_vocals, "vocalness": vocalness,
+            "key_note": key_note, "key_scale": key_scale,
             "mood": mood, "genre_top1": genre_top1, "genre_top2": genre_top2,
             "genre_scores": json.dumps(genre_scores), "analyzed": True,
         }
@@ -280,19 +328,20 @@ def save_track(conn, data: dict):
         cur.execute("""
             INSERT INTO tracks
               (file_path, title, artist, album, duration, bpm, energy, danceability,
-               has_vocals, key_note, key_scale, mood, genre_top1, genre_top2, genre_scores, analyzed)
+               has_vocals, vocalness, key_note, key_scale, mood, genre_top1, genre_top2, genre_scores, analyzed)
             VALUES
               (%(file_path)s, %(title)s, %(artist)s, %(album)s, %(duration)s, %(bpm)s,
-               %(energy)s, %(danceability)s, %(has_vocals)s, %(key_note)s, %(key_scale)s,
+               %(energy)s, %(danceability)s, %(has_vocals)s, %(vocalness)s, %(key_note)s, %(key_scale)s,
                %(mood)s, %(genre_top1)s, %(genre_top2)s, %(genre_scores)s::jsonb, %(analyzed)s)
             ON CONFLICT (file_path) DO UPDATE SET
               bpm=EXCLUDED.bpm, energy=EXCLUDED.energy, danceability=EXCLUDED.danceability,
-              has_vocals=EXCLUDED.has_vocals, mood=EXCLUDED.mood,
+              has_vocals=EXCLUDED.has_vocals, vocalness=EXCLUDED.vocalness, mood=EXCLUDED.mood,
               genre_top1=EXCLUDED.genre_top1, genre_top2=EXCLUDED.genre_top2,
               genre_scores=EXCLUDED.genre_scores::jsonb, analyzed=EXCLUDED.analyzed,
               key_note=EXCLUDED.key_note, key_scale=EXCLUDED.key_scale, updated_at=NOW()
             RETURNING id
-        """, {**data, "genre_scores": data.get("genre_scores", "{}")})
+        """, {**data, "genre_scores": data.get("genre_scores", "{}"),
+              "vocalness": data.get("vocalness")})
         track_id = cur.fetchone()[0]
     conn.commit()
 
@@ -314,6 +363,10 @@ def main():
     load_models()
 
     conn = get_conn()
+    # Migration : colonne vocalness (0→1, proba « voix ») pour la préférence mainstage vocale.
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS vocalness DOUBLE PRECISION")
+    conn.commit()
     with conn.cursor() as cur:
         cur.execute("SELECT file_path FROM tracks WHERE analyzed=TRUE")
         known = {r[0] for r in cur.fetchall()}
@@ -350,6 +403,7 @@ def main():
     watched = set(wd_to_dir.values())
     last_rescan = time.time()
     RESCAN_INTERVAL = int(os.environ.get("ANALYZER_RESCAN_S", "120"))
+    BACKFILL_BATCH  = int(os.environ.get("VOCALNESS_BACKFILL_BATCH", "12"))
 
     while True:
         events = inotify.read(timeout=5000)
@@ -394,6 +448,29 @@ def main():
                             print(f"  → (rescan) {os.path.basename(fp)}", flush=True)
                             save_track(conn, analyze_file(fp))
                             known.add(fp)
+
+            # ── Backfill vocalness : ré-analyse throttlée des titres analysés AVANT le
+            # modèle voix (vocalness NULL). Petit lot par cycle → CPU tranquille, l'UPSERT
+            # met à jour la ligne existante. Fichier absent = orphelin → vocalness 0.0
+            # (neutre) pour le sortir du pool NULL et ne pas boucler dessus.
+            if _voice_model is not None:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("""SELECT file_path FROM tracks
+                                       WHERE analyzed=TRUE AND vocalness IS NULL
+                                       ORDER BY updated_at DESC NULLS LAST LIMIT %s""",
+                                    (BACKFILL_BATCH,))
+                        todo = [r[0] for r in cur.fetchall()]
+                    for fp in todo:
+                        if os.path.exists(fp):
+                            print(f"  → (backfill vocalness) {os.path.basename(fp)}", flush=True)
+                            save_track(conn, analyze_file(fp))
+                        else:
+                            with conn.cursor() as cur:
+                                cur.execute("UPDATE tracks SET vocalness=0.0 WHERE file_path=%s", (fp,))
+                            conn.commit()
+                except Exception as eb:
+                    print(f"  ⚠ backfill vocalness: {eb}", flush=True)
 
 
 if __name__ == "__main__":
