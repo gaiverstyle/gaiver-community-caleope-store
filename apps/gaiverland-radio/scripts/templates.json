@@ -351,6 +351,16 @@
         "Le festival respire plus doucement, là, maintenant. Restez, la nuit vaut le détour.",
         "Quelqu'un s'endort presque sur un accord et se réveille sur le suivant. Nuit parfaite."
       ]
+    },
+    "vote_love": {
+      "_note": "Coup de cœur communauté — salue un titre qui cartonne aux votes ENCORE. Tokens {love_artist}/{love_title}. (placeholder Yann, à affiner par Rebexis)",
+      "templates": [
+        "Gros amour du public pour {love_artist} — {love_title}. Les ENCORE pleuvent, on garde ça au chaud.",
+        "Vous avez parlé : {love_title}, ça cartonne aux votes. Le festival a bon goût.",
+        "{love_title}... vous l'adorez. C'est vous qui faites la programmation, et là, chapeau.",
+        "Le peuple a tranché : {love_artist} monte dans les coups de cœur. On note, on rejoue.",
+        "Coup de cœur du moment : {love_title}. Continuez à voter, ça oriente vraiment l'antenne."
+      ]
     }
   }
 }

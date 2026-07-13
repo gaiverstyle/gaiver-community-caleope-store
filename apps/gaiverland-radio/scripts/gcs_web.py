@@ -564,6 +564,27 @@ def proposals(limit: int = 30):
         return {"proposals": []}
 
 
+@app.get("/api/loved")
+def loved(limit: int = 10):
+    """Coups de cœur communauté : titres au score ENCORE net positif (les plus soutenus)."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.title, t.artist, ts.score, ts.vote_count
+                FROM track_scores ts JOIN tracks t ON t.song_id = ts.song_id
+                WHERE ts.score > 0 AND t.title IS NOT NULL
+                ORDER BY ts.score DESC, ts.vote_count DESC
+                LIMIT %s
+            """, (min(limit, 30),))
+            rows = cur.fetchall()
+        conn.close()
+        return {"loved": [{"title": r["title"], "artist": r["artist"] or "",
+                           "score": round(float(r["score"]), 2), "votes": r["vote_count"]} for r in rows]}
+    except Exception:
+        return {"loved": []}
+
+
 PAGE = """<!doctype html>
 <html lang="fr"><head>
 <meta charset="utf-8">
@@ -658,6 +679,11 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .journal .at{font-family:sans-serif;font-size:11px;opacity:.6;min-width:42px}
 .journal .ic{min-width:24px}
 .soon{opacity:.75;text-align:center;padding:26px 10px;font-style:italic;font-size:16px}
+.loved-row{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid rgba(255,244,230,.1)}
+.loved-row:last-child{border-bottom:none}
+.loved-rank{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background:linear-gradient(120deg,var(--sun2),var(--sun1));color:#2a1a33}
+.loved-t{flex:1;font-size:15px;line-height:1.3}
+.loved-fire{flex:0 0 auto;opacity:.85;font-size:14px;white-space:nowrap}
 footer{text-align:center;margin-top:44px;font-size:13px;opacity:.65;font-style:italic}
 footer .c15{margin-top:6px;font-size:12px}
 .hero{position:relative;width:100%;aspect-ratio:4/3;border-radius:16px;overflow:hidden;
@@ -794,6 +820,9 @@ footer .c15{margin-top:6px;font-size:12px}
     </div>
     <div class="fx-lab">Visualizer</div>
     <div class="fx-viz js-vizstyle"></div>
+    <div class="fx-lab">Minuterie sommeil 😴</div>
+    <div class="fx-viz js-sleep"></div>
+    <div class="fx-note js-sleepstatus" style="margin-top:6px"></div>
     <div class="fx-note js-fxnote"></div>
   </div>
   <div class="authbar" id="authbar"></div>
@@ -836,6 +865,11 @@ footer .c15{margin-top:6px;font-size:12px}
     <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div></div>
     <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🌆</div><div class="nm">Synthwave</div><div class="st">Live</div></div>
   </div>
+</div>
+
+<div class="card">
+  <h2>Coups de cœur de la communauté ❤️</h2>
+  <div id="loved"><div class="soon">Les titres que vous soutenez le plus (🔥 ENCORE) apparaîtront ici…</div></div>
 </div>
 
 <div class="card journal">
@@ -1026,6 +1060,16 @@ async function loadEvents(){
       '</span><span>'+e.text.replace(/</g,'&lt;')+'</span></div>').join('');
   }catch(e){}
 }
+async function loadLoved(){
+  try{
+    const d=await (await fetch('/api/loved')).json();
+    if(!d.loved||!d.loved.length) return;
+    document.getElementById('loved').innerHTML=d.loved.map((t,i)=>
+      '<div class="loved-row"><span class="loved-rank">'+(i+1)+'</span>'+
+      '<span class="loved-t">'+(t.artist?t.artist.replace(/</g,'&lt;')+' — ':'')+t.title.replace(/</g,'&lt;')+'</span>'+
+      '<span class="loved-fire">🔥 '+t.votes+'</span></div>').join('');
+  }catch(e){}
+}
 async function vote(v){
   const m=document.getElementById('votemsg');
   try{
@@ -1172,12 +1216,44 @@ function syncFxUI(){
   document.querySelectorAll('[data-preset]').forEach(el=>el.classList.toggle('active', el.dataset.preset===o.preset));
   document.querySelectorAll('[data-viz]').forEach(el=>el.classList.toggle('active', el.dataset.viz===o.viz));
 }
+// ── Minuterie sommeil : fondu doux puis pause après N minutes ──
+const SLEEPS=[[0,'Off'],[15,'15 min'],[30,'30'],[45,'45'],[60,'60'],[90,'90']];
+let sleepTO=null, sleepIV=null, sleepEnd=0;
+function sleepClear(){
+  if(sleepTO){clearTimeout(sleepTO);sleepTO=null;}
+  if(sleepIV){clearInterval(sleepIV);sleepIV=null;}
+  sleepEnd=0;
+  document.querySelectorAll('.js-sleepstatus').forEach(el=>el.textContent='');
+}
+function sleepFadeStop(){
+  if(AFX.ready){
+    try{ const g=AFX.n.master.gain, t=AFX.ctx.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(0.0001,t+8); }catch(e){}
+    setTimeout(function(){ stopStream(); try{AFX.n.master.gain.value=AFX.o.vol;}catch(e){} }, 8300);
+  }else{
+    const a=AA(); let v=a.volume||1; const iv=setInterval(function(){ v-=0.06; if(v<=0.02){clearInterval(iv); stopStream(); a.volume=AFX.o.vol;} else a.volume=v; }, 480);
+  }
+  sleepClear();
+  document.querySelectorAll('[data-sleep]').forEach(el=>el.classList.toggle('active', el.dataset.sleep==='0'));
+}
+function sleepSet(min){
+  sleepClear();
+  document.querySelectorAll('[data-sleep]').forEach(el=>el.classList.toggle('active', +el.dataset.sleep===min));
+  if(min<=0) return;
+  sleepEnd=Date.now()+min*60000;
+  sleepTO=setTimeout(sleepFadeStop, min*60000);
+  sleepIV=setInterval(function(){
+    const left=Math.max(0,sleepEnd-Date.now()), m=Math.floor(left/60000), s=Math.floor((left%60000)/1000);
+    document.querySelectorAll('.js-sleepstatus').forEach(el=>el.textContent='😴 extinction dans '+m+':'+(s<10?'0':'')+s);
+  }, 1000);
+}
 function initFxUI(){
   document.querySelectorAll('.js-presets').forEach(box=>{ box.innerHTML=PRESETS.map(p=>'<button class="fxb" data-preset="'+p[0]+'">'+p[1]+'</button>').join(''); });
   document.querySelectorAll('.js-vizstyle').forEach(box=>{ box.innerHTML=VIZS.map(v=>'<button class="fxb" data-viz="'+v[0]+'">'+v[1]+'</button>').join(''); });
+  document.querySelectorAll('.js-sleep').forEach(box=>{ box.innerHTML=SLEEPS.map(x=>'<button class="fxb'+(x[0]===0?' active':'')+'" data-sleep="'+x[0]+'">'+x[1]+'</button>').join(''); });
   document.addEventListener('click',e=>{
     const pb=e.target.closest&&e.target.closest('[data-preset]'); if(pb){ AFX.set('preset',pb.dataset.preset); syncFxUI(); return; }
-    const vb=e.target.closest&&e.target.closest('[data-viz]'); if(vb){ AFX.set('viz',vb.dataset.viz); syncFxUI(); }
+    const vb=e.target.closest&&e.target.closest('[data-viz]'); if(vb){ AFX.set('viz',vb.dataset.viz); syncFxUI(); return; }
+    const sb=e.target.closest&&e.target.closest('[data-sleep]'); if(sb){ sleepSet(+sb.dataset.sleep); }
   });
   document.addEventListener('input',e=>{
     if(e.target.classList.contains('js-vol')){ AFX.set('vol',(+e.target.value)/100); syncFxUI(); }
@@ -1199,9 +1275,9 @@ function initFxUI(){
   if('mediaSession' in navigator){ navigator.mediaSession.setActionHandler('play',togglePlay); navigator.mediaSession.setActionHandler('pause',stopStream); }
   initFxUI();
 })();
-refresh();loadEvents();
+refresh();loadEvents();loadLoved();
 loadVisuals();loadAuth();
-setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);
+setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);setInterval(loadLoved,60000);
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}
 </script></body></html>"""
 

@@ -921,6 +921,16 @@ cat > "${CONFIG_DIR}/rebexis-templates.json" <<'JSON'
         "Le festival respire plus doucement, là, maintenant. Restez, la nuit vaut le détour.",
         "Quelqu'un s'endort presque sur un accord et se réveille sur le suivant. Nuit parfaite."
       ]
+    },
+    "vote_love": {
+      "_note": "Coup de cœur communauté — salue un titre qui cartonne aux votes ENCORE. Tokens {love_artist}/{love_title}. (placeholder Yann, à affiner par Rebexis)",
+      "templates": [
+        "Gros amour du public pour {love_artist} — {love_title}. Les ENCORE pleuvent, on garde ça au chaud.",
+        "Vous avez parlé : {love_title}, ça cartonne aux votes. Le festival a bon goût.",
+        "{love_title}... vous l'adorez. C'est vous qui faites la programmation, et là, chapeau.",
+        "Le peuple a tranché : {love_artist} monte dans les coups de cœur. On note, on rejoue.",
+        "Coup de cœur du moment : {love_title}. Continuez à voter, ça oriente vraiment l'antenne."
+      ]
     }
   }
 }
@@ -4205,6 +4215,7 @@ MODE_EMOTION = {
     "lore_stagiaire": "amused",
     "lore_c15":       "amused",
     "lore_festival":  "playful",
+    "vote_love":      "excited",
     "humor":          "amused",
     "late_night":     "calm",
     "flow":           "calm",
@@ -4242,6 +4253,22 @@ def load_tpl():
 
 def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def fetch_loved(conn):
+    """Titre le plus soutenu (score ENCORE net > 0) — pour un shoutout réactif aux votes."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.title, t.artist FROM track_scores ts
+                JOIN tracks t ON t.song_id = ts.song_id
+                WHERE ts.score > 0 AND t.title IS NOT NULL
+                ORDER BY ts.score DESC, ts.vote_count DESC LIMIT 1
+            """)
+            r = cur.fetchone()
+            return {"title": r["title"], "artist": r["artist"] or ""} if r else None
+    except Exception:
+        return None
 
 
 def init_phrases_table(conn):
@@ -4334,6 +4361,9 @@ def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
         t = t.replace("{city}",  state.get("city", "Toulon") or "Toulon")
         t = t.replace("{ville}", state.get("city", "Toulon") or "Toulon")
         t = t.replace("{genre}", str(genre))
+        lv = state.get("_loved") or {}
+        t = t.replace("{love_artist}", lv.get("artist") or "vous")
+        t = t.replace("{love_title}", lv.get("title") or "ce titre")
         return t
 
     fresh = [t for t in pool if phrase_hash(expand(t)) not in recent_hashes]
@@ -4347,7 +4377,7 @@ def pick_avoiding_recent(mode: str, track: dict, recent_hashes: set,
 
 
 def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
-                festival_direction: str, track: dict) -> str:
+                festival_direction: str, track: dict, has_loved: bool = False) -> str:
     """Context-aware mode selection with probability modifiers."""
     has_artist = bool(track.get("artist") and track.get("title"))
 
@@ -4375,6 +4405,8 @@ def select_mode(energy: int, stage: str, tod: str, weather_mood: str,
     candidates.append((0.06, "lore_festival"))
     candidates.append((0.06, "humor"))
     candidates.append((0.05, "city"))
+    if has_loved:
+        candidates.append((0.08, "vote_love"))   # coup de cœur communauté (réactif aux ENCORE)
 
     # Festival direction transitions
     if festival_direction == "build_up" and energy >= 3:
@@ -4461,8 +4493,12 @@ def generate(body: dict = None, force: bool = False):
     genre = (music_profile.get("genre") or track.get("genre_top1", "")) if track else ""
     bpm   = music_profile.get("bpm") or track.get("bpm", 0)
 
+    # Coups de cœur communauté : titre le plus soutenu (lore réactif aux votes ENCORE)
+    loved = fetch_loved(conn)
+    state["_loved"] = loved or {}
+
     # Select mode contextually
-    mode = select_mode(energy, stage, tod, weather_mood, festival_dir, track)
+    mode = select_mode(energy, stage, tod, weather_mood, festival_dir, track, bool(loved))
 
     # Bible mapping: mode-specific emotion/segment first, energy/stage as fallback
     emotion      = MODE_EMOTION.get(mode) or ENERGY_EMOTION.get(energy, "playful")
