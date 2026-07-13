@@ -1653,7 +1653,11 @@ DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 # de la sélection. 11h couvre toute la journée de travail (8h-18h) avec marge →
 # aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
 # est assez grand pour remplir la journée (~150 titres pour 10h).
-NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "11"))
+NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "6"))
+# Fenêtre anti-répétition RACCOURCIE pour les titres BOOSTÉS (ENCORE ≥ seuil) : les
+# pépites que le chef/auditeurs soutiennent reviennent plus souvent (toutes les ~2h
+# au lieu de 6h) → l'antenne penche vers les bangers votés au lieu du random dilué.
+BOOST_NO_REPEAT_HOURS = float(os.environ.get("BOOST_NO_REPEAT_HOURS", "2"))
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
@@ -1664,6 +1668,10 @@ REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
 VOTE_SKIP_THRESHOLD   = float(os.environ.get("VOTE_SKIP_THRESHOLD", "-0.25"))
 VOTE_ENCORE_THRESHOLD = float(os.environ.get("VOTE_ENCORE_THRESHOLD", "0.25"))
 VOTE_WINDOW_DAYS      = int(os.environ.get("VOTE_WINDOW_DAYS", "14"))
+# REVIEW n'est plus une pile manuelle (le chef ne l'arbitre plus) : il compte comme
+# soft-négatif dans le score. Gentil (un REVIEW seul ne quarantaine pas), mais REVIEW +
+# SKIP fait basculer. Neutralisable (=0.0) ou ajustable par env.
+VOTE_REVIEW_VALUE     = float(os.environ.get("VOTE_REVIEW_VALUE", "-0.5"))
 # Garde-fou anti-dur en JOURNÉE par mots-clés de TITRE : rattrape les titres durs
 # mal tagués (ex. bootleg hardstyle classé « Electro House/festival », « Bass Boosted »)
 # que le filtre par genre laisse passer. Appliqué seulement aux moods jour.
@@ -1677,7 +1685,7 @@ HARD_TITLE_RE = os.environ.get("HARD_TITLE_RE",
 # Dossiers des stations thématiques (chill/phonk/synthwave/hard/lofi) : leur contenu
 # appartient à CES scènes, jamais à la Mainstage — même si l'analyzer les tague
 # festival/energique. Sinon phonk/synthwave bavent sur la Mainstage.
-SCENE_PATH_RE = os.environ.get("SCENE_PATH_RE", r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|phonk2)/|/gaiverland_[a-z0-9]+/media/)")
+SCENE_PATH_RE = os.environ.get("SCENE_PATH_RE", r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|phonk2)/|/bien-francais/|/gaiverland_[a-z0-9]+/media/)")
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
@@ -1734,7 +1742,8 @@ _DEFAULT_GENRE_WHITELIST = (
     "Makina,Donk,Hands Up,Dubstep,Drum and Bass,Drum n Bass,DnB,"
     "Electro House,Big Room,Progressive,Synthwave,Industrial,Industrial Techno,"
     "Electronica,Ambient Electronic,Future Bass,Bass House,Tech House,"
-    "Deep House,Tribal,Trance,Psy-Trance,Goa,Breakbeat,UK Garage,Speed Garage"
+    "Deep House,Tribal,Trance,Psy-Trance,Goa,Breakbeat,UK Garage,Speed Garage,"
+    "Bassline,Nu-Disco,Electro,Future House,Bass,Euro House,Italodance,Bounce,Disco"
 )
 
 GENRE_WHITELIST: list[str] = [
@@ -1742,6 +1751,20 @@ GENRE_WHITELIST: list[str] = [
     for g in os.environ.get("GENRE_WHITELIST", _DEFAULT_GENRE_WHITELIST).split(",")
     if g.strip()
 ]
+
+# Promotion Forza : au JOUR, on ré-inclut les titres tagués 'melodique' qui sont en
+# réalité de la house/electro qui PÈTE (grosse énergie + genre dansant), et PAS le
+# deep/progressive/melodic-techno mou qu'on a volontairement exclu. Élargit le vivier
+# jour (~x1,6) sans importer et sans ramener le mou. Genres = sous-ensemble punchy.
+FORZA_PROMOTE_GENRES: list[str] = [
+    g.strip()
+    for g in os.environ.get("FORZA_PROMOTE_GENRES",
+        "House,Electro House,Tech House,Big Room,Future House,Bass House,Bass,"
+        "Electro,Bassline,Nu-Disco,Bounce,Donk,Hands Up,Euro House,Italodance,Makina"
+    ).split(",")
+    if g.strip()
+]
+FORZA_PROMOTE_ENERGY = float(os.environ.get("FORZA_PROMOTE_ENERGY", "0.95"))
 
 
 def get_excluded_genres() -> list:
@@ -2114,11 +2137,11 @@ def vote_scores_debug(limit: int = 100):
     rows = []
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT t.id, t.artist, t.title,
-                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0))::numeric, 3) AS score,
+                   round((0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                        + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                        + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0))::numeric, 3) AS score,
                    count(*) AS votes
                 FROM tracks t JOIN votes v ON v.song_id = t.song_id
                 WHERE t.song_id IS NOT NULL
@@ -2158,6 +2181,12 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
         """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
+        # Fenêtre courte pour les boostés : un titre ENCORE peut revenir après 2h.
+        cur.execute("""
+            SELECT track_id FROM play_history
+            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        """, (BOOST_NO_REPEAT_HOURS,))
+        recent_ids_boost = {r["track_id"] for r in cur.fetchall()}
 
     # --- Effet des votes (spec Cassy) : score net pondéré Bible sur 14 j ---
     #  SKIP net ≤ -0.4 → quarantaine jour ; ENCORE ≥ +0.4 → boost fréquence.
@@ -2165,11 +2194,11 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     vote_scores = {}
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT t.id AS id,
-                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0)
-                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 ELSE 0.0 END) END),0) AS score
+                   0.6*COALESCE(avg(CASE WHEN v.user_role='founder'   THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                 + 0.3*COALESCE(avg(CASE WHEN v.user_role='user'      THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0)
+                 + 0.1*COALESCE(avg(CASE WHEN v.user_role='system_ai' THEN (CASE v.vote WHEN 'ENCORE' THEN 1.0 WHEN 'SKIP' THEN -1.0 WHEN 'REVIEW' THEN {VOTE_REVIEW_VALUE:.3f} ELSE 0.0 END) END),0) AS score
                 FROM tracks t JOIN votes v ON v.song_id = t.song_id
                 WHERE t.song_id IS NOT NULL
                   AND v.created_at > NOW() - (%s * INTERVAL '1 day')
@@ -2205,7 +2234,10 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
                    key_note, key_scale
             FROM tracks
-            WHERE analyzed=TRUE AND mood = ANY(%s) AND id != ALL(%s)
+            WHERE analyzed=TRUE
+              AND ( mood = ANY(%s)
+                    OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
+              AND id != ALL(%s)
               AND file_path NOT LIKE %s
               AND file_path !~ %s
               AND genre_top1 IS NOT NULL
@@ -2213,7 +2245,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 = ANY(%s)
               AND (NOT %s OR title !~* %s)
             ORDER BY RANDOM() LIMIT %s
-        """, (candidate_moods, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
+        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -2221,19 +2253,21 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
     if encored:
         already = {c["id"] for c in candidates}
-        boost_ids = [tid for tid in encored if tid not in already and tid not in set(recent_ids)]
+        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost]
         if boost_ids:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
                            key_note, key_scale
                     FROM tracks
-                    WHERE id = ANY(%s) AND analyzed=TRUE AND mood = ANY(%s)
+                    WHERE id = ANY(%s) AND analyzed=TRUE
+                      AND ( mood = ANY(%s)
+                            OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
                       AND file_path NOT LIKE %s
                       AND file_path !~ %s
                       AND genre_top1 = ANY(%s)
                       AND (NOT %s OR title !~* %s)
-                """, (boost_ids, candidate_moods, '%rebexis_%', SCENE_PATH_RE, GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
+                """, (boost_ids, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, '%rebexis_%', SCENE_PATH_RE, GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
                 candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
@@ -2246,13 +2280,14 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                        key_note, key_scale
                 FROM tracks WHERE analyzed=TRUE AND file_path NOT LIKE %s
                   AND file_path !~ %s
-                  AND mood = ANY(%s)
+                  AND ( mood = ANY(%s)
+                        OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
                   AND genre_top1 IS NOT NULL
                   AND genre_top1 != ALL(%s)
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY RANDOM() LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
@@ -3638,6 +3673,20 @@ import os, re, json, urllib.request, urllib.parse, psycopg2, psycopg2.extras as 
 ACCEPT_GENRES={'dance','electronic','house','techno','trance','dubstep','drum & bass','drum and bass',
   'edm','electro','dance/electronic','breakbeat','garage','ambient','downtempo','nu disco','disco',
   'hardstyle','hardcore','hard dance','future bass','bass','trap','electronica'}
+# Empreinte musique IA / stock / library de fond → rejet MÊME si le genre est électro
+# (une pochette IA « Progressive House Anthem » se fait taguer House et passait le filtre).
+# ⚠️ RÈGLE CHEF (11/07) : NE PAS rejeter sur « no copyright »/« NCS » ni « free download » —
+# NoCopyrightSounds = classiques electro d'internet (Cartoon, Tobu, Elektronomia…) et plein
+# d'edits/bootlegs de DJ légitimes sont en free download. Le marqueur de déchet = l'empreinte
+# library/stock/IA (titres descriptifs génériques, chaînes de stock, gabarits), PAS le libre de droits.
+STOCK_RE=re.compile(
+  r'background music|royalty[ -]?free|ableton template|progressive house anthem'
+  r'|emotional (edm|progressive) anthem|driving techno|stream the vibes|click buy'
+  r'|uplifting (background|corporate)|no\.?\s*copyright\s*(background|music library)'
+  r'|\b(ashamaluevmusic|aivora|ceamusic|odaystar|cyber beat lab|infinite music vault'
+  r'|we make dance music|aky anife|q-?bale|lyvn fade|encourage recordings)\b', re.I)
+def looks_stock(*parts):
+    return bool(STOCK_RE.search(" ".join(p for p in parts if p)))
 def _get(url):
     return json.load(urllib.request.urlopen(url, timeout=10))
 def genre_lookup(q):
@@ -3673,13 +3722,18 @@ def main():
         cur.execute("SELECT 1 FROM proposal_decisions WHERE title=%s",(p['title'],))
         if cur.fetchone(): skip+=1; continue
         g,artist,canon=genre_lookup(p['title'])
-        verdict='accept' if (g and g.lower() in ACCEPT_GENRES) else 'reject'
+        if looks_stock(p['title'], artist, canon):
+            verdict='reject'; reason='IA/stock'
+        elif g and g.lower() in ACCEPT_GENRES:
+            verdict='accept'; reason=g
+        else:
+            verdict='reject'; reason=g or 'genre inconnu'
         cur.execute("""INSERT INTO proposal_decisions (title,verdict,genre,artist,canon_title,votes)
                        VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (title) DO NOTHING""",
                     (p['title'],verdict,g,artist,canon,p['votes']))
         if verdict=='accept': accepted.append(f"{artist} - {canon}"); na+=1
         else: nr+=1
-        print(f"{'✅ ACCEPT' if verdict=='accept' else '🚫 reject'} [{g}] ({p['votes']} votes)  {p['title']}")
+        print(f"{'✅ ACCEPT' if verdict=='accept' else '🚫 reject'} [{reason}] ({p['votes']} votes)  {p['title']}")
     c.commit()
     print(f"=== {na} acceptés, {nr} rejetés, {skip} déjà décidés ===")
     if accepted:
@@ -4978,6 +5032,22 @@ STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091
 
 ROLE_WEIGHTS = {"founder": 0.6, "user": 0.3, "system_ai": 0.1}
 VALID_VOTES  = {"ENCORE", "REVIEW", "SKIP"}
+# Empreintes OAuth du fondateur (sha256("provider:sub")[:32]). Le front code le rôle en dur
+# à "user" (gcs_web l.520) ; on reconnaît le patron ici, au niveau du service = autoritaire.
+# Le chef vote avec 3 comptes : son Google, son Discord, le Google Gaiverland.
+FOUNDER_IDS = {f.strip() for f in os.environ.get("FOUNDER_IDS",
+    "e49e9b4f66961841181c2fa7751fdabc,bc29f0601314241ebd7a6974a8541f88,2194b5b1bd76539a5aac0dd5fb314f25"
+    ).split(",") if f.strip()}
+
+# --- Skip démocratique : ≥ SKIP_VOTE_RATIO des auditeurs votent SKIP sur le titre
+#     EN COURS → on passe automatiquement (POST AzuraCast backend/skip). ---
+AZ_URL       = os.environ.get("AZURACAST_URL", "http://azuracast:80")
+AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
+AZ_STATION   = os.environ.get("AZURACAST_STATION_ID", "1")
+AZ_SHORTCODE = os.environ.get("AZURACAST_SHORTCODE", "gaiverlandradio")
+SKIP_VOTE_RATIO    = float(os.environ.get("SKIP_VOTE_RATIO", "0.5"))   # 50% par défaut
+SKIP_MIN_LISTENERS = int(os.environ.get("SKIP_MIN_LISTENERS", "3"))    # pas de skip démocratique sous une VRAIE audience (1-2 auditeurs = curation suffit)
+SKIP_MIN_VOTES     = int(os.environ.get("SKIP_MIN_VOTES", "2"))        # jamais un skip sur une seule voix, quel que soit le ratio
 
 app = FastAPI(title="GCS Vote Service")
 
@@ -5008,8 +5078,55 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_song ON votes(song_id)")
+        # Migration : identité du votant (pour le skip démocratique 1 identité = 1 voix)
+        cur.execute("ALTER TABLE votes ADD COLUMN IF NOT EXISTS user_id VARCHAR(64)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_votes_skip ON votes(song_id, vote, created_at)")
     conn.commit()
     conn.close()
+
+
+def _democratic_skip(song_id: str, conn) -> dict:
+    """Passe le titre EN COURS si ≥ SKIP_VOTE_RATIO des auditeurs ont voté SKIP dessus."""
+    import urllib.request, json, math
+    try:
+        with urllib.request.urlopen(f"{AZ_URL}/api/nowplaying/{AZ_SHORTCODE}", timeout=5) as r:
+            np = json.load(r)
+    except Exception as e:
+        return {"skipped": False, "reason": f"nowplaying err: {e}"}
+    npn    = np.get("now_playing") or {}
+    cur_id = (npn.get("song") or {}).get("id")
+    if cur_id != song_id:
+        return {"skipped": False, "reason": "vote sur un titre plus en cours"}
+    listeners = int((np.get("listeners") or {}).get("current", 0) or 0)
+    if listeners < SKIP_MIN_LISTENERS:
+        return {"skipped": False, "reason": "trop peu d'auditeurs", "listeners": listeners}
+    # Garde-fou pépite : un titre ENCORE-é par le fondateur (net positif 14j) est inskippable démocratiquement.
+    with conn.cursor() as cur:
+        cur.execute("""SELECT COUNT(*) FILTER (WHERE vote='ENCORE') AS enc,
+                              COUNT(*) FILTER (WHERE vote='SKIP')   AS skp
+                       FROM votes WHERE song_id=%s AND user_role='founder'
+                         AND created_at >= NOW() - INTERVAL '14 days'""", (song_id,))
+        f = cur.fetchone()
+    if (f["enc"] or 0) > (f["skp"] or 0):
+        return {"skipped": False, "reason": "pépite protégée (ENCORE fondateur)", "listeners": listeners}
+    started = npn.get("played_at", 0)
+    with conn.cursor() as cur:
+        cur.execute("""SELECT COUNT(DISTINCT user_id) AS n FROM votes
+                       WHERE song_id=%s AND vote='SKIP' AND user_id IS NOT NULL
+                         AND created_at >= to_timestamp(%s)""", (song_id, started))
+        skips = cur.fetchone()["n"]
+    needed = max(SKIP_MIN_VOTES, math.ceil(SKIP_VOTE_RATIO * listeners))
+    if skips >= needed:
+        try:
+            req = urllib.request.Request(
+                f"{AZ_URL}/api/station/{AZ_STATION}/backend/skip",
+                method="POST", headers={"X-API-Key": AZ_KEY})
+            urllib.request.urlopen(req, timeout=5).read()
+            print(f"  ⏭ SKIP DÉMOCRATIQUE : {skips}/{listeners} auditeurs → titre passé")
+            return {"skipped": True, "skips": skips, "listeners": listeners}
+        except Exception as e:
+            return {"skipped": False, "reason": f"skip API: {e}", "skips": skips, "listeners": listeners}
+    return {"skipped": False, "skips": skips, "listeners": listeners, "needed": needed}
 
 
 def compute_score(song_id: str, conn) -> float:
@@ -5038,18 +5155,29 @@ def cast_vote(body: dict):
     song_id   = body.get("song_id", "").strip()
     vote      = body.get("vote", "").upper()
     user_role = body.get("user_role", "user")
+    user_id   = (body.get("user_id") or "").strip() or None
     if not song_id:
         raise HTTPException(400, "song_id required")
     if vote not in VALID_VOTES:
         raise HTTPException(400, f"vote must be one of {VALID_VOTES}")
     if user_role not in ROLE_WEIGHTS:
         user_role = "user"
+    # Autorité serveur : le fondateur est reconnu à son empreinte, quoi que déclare le front.
+    if user_id and user_id in FOUNDER_IDS:
+        user_role = "founder"
     weight = ROLE_WEIGHTS[user_role]
     conn   = get_conn()
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight) VALUES (%s,%s,%s,%s)",
-                    (song_id, vote, user_role, weight))
+        cur.execute("INSERT INTO votes (song_id,vote,user_role,user_weight,user_id) VALUES (%s,%s,%s,%s,%s)",
+                    (song_id, vote, user_role, weight, user_id))
     conn.commit()
+    # Skip démocratique : sur un SKIP, on regarde si le seuil d'auditeurs est atteint
+    skip = {"skipped": False}
+    if vote == "SKIP":
+        try:
+            skip = _democratic_skip(song_id, conn)
+        except Exception as e:
+            print("  skip check err:", e)
     score = compute_score(song_id, conn)
     with conn.cursor() as cur:
         cur.execute("""
@@ -5060,8 +5188,8 @@ def cast_vote(body: dict):
         """, (song_id, score))
     conn.commit()
     conn.close()
-    print(f"  ✓ vote [{user_role}] {vote} score={score}")
-    return {"ok": True, "song_id": song_id, "vote": vote, "score": score}
+    print(f"  ✓ vote [{user_role}] {vote} score={score} skip={skip.get('skipped')}")
+    return {"ok": True, "song_id": song_id, "vote": vote, "score": score, "skip": skip}
 
 
 @app.get("/track/{song_id}/score")
