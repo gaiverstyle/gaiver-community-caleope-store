@@ -158,12 +158,15 @@ def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
     # ytsearch5 + filtre durée : on écarte les résultats hors 45s–15min (compilations
     # « 12 HOURS », mixes, clips vides) et on prend le PREMIER titre valide (--max-downloads 1).
     # Sans ça, ytsearch1 peut ramener une compilation de plusieurs heures = disque plein + analyzer étranglé.
+    # Requête « official audio » : biaise YouTube vers les canaux « Artiste - Topic » (audio officiel
+    # propre, sans intro/voix de clip vidéo) — cf demande chef « bruits relou de clip ». Le filtre durée
+    # + ytsearch5 garantissent qu'on trouve quand même un résultat si aucun officiel n'existe.
     cmd = ["yt-dlp", "--cookies", COOKIES, "-f", "bestaudio",
            "-x", "--audio-format", "mp3", "--audio-quality", "0",
            "--no-playlist", "--embed-metadata", "--no-progress",
            "--match-filter", "duration<=900 & duration>=45",
            "--max-downloads", "1",
-           "-o", out, f"ytsearch5:{query} audio"]
+           "-o", out, f"ytsearch5:{query} official audio"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         blob = (r.stdout or "") + (r.stderr or "")
