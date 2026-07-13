@@ -30,7 +30,8 @@ AZ_KEY       = os.environ.get("AZURACAST_API_KEY", "")
 AZ_STATION   = os.environ.get("AZURACAST_STATION_ID", "1")
 AZ_SHORTCODE = os.environ.get("AZURACAST_SHORTCODE", "gaiverlandradio")
 SKIP_VOTE_RATIO    = float(os.environ.get("SKIP_VOTE_RATIO", "0.5"))   # 50% par défaut
-SKIP_MIN_LISTENERS = int(os.environ.get("SKIP_MIN_LISTENERS", "1"))    # garde-fou mini auditeurs
+SKIP_MIN_LISTENERS = int(os.environ.get("SKIP_MIN_LISTENERS", "3"))    # pas de skip démocratique sous une VRAIE audience (1-2 auditeurs = curation suffit)
+SKIP_MIN_VOTES     = int(os.environ.get("SKIP_MIN_VOTES", "2"))        # jamais un skip sur une seule voix, quel que soit le ratio
 
 app = FastAPI(title="GCS Vote Service")
 
@@ -83,13 +84,22 @@ def _democratic_skip(song_id: str, conn) -> dict:
     listeners = int((np.get("listeners") or {}).get("current", 0) or 0)
     if listeners < SKIP_MIN_LISTENERS:
         return {"skipped": False, "reason": "trop peu d'auditeurs", "listeners": listeners}
+    # Garde-fou pépite : un titre ENCORE-é par le fondateur (net positif 14j) est inskippable démocratiquement.
+    with conn.cursor() as cur:
+        cur.execute("""SELECT COUNT(*) FILTER (WHERE vote='ENCORE') AS enc,
+                              COUNT(*) FILTER (WHERE vote='SKIP')   AS skp
+                       FROM votes WHERE song_id=%s AND user_role='founder'
+                         AND created_at >= NOW() - INTERVAL '14 days'""", (song_id,))
+        f = cur.fetchone()
+    if (f["enc"] or 0) > (f["skp"] or 0):
+        return {"skipped": False, "reason": "pépite protégée (ENCORE fondateur)", "listeners": listeners}
     started = npn.get("played_at", 0)
     with conn.cursor() as cur:
         cur.execute("""SELECT COUNT(DISTINCT user_id) AS n FROM votes
                        WHERE song_id=%s AND vote='SKIP' AND user_id IS NOT NULL
                          AND created_at >= to_timestamp(%s)""", (song_id, started))
         skips = cur.fetchone()["n"]
-    needed = math.ceil(SKIP_VOTE_RATIO * listeners)
+    needed = max(SKIP_MIN_VOTES, math.ceil(SKIP_VOTE_RATIO * listeners))
     if skips >= needed:
         try:
             req = urllib.request.Request(
