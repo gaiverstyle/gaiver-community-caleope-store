@@ -31,6 +31,10 @@ DISCOVERY_RATIO = float(os.environ.get("DISCOVERY_RATIO", "20")) / 100
 # aucun titre ne repasse deux fois entre 8h et 18h, tant que le stock éligible
 # est assez grand pour remplir la journée (~150 titres pour 10h).
 NO_REPEAT_HOURS = float(os.environ.get("NO_REPEAT_HOURS", "6"))
+# Fenêtre anti-répétition RACCOURCIE pour les titres BOOSTÉS (ENCORE ≥ seuil) : les
+# pépites que le chef/auditeurs soutiennent reviennent plus souvent (toutes les ~2h
+# au lieu de 6h) → l'antenne penche vers les bangers votés au lieu du random dilué.
+BOOST_NO_REPEAT_HOURS = float(os.environ.get("BOOST_NO_REPEAT_HOURS", "2"))
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
@@ -554,6 +558,12 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
         """, (NO_REPEAT_HOURS,))
         recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
+        # Fenêtre courte pour les boostés : un titre ENCORE peut revenir après 2h.
+        cur.execute("""
+            SELECT track_id FROM play_history
+            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        """, (BOOST_NO_REPEAT_HOURS,))
+        recent_ids_boost = {r["track_id"] for r in cur.fetchall()}
 
     # --- Effet des votes (spec Cassy) : score net pondéré Bible sur 14 j ---
     #  SKIP net ≤ -0.4 → quarantaine jour ; ENCORE ≥ +0.4 → boost fréquence.
@@ -620,7 +630,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     # respectée : on écarte ceux joués récemment). Ils restent bornés au thème jour.
     if encored:
         already = {c["id"] for c in candidates}
-        boost_ids = [tid for tid in encored if tid not in already and tid not in set(recent_ids)]
+        boost_ids = [tid for tid in encored if tid not in already and tid not in recent_ids_boost]
         if boost_ids:
             with conn.cursor() as cur:
                 cur.execute("""
