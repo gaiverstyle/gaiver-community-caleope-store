@@ -44,8 +44,7 @@ SCENE_DIR = {
 PER_ARTIST      = int(os.environ.get("DISCOVER_PER_ARTIST", "2"))    # nouveaux titres max / artiste / passe
 PER_SCENE       = int(os.environ.get("DISCOVER_PER_SCENE", "8"))     # plafond / scène / passe
 CANDIDATES      = int(os.environ.get("DISCOVER_CANDIDATES", "6"))    # combien de résultats SC on inspecte / artiste
-DUR_TOL         = float(os.environ.get("DISCOVER_DUR_TOL", "0.25"))  # tolérance durée vs original (±25 %)
-DUR_MIN_ABS     = int(os.environ.get("DISCOVER_DUR_MIN_ABS", "30"))  # ou ±30 s si l'écart absolu est petit
+DUR_SHORT_FLOOR = float(os.environ.get("DISCOVER_DUR_SHORT_FLOOR", "0.6"))  # < 60 % de l'original = extrait → rejet
 JS_RUNTIME      = os.environ.get("DISCOVER_JS_RUNTIME", "")          # ex "node" pour YT
 COOKIES         = os.environ.get("YT_COOKIES", "/cookies/youtube-cookies.txt")
 
@@ -164,11 +163,21 @@ def sc_candidates(artist: str, n: int) -> list:
 
 
 def dur_ok(got: float, original: float) -> bool:
-    """Durée téléchargée cohérente avec l'original (anti extrait / mix / sped-up)."""
+    """Anti-EXTRAIT : le but (consigne du chef) est d'éviter les clips/previews de 60-90 s,
+    pas d'imposer une version. Deux versions complètes du même titre (radio 3:12 vs extended
+    5:04) sont TOUTES DEUX valides — l'API officielle liste souvent l'extended alors que la
+    source a la radio edit, donc on ne rejette PAS un écart 'plus long/plus court raisonnable'.
+    On rejette seulement : nettement plus court que l'original (= extrait), ou démesurément
+    long (= compil/loop 1 h avalée par erreur)."""
+    if got <= 0:
+        return False
     if original <= 0:
-        return 60 <= got <= 600   # pas de réf officielle → au moins une durée de morceau plausible
-    diff = abs(got - original)
-    return diff <= DUR_MIN_ABS or diff <= original * DUR_TOL
+        return 60 <= got <= 600            # pas de réf officielle → durée de morceau plausible
+    if got < original * DUR_SHORT_FLOOR:   # nettement plus court = extrait/preview
+        return False
+    if got > original * 3 and got > 900:   # démesurément long = compil/loop, pas un titre
+        return False
+    return True
 
 
 def download(url: str, outdir: str, use_yt_runtime: bool = False) -> str:

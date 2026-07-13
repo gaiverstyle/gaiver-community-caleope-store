@@ -35,6 +35,7 @@ if [ -d "${SRC_DIR}/scripts" ]; then
     cp -f "${SRC_DIR}/scripts/"*.py "${SCRIPTS_DIR}/" 2>/dev/null || true
     # Config des stations thématiques (lue par le downloader + le moteur de rotation multi-station).
     cp -f "${SRC_DIR}/scripts/stations.json" "${SCRIPTS_DIR}/" 2>/dev/null || true
+    cp -f "${SRC_DIR}/scripts/watchlist.json" "${SCRIPTS_DIR}/" 2>/dev/null || true
     echo "  ✓ scripts .py + stations.json synchronisés depuis le store → app-config"
 fi
 
