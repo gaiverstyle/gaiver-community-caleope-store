@@ -154,6 +154,10 @@ FORZA_PROMOTE_GENRES: list[str] = [
     if g.strip()
 ]
 FORZA_PROMOTE_ENERGY = float(os.environ.get("FORZA_PROMOTE_ENERGY", "0.95"))
+# Plancher BPM de la promo melodique : le loudness (energy) seul laissait fuiter du deep/soulful
+# house MOU (≤120 BPM : Robin S, CeCe Peniston, Kings of Tomorrow…) sur le jour. Le BPM sépare
+# le mou (≤120) du melodic punchy Forza (122+). Resserrage demandé par le chef (option b).
+FORZA_PROMOTE_BPM = float(os.environ.get("FORZA_PROMOTE_BPM", "122"))
 
 
 def get_excluded_genres() -> list:
@@ -634,7 +638,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
             FROM tracks
             WHERE analyzed=TRUE
               AND ( mood = ANY(%s)
-                    OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
+                    OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s) AND bpm >= %s) )
               AND id != ALL(%s)
               AND file_path NOT LIKE %s
               AND file_path !~ %s
@@ -643,7 +647,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 = ANY(%s)
               AND (NOT %s OR title !~* %s)
             ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 4))
+        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -660,12 +664,12 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                     FROM tracks
                     WHERE id = ANY(%s) AND analyzed=TRUE
                       AND ( mood = ANY(%s)
-                            OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
+                            OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s) AND bpm >= %s) )
                       AND file_path NOT LIKE %s
                       AND file_path !~ %s
                       AND genre_top1 = ANY(%s)
                       AND (NOT %s OR title !~* %s)
-                """, (boost_ids, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, '%rebexis_%', SCENE_PATH_RE, GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
+                """, (boost_ids, candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, '%rebexis_%', SCENE_PATH_RE, GENRE_WHITELIST, day_mode, HARD_TITLE_RE))
                 candidates = list(cur.fetchall()) + candidates
 
     if not candidates:
@@ -680,13 +684,13 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   AND file_path !~ %s
                   AND id != ALL(%s)
                   AND ( mood = ANY(%s)
-                        OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s)) )
+                        OR (%s AND mood = 'melodique' AND energy >= %s AND genre_top1 = ANY(%s) AND bpm >= %s) )
                   AND genre_top1 IS NOT NULL
                   AND genre_top1 != ALL(%s)
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
             candidates = list(cur.fetchall())
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
