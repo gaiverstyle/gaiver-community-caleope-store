@@ -22,6 +22,12 @@ STATE_URL = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091
 
 ROLE_WEIGHTS = {"founder": 0.6, "user": 0.3, "system_ai": 0.1}
 VALID_VOTES  = {"ENCORE", "REVIEW", "SKIP"}
+# Empreintes OAuth du fondateur (sha256("provider:sub")[:32]). Le front code le rôle en dur
+# à "user" (gcs_web l.520) ; on reconnaît le patron ici, au niveau du service = autoritaire.
+# Le chef vote avec 3 comptes : son Google, son Discord, le Google Gaiverland.
+FOUNDER_IDS = {f.strip() for f in os.environ.get("FOUNDER_IDS",
+    "e49e9b4f66961841181c2fa7751fdabc,bc29f0601314241ebd7a6974a8541f88,2194b5b1bd76539a5aac0dd5fb314f25"
+    ).split(",") if f.strip()}
 
 # --- Skip démocratique : ≥ SKIP_VOTE_RATIO des auditeurs votent SKIP sur le titre
 #     EN COURS → on passe automatiquement (POST AzuraCast backend/skip). ---
@@ -146,6 +152,9 @@ def cast_vote(body: dict):
         raise HTTPException(400, f"vote must be one of {VALID_VOTES}")
     if user_role not in ROLE_WEIGHTS:
         user_role = "user"
+    # Autorité serveur : le fondateur est reconnu à son empreinte, quoi que déclare le front.
+    if user_id and user_id in FOUNDER_IDS:
+        user_role = "founder"
     weight = ROLE_WEIGHTS[user_role]
     conn   = get_conn()
     with conn.cursor() as cur:
