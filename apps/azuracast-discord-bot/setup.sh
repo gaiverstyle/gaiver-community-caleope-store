@@ -162,15 +162,42 @@ class RadioPlayer:
 
     # -- Lecture vocale -------------------------------------------------------
 
-    def _make_source(self, url: str) -> discord.FFmpegOpusAudio:
-        return discord.FFmpegOpusAudio(
+    def _make_source(self, url: str) -> discord.AudioSource:
+        """Source PCM enveloppée dans un PCMVolumeTransformer.
+
+        AVANT : FFmpegOpusAudio + `-filter:a volume=X` → le volume était CUIT dans le flux
+        Opus par ffmpeg, donc impossible à changer sans relancer tout le stream (d'où le
+        `/stop` + `/play` que le chef devait faire). En PCM, discord.py encode lui-même en
+        Opus et `PCMVolumeTransformer.volume` est réglable À CHAUD, sans coupure.
+        """
+        pcm = discord.FFmpegPCMAudio(
             url,
             before_options=(
                 "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
                 "-analyzeduration 0 -loglevel warning"
             ),
-            options=f"-vn -filter:a volume={self.volume:.3f}",
+            options="-vn",
         )
+        return discord.PCMVolumeTransformer(pcm, volume=self.volume)
+
+    async def _make_source_async(self, url: str) -> discord.AudioSource:
+        """Créer la source lance un PROCESSUS ffmpeg — appel BLOQUANT.
+
+        Le faire dans la boucle asyncio la gelait plusieurs secondes sur une machine
+        chargée → le bot ratait la fenêtre de 3 s imposée par Discord pour accuser
+        réception, d'où les « 404 Unknown interaction (10062) » sur /play, /volume et
+        /station. On le fait donc dans un thread : la boucle reste réactive.
+        """
+        return await asyncio.to_thread(self._make_source, url)
+
+    def set_volume_live(self, vol: float) -> bool:
+        """Règle le volume SANS relancer le flux. False si la source ne le permet pas."""
+        self.volume = vol
+        src = self.voice_client.source if self.voice_client else None
+        if isinstance(src, discord.PCMVolumeTransformer):
+            src.volume = vol
+            return True
+        return False
 
     async def play(self, channel: discord.VoiceChannel) -> tuple[bool, str]:
         stream_url = await self.fetch_stream_url()
@@ -186,7 +213,7 @@ class RadioPlayer:
         if self.voice_client.is_playing():
             self.voice_client.stop()
 
-        source = self._make_source(stream_url)
+        source = await self._make_source_async(stream_url)
         self.voice_client.play(source, after=self._after)
         return True, stream_url
 
@@ -210,7 +237,7 @@ class RadioPlayer:
             self.voice_client.stop()
         stream_url = await self.fetch_stream_url()
         if stream_url:
-            source = self._make_source(stream_url)
+            source = await self._make_source_async(stream_url)
             self.voice_client.play(source, after=self._after)
 
     async def set_station(self, station: str) -> bool:
@@ -244,7 +271,7 @@ class RadioPlayer:
                         break
                     await asyncio.sleep(0.05)
             try:
-                self.voice_client.play(self._make_source(url), after=self._after)
+                self.voice_client.play(await self._make_source_async(url), after=self._after)
             except Exception as exc:
                 self.station = previous
                 log.error("Relance du flux sur %s échouée : %s", station, exc)
@@ -512,11 +539,18 @@ async def cmd_stop(interaction: discord.Interaction):
 @radio_group.command(name="volume", description="Règle le volume (0 à 200 %)")
 @app_commands.describe(niveau="Volume en % — 100 = normal, 200 = amplifié ×2")
 async def cmd_volume(interaction: discord.Interaction, niveau: int):
-    niveau = max(0, min(200, niveau))
-    player.volume = niveau / 100.0
+    # defer() EN PREMIER, avant tout travail : Discord n'accorde que 3 s pour l'accusé de
+    # réception. Chaque seconde brûlée avant = risque de « Unknown interaction » (10062).
     await interaction.response.defer()
-    await player.restart_with_volume()
-    await interaction.followup.send(f"🔊 Volume : **{niveau} %**")
+    niveau = max(0, min(200, niveau))
+    if player.set_volume_live(niveau / 100.0):          # à chaud, aucune coupure
+        await interaction.followup.send(f"🔊 Volume : **{niveau} %** (appliqué en direct)")
+        return
+    if player.is_playing:                               # repli : ancienne source → relance
+        await player.restart_with_volume()
+        await interaction.followup.send(f"🔊 Volume : **{niveau} %** (flux relancé)")
+        return
+    await interaction.followup.send(f"🔊 Volume : **{niveau} %** (effectif au prochain `/radio play`)")
 
 
 @radio_group.command(name="np", description="Affiche le titre en cours sur la radio")
