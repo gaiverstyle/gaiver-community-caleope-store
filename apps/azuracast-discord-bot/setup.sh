@@ -407,7 +407,19 @@ np_tracker = NowPlayingTracker()
 @bot.event
 async def on_ready():
     log.info("Connecté : %s (id %s)", bot.user, bot.user.id)
-    await bot.tree.sync()
+    # Sync PAR SERVEUR (instantané) et pas seulement en global.
+    # `tree.sync()` global : Discord met jusqu'à 1 H à propager → le client affiche
+    # « Cette commande est obsolète » et l'autocomplétion d'une commande fraîchement
+    # ajoutée ne remonte pas. Les commandes de guilde, elles, sont actives tout de suite
+    # et MASQUENT les globales de même nom (pas de doublon).
+    for g in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=g)
+            await bot.tree.sync(guild=g)
+            log.info("Commandes synchronisées sur « %s » (instantané)", g.name)
+        except Exception as exc:
+            log.warning("Sync guilde %s échouée : %s", g.name, exc)
+    await bot.tree.sync()          # global aussi : utile si le bot rejoint un autre serveur
     log.info("Slash commands synchronisées")
 
     if AUTO_CHANNEL_ID:
