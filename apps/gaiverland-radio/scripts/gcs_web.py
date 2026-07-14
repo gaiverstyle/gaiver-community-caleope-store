@@ -721,6 +721,15 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .stage{border-radius:14px;padding:18px 14px;text-align:center;position:relative;
   border:1px dashed rgba(255,244,230,.35)}
 .stage.on{border:1px solid rgba(255,244,230,.5);background:rgba(255,244,230,.1)}
+/* Bouton « copier le lien mp3 » : coin de la tuile, discret, se révèle au survol.
+   Toujours visible au doigt (pas de :hover sur mobile) → opacité de base non nulle. */
+.cp{position:absolute;top:6px;right:6px;border:0;border-radius:8px;cursor:pointer;
+    background:rgba(255,244,230,.12);color:#fff4e6;font-size:12px;line-height:1;
+    padding:5px 6px;opacity:.35;transition:opacity .15s,background .15s}
+.stage:hover .cp{opacity:.9}
+.cp:hover{background:rgba(255,244,230,.28)}
+.cp.ok{opacity:1;background:#2ecc71;color:#08210f}
+@media(hover:none){.cp{opacity:.75}}
 .stage .ico{font-size:30px}
 .stage .nm{margin-top:8px;font-size:16px}
 .stage .st{font-family:sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;
@@ -919,12 +928,12 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Les scènes</h2>
   <div class="stages">
-    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div></div>
-    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div></div>
-    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div></div>
-    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div></div>
-    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div></div>
-    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🌆</div><div class="nm">Synthwave</div><div class="st">Live</div></div>
+    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
+    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
+    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
+    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
+    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
+    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🌆</div><div class="nm">Synthwave</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
   </div>
 </div>
 
@@ -992,6 +1001,31 @@ const A=document.getElementById('player'), B=document.getElementById('player-b')
 // Kade a posé un lien mp3 same-origin par station → Web Audio lisible PARTOUT.
 const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3'};
 function waOK(st){ return !!ROUTE[st]; }             // toutes les stations = same-origin
+
+// ── Copier le lien mp3 d'une station (VLC, tel, partage) ──
+// stopPropagation : le bouton est DANS la tuile, sans ça un clic changerait de station.
+// clipboard.writeText exige HTTPS (ou localhost) → repli execCommand pour les autres cas.
+function copyLink(ev, st){
+  ev.stopPropagation();
+  const url = location.origin + (ROUTE[st] || '');
+  const btn = ev.currentTarget;
+  const done = ok => {
+    btn.textContent = ok ? '✓' : '✕';
+    btn.classList.toggle('ok', ok);
+    setTimeout(() => { btn.textContent = '🔗'; btn.classList.remove('ok'); }, 1400);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(url).then(() => done(true), () => done(false));
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    done(ok);
+  }
+}
 function AA(){ return waOK(curStation)?A:B; }        // élément actif (A = Web Audio)
 
 // ── Moteur audio (Web Audio) ──

@@ -61,6 +61,18 @@ log = logging.getLogger("radio-bot")
 DISCORD_TOKEN        = os.environ["DISCORD_TOKEN"]
 AZURACAST_URL        = os.environ["AZURACAST_URL"].rstrip("/")
 AZURACAST_STATION_ID = os.environ.get("AZURACAST_STATION_ID", "radio")
+
+# Liens mp3 publics par station — routes same-origin servies par le site Gaiverland.
+# (Le flux interne http://azuracast/... n'est PAS partageable : il n'existe que dans Docker.)
+PUBLIC_BASE = os.environ.get("GAIVERLAND_PUBLIC_URL", "https://gaiverland.gaiver-it.fr").rstrip("/")
+STATION_MP3 = {
+    "gaiverlandradio":      ("Mainstage",  "/live.mp3"),
+    "gaiverland_chill":     ("Chill",      "/chill.mp3"),
+    "gaiverland_hard":      ("Hard",       "/hard.mp3"),
+    "gaiverland_phonk":     ("Phonk",      "/phonk.mp3"),
+    "gaiverland_lofi":      ("Lo-fi",      "/lofi.mp3"),
+    "gaiverland_synthwave": ("Synthwave",  "/synthwave.mp3"),
+}
 AZURACAST_API_KEY    = os.environ.get("AZURACAST_API_KEY", "")
 STREAM_URL_ENV       = os.environ.get("STREAM_URL", "").strip()
 AUTO_CHANNEL_ID      = int(os.environ.get("AUTO_CHANNEL_ID", "0") or "0")
@@ -181,17 +193,45 @@ class RadioPlayer:
             self.voice_client.play(source, after=self._after)
 
     async def set_station(self, station: str) -> bool:
-        """Change la station courante et relance le flux en vocal si en écoute."""
+        """Change la station courante et relance le flux en vocal si en écoute.
+
+        L'ORDRE COMPTE. L'ancienne version faisait `self.station = station` en PREMIER,
+        puis tentait de relancer le flux. Si le bot n'était plus connecté au vocal (ça
+        arrive : coupure gateway + reconnexion), tout le bloc de relance était sauté et
+        la fonction renvoyait True quand même → le bot ANNONÇAIT la nouvelle station et
+        les votes/blacklist s'y appliquaient, alors que le SON restait l'ancien. C'est
+        comme ça qu'on blackliste un titre qu'on n'écoute pas (incident 14/07).
+        Désormais : on résout le flux d'ABORD, et on ne bascule l'état QUE si le son suit.
+        """
         if station == self.station:
             return True
-        self.station = station
+
+        previous, self.station = self.station, station
+        url = await self.fetch_stream_url()          # résout d'après self.station (la nouvelle)
+        if not url:
+            self.station = previous                  # rien n'a bougé → ne pas mentir sur l'état
+            log.warning("Station %s : flux introuvable → on reste sur %s", station, previous)
+            return False
+
         if self.voice_client and self.voice_client.is_connected():
             if self.voice_client.is_playing():
                 self.voice_client.stop()
-            url = await self.fetch_stream_url()
-            if not url:
+                # stop() n'est pas instantané : le thread lecteur doit rendre la main,
+                # sinon play() lève ClientException(« Already playing audio »).
+                for _ in range(20):
+                    if not self.voice_client.is_playing():
+                        break
+                    await asyncio.sleep(0.05)
+            try:
+                self.voice_client.play(self._make_source(url), after=self._after)
+            except Exception as exc:
+                self.station = previous
+                log.error("Relance du flux sur %s échouée : %s", station, exc)
                 return False
-            self.voice_client.play(self._make_source(url), after=self._after)
+            log.info("Station : %s → %s (%s)", previous, station, url)
+        else:
+            log.info("Station : %s → %s (hors vocal — effectif au prochain /radio play)",
+                     previous, station)
         return True
 
     @property
@@ -467,6 +507,20 @@ async def cmd_station(interaction: discord.Interaction, station: str):
     np = await player.fetch_now_playing()
     label = (np.get("station", {}).get("name") if np else None) or station
     await interaction.followup.send(f"📻 Station → **{label}**", embed=np_embed(np))
+
+
+@radio_group.command(name="liens", description="Les liens mp3 des stations — à coller dans VLC, le tel, ou à partager")
+async def cmd_liens(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embed = discord.Embed(
+        title="🔗 Liens des stations",
+        description="Colle-les dans VLC, un lecteur mobile, ou partage-les.",
+        color=0x8B5CF6,
+    )
+    for sc, (nm, path) in STATION_MP3.items():
+        ici = " ← en cours" if sc == player.station else ""
+        embed.add_field(name=f"{nm}{ici}", value=f"`{PUBLIC_BASE}{path}`", inline=False)
+    await interaction.followup.send(embed=embed)
 
 
 @cmd_station.autocomplete("station")

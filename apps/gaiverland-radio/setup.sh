@@ -1285,6 +1285,18 @@ import sys
 sys.path.insert(0, "/app")
 from az_utils import find_file_by_path, batch_assign_playlist
 
+# ── Silence du logger C++ d'Essentia ───────────────────────────────────────────
+# Les algos TensorflowPredict* émettent ~8 000 warnings « No network created... »
+# PAR FICHIER analysé (mesuré). Bénins fonctionnellement, mais à ce débit ils
+# saturent le démon Docker (json-log de 2,2 Go observé le 13/07 → dockerd à 380 %
+# de CPU → tout le LXC affamé, le bot Discord larguait le vocal). On coupe INFO et
+# WARNING d'Essentia ; les vraies erreurs Python continuent de remonter normalement.
+try:
+    essentia.log.warningActive = False
+    essentia.log.infoActive = False
+except Exception:
+    pass
+
 DB_URL = os.environ["DATABASE_URL"]
 AZ_KEY = os.environ.get("AZURACAST_API_KEY", "")
 WATCH_DIR = "/var/azuracast/stations"
@@ -1563,14 +1575,27 @@ def save_track(conn, data: dict):
         track_id = cur.fetchone()[0]
     conn.commit()
 
-    # Sync az_id depuis AzuraCast
+    # Sync az_id depuis AzuraCast.
+    # Plusieurs file_path peuvent viser le MÊME fichier AzuraCast (doublons hérités des
+    # migrations/ré-imports) → l'UPDATE violait `tracks_az_id_key` (contrainte unique) et
+    # l'exception remontait jusqu'à l'appelant, tuant tout le lot du backfill (1 seul titre
+    # drainé par cycle au lieu de 12, pendant des jours). La synchro az_id est un CONFORT :
+    # elle ne doit jamais faire échouer l'analyse. On n'écrit donc que si l'az_id est libre,
+    # et on avale l'échec proprement.
     if data.get("analyzed") and AZ_KEY:
-        az_file = find_file_by_path(data["file_path"])
-        if az_file:
-            az_id = az_file.get("id")
-            with conn.cursor() as cur:
-                cur.execute("UPDATE tracks SET az_id=%s WHERE id=%s", (az_id, track_id))
-            conn.commit()
+        try:
+            az_file = find_file_by_path(data["file_path"])
+            if az_file:
+                az_id = az_file.get("id")
+                with conn.cursor() as cur:
+                    cur.execute("""UPDATE tracks SET az_id=%s WHERE id=%s
+                                   AND NOT EXISTS (SELECT 1 FROM tracks t2
+                                                   WHERE t2.az_id=%s AND t2.id<>%s)""",
+                                (az_id, track_id, az_id, track_id))
+                conn.commit()
+        except Exception as eaz:
+            conn.rollback()
+            print(f"  ⚠ sync az_id ignorée ({os.path.basename(data['file_path'])}): {eaz}", flush=True)
 
     return track_id
 
@@ -1635,9 +1660,16 @@ def main():
                 # Reconstruire le chemin complet avec le dossier de l'event
                 event_dir = wd_to_dir.get(event.wd, WATCH_DIR)
                 fp = os.path.join(event_dir, name)
-                print(f"  → Nouveau : {fp}")
+                # AzuraCast réécrit les mp3 déjà en place (ReplayGain, métadonnées, pochette)
+                # → CLOSE_WRITE sur des titres DÉJÀ analysés. Sans ce garde-fou, chaque
+                # réécriture relançait une analyse Essentia complète (lourde) pour rien.
+                # Les vrais nouveaux fichiers, eux, ne sont pas dans `known`.
+                if fp in known:
+                    continue
+                print(f"  → Nouveau : {fp}", flush=True)
                 time.sleep(1)
                 save_track(conn, analyze_file(fp))
+                known.add(fp)
                 print(f"  ✓ Analysé : {name}")
 
         # Rescan périodique (nouveaux bacs thématiques + rattrapage)
@@ -1669,8 +1701,16 @@ def main():
 
             # ── Backfill vocalness : ré-analyse throttlée des titres analysés AVANT le
             # modèle voix (vocalness NULL). Petit lot par cycle → CPU tranquille, l'UPSERT
-            # met à jour la ligne existante. Fichier absent = orphelin → vocalness 0.0
-            # (neutre) pour le sortir du pool NULL et ne pas boucler dessus.
+            # met à jour la ligne existante.
+            #
+            # RÈGLE D'OR : un titre doit TOUJOURS sortir du pool NULL, quoi qu'il arrive.
+            # Sinon il est re-sélectionné à chaque cycle et ré-analysé indéfiniment (chaque
+            # analyse = du CPU + des milliers de lignes de log). C'était le cas : une erreur
+            # sur le 1er titre faisait sauter tout le lot (le try englobait la boucle), donc
+            # le même titre repassait toutes les 120 s… pendant 6 jours.
+            # Donc : (1) chaque titre est isolé dans son propre try — un échec n'emporte plus
+            # les autres ; (2) tout titre qui ne produit pas de vocalness exploitable (fichier
+            # absent, analyse ratée, modèle muet) est marqué 0.0 = neutre, et sort du pool.
             if _voice_model is not None:
                 try:
                     with conn.cursor() as cur:
@@ -1679,16 +1719,30 @@ def main():
                                        ORDER BY updated_at DESC NULLS LAST LIMIT %s""",
                                     (BACKFILL_BATCH,))
                         todo = [r[0] for r in cur.fetchall()]
-                    for fp in todo:
+                except Exception as eb:
+                    print(f"  ⚠ backfill vocalness (sélection): {eb}", flush=True)
+                    todo = []
+
+                for fp in todo:
+                    got = None
+                    try:
                         if os.path.exists(fp):
                             print(f"  → (backfill vocalness) {os.path.basename(fp)}", flush=True)
-                            save_track(conn, analyze_file(fp))
-                        else:
+                            data = analyze_file(fp)
+                            if data.get("analyzed"):
+                                save_track(conn, data)
+                                got = data.get("vocalness")
+                    except Exception as eb:
+                        conn.rollback()
+                        print(f"  ⚠ backfill vocalness ({os.path.basename(fp)}): {eb}", flush=True)
+
+                    if got is None:   # fichier absent, analyse ratée ou modèle muet → neutre
+                        try:
                             with conn.cursor() as cur:
                                 cur.execute("UPDATE tracks SET vocalness=0.0 WHERE file_path=%s", (fp,))
                             conn.commit()
-                except Exception as eb:
-                    print(f"  ⚠ backfill vocalness: {eb}", flush=True)
+                        except Exception:
+                            conn.rollback()
 
 
 if __name__ == "__main__":
