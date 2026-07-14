@@ -17,19 +17,40 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 # ── secrets.env ─────────────────────────────────────────────────────────────
-cat > "${CONFIG_DIR}/secrets.env" << EOF
-DISCORD_TOKEN=${CALEOPE_PARAM_DISCORD_TOKEN:-}
-AZURACAST_URL=${CALEOPE_PARAM_AZURACAST_URL:-}
-AZURACAST_STATION_ID=${CALEOPE_PARAM_AZURACAST_STATION_ID:-radio}
-AZURACAST_API_KEY=${CALEOPE_PARAM_AZURACAST_API_KEY:-}
-STREAM_URL=${CALEOPE_PARAM_STREAM_URL:-}
-AUTO_CHANNEL_ID=${CALEOPE_PARAM_AUTO_CHANNEL_ID:-}
-DEFAULT_VOLUME=${CALEOPE_PARAM_DEFAULT_VOLUME:-100}
-NP_CHANNEL_ID=${CALEOPE_PARAM_NP_CHANNEL_ID:-}
-NP_POLL_INTERVAL=${CALEOPE_PARAM_NP_POLL_INTERVAL:-10}
-SITE_URL=${CALEOPE_PARAM_SITE_URL:-}
-EOF
-chmod 600 "${CONFIG_DIR}/secrets.env"
+# IDEMPOTENT — ne JAMAIS écraser un secret existant par du vide.
+# Un `install --force` ne redemande PAS les paramètres (ils ne sont saisis qu'à la 1re
+# installation) : les CALEOPE_PARAM_* sont donc vides. L'ancienne version écrivait alors
+# `DISCORD_TOKEN=` et détruisait le token + toute la config → bot en crash-loop
+# « Improper token has been passed » (incident 14/07, restauré depuis la sauvegarde 04:30).
+# Priorité : paramètre fourni > valeur déjà en place > défaut.
+SECRETS="${CONFIG_DIR}/secrets.env"
+
+_prev() {   # _prev <CLE> → valeur actuelle dans secrets.env (vide si absente)
+    [ -f "${SECRETS}" ] || return 0
+    sed -n "s/^$1=//p" "${SECRETS}" | head -1
+}
+_keep() {   # _keep <CLE> <valeur_param> <defaut>
+    local v="$2"
+    [ -n "${v}" ] || v="$(_prev "$1")"
+    [ -n "${v}" ] || v="$3"
+    printf '%s=%s\n' "$1" "${v}"
+}
+
+# On génère à côté puis on bascule : _prev() lit l'ancien fichier pendant l'écriture.
+{
+    _keep DISCORD_TOKEN        "${CALEOPE_PARAM_DISCORD_TOKEN:-}"        ""
+    _keep AZURACAST_URL        "${CALEOPE_PARAM_AZURACAST_URL:-}"        ""
+    _keep AZURACAST_STATION_ID "${CALEOPE_PARAM_AZURACAST_STATION_ID:-}" "radio"
+    _keep AZURACAST_API_KEY    "${CALEOPE_PARAM_AZURACAST_API_KEY:-}"    ""
+    _keep STREAM_URL           "${CALEOPE_PARAM_STREAM_URL:-}"           ""
+    _keep AUTO_CHANNEL_ID      "${CALEOPE_PARAM_AUTO_CHANNEL_ID:-}"      ""
+    _keep DEFAULT_VOLUME       "${CALEOPE_PARAM_DEFAULT_VOLUME:-}"       "100"
+    _keep NP_CHANNEL_ID        "${CALEOPE_PARAM_NP_CHANNEL_ID:-}"        ""
+    _keep NP_POLL_INTERVAL     "${CALEOPE_PARAM_NP_POLL_INTERVAL:-}"     "10"
+    _keep SITE_URL             "${CALEOPE_PARAM_SITE_URL:-}"             ""
+} > "${SECRETS}.new"
+mv -f "${SECRETS}.new" "${SECRETS}"
+chmod 600 "${SECRETS}"
 
 # ── requirements.txt ─────────────────────────────────────────────────────────
 cat > "${SRC_DIR}/requirements.txt" << 'PYREQ'
@@ -506,7 +527,18 @@ async def cmd_station(interaction: discord.Interaction, station: str):
         return
     np = await player.fetch_now_playing()
     label = (np.get("station", {}).get("name") if np else None) or station
-    await interaction.followup.send(f"📻 Station → **{label}**", embed=np_embed(np))
+    # NE PAS annoncer un changement de son qui n'a pas eu lieu. Si le bot n'est pas en
+    # vocal, il ne joue RIEN : l'ancienne version affichait quand même « Station → X »,
+    # on croyait écouter X (on écoutait le site, resté sur la Mainstage) et on votait /
+    # blacklistait sur le mauvais titre. Incident du 14/07 : dire la vérité, toujours.
+    if not player.is_playing:
+        await interaction.followup.send(
+            f"📻 Station retenue → **{label}**\n"
+            f"⚠️ Mais je ne suis **pas en vocal** : rien ne joue de mon côté. "
+            f"Lance `/radio play` pour l'entendre (ou `/radio liens` pour l'écouter ailleurs).",
+            embed=np_embed(np))
+        return
+    await interaction.followup.send(f"📻 Station → **{label}** (son basculé ✅)", embed=np_embed(np))
 
 
 @radio_group.command(name="liens", description="Les liens mp3 des stations — à coller dans VLC, le tel, ou à partager")
