@@ -44,6 +44,17 @@ services:
     # toujours ≥1.5 cœur libre pour le flux Liquidsoap). CPU-only : le flux d'abord.
     cpu_shares: 256
     cpus: "2.5"
+    # Plafond de LOGS (incident 13/07). Le cap CPU ci-dessus n'a PAS protégé le serveur :
+    # le CPU brûlé était celui de `dockerd` (380 %, hors cgroup du conteneur), qui s'étranglait
+    # à écrire un json-log de 2,2 Go pondu par l'analyzer (Essentia crachait ~8 000 warnings
+    # par fichier). Tout le LXC en a souffert — jusqu'au bot Discord qui larguait le vocal.
+    # La cause est corrigée à la source (essentia.log.warningActive=False), ceci est la
+    # ceinture de sécurité : quoi qu'une app raconte, ses logs ne dépasseront plus 60 Mo.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     labels:
       # Apps prioritaires Caleope : l'analyzer est un BATCH lourd sacrifiable → tier background
       # (oom_score_adj positif = tué en PREMIER si la RAM manque, bien avant l'antenne).
