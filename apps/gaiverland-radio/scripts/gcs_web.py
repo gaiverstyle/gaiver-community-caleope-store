@@ -20,7 +20,7 @@ except ImportError:
 import json, time, re
 from urllib.parse import urlsplit
 import psycopg2.extras
-from fastapi import FastAPI, Body, Request
+from fastapi import FastAPI, Body, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response
 import secrets, hmac, hashlib, base64
 
@@ -206,6 +206,50 @@ def metrics():
     return PlainTextResponse("\n".join(lines) + "\n")
 
 
+# ── Auditeurs externes (Discord voice, etc.) ─────────────────────────────────
+# Sources non-AzuraCast qui écoutent la Mainstage (ex. le bot Discord compte les
+# membres en vocal avec lui). Uniquement un NOMBRE, anonyme, avec TTL : si la source
+# arrête de rafraîchir, son compte disparaît. Table créée à la première écriture.
+def _ext_listeners_total() -> int:
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COALESCE(SUM(count),0) AS n FROM ext_listeners
+                           WHERE updated_at > now() - interval '90 seconds'""")
+            r = cur.fetchone()
+        conn.close()
+        return int(r["n"]) if r else 0
+    except Exception:
+        return 0   # table absente / DB indispo → on ignore, jamais bloquant
+
+
+@app.post("/api/ext/listeners")
+def ext_listeners(request: Request, source: str = "ext", count: int = 0):
+    # Sécurité SANS secret : gcs-web:8099 n'est joignable QUE sur le réseau Docker interne
+    # (le public passe forcément par NPM, qui pose X-Forwarded-For / X-Real-IP). On refuse
+    # donc tout appel porteur de ces en-têtes = venu du proxy public. Seul un conteneur
+    # interne (le bot) appelle en direct, sans ces en-têtes.
+    if request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip"):
+        raise HTTPException(status_code=403, detail="internal only")
+    n   = max(0, min(100000, int(count)))
+    src = (source or "ext")[:32]
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS ext_listeners (
+                             source     VARCHAR(32) PRIMARY KEY,
+                             count      INTEGER NOT NULL DEFAULT 0,
+                             updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+            cur.execute("""INSERT INTO ext_listeners (source,count,updated_at)
+                           VALUES (%s,%s,now())
+                           ON CONFLICT (source) DO UPDATE
+                             SET count=EXCLUDED.count, updated_at=now()""", (src, n))
+        conn.commit(); conn.close()
+        return {"ok": True, "source": src, "count": n}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/live")
 def live(station: str = "main"):
     az_sid = STATIONS.get(station, AZ_STATION)
@@ -234,7 +278,10 @@ def live(station: str = "main"):
                 "played_at": np.get("now_playing", {}).get("played_at", 0),
             }
             out["art"]       = _publicize(song.get("art", ""))
-            out["listeners"] = np.get("listeners", {}).get("current", 0)
+            base_lis = np.get("listeners", {}).get("current", 0) or 0
+            # Le bot Discord diffuse la Mainstage → on ajoute les gens en vocal avec lui
+            # (nombre anonyme, aucune donnée perso). Uniquement sur main.
+            out["listeners"] = base_lis + (_ext_listeners_total() if station == "main" else 0)
             if not out["stream_url"]:
                 mounts = np.get("station", {}).get("mounts", [])
                 if mounts:

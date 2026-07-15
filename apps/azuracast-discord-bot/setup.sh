@@ -83,6 +83,11 @@ DISCORD_TOKEN        = os.environ["DISCORD_TOKEN"]
 AZURACAST_URL        = os.environ["AZURACAST_URL"].rstrip("/")
 AZURACAST_STATION_ID = os.environ.get("AZURACAST_STATION_ID", "radio")
 
+# Remontée du nombre d'auditeurs Discord (en vocal avec le bot) vers le site.
+# gcs-web n'est joignable QUE sur le réseau Docker interne (pas de secret nécessaire).
+GCS_WEB_URL      = os.environ.get("GCS_WEB_URL", "http://gcs-web:8099").rstrip("/")
+LISTENERS_REPORT = os.environ.get("LISTENERS_REPORT", "true").lower() == "true"
+
 # Liens mp3 publics par station — routes same-origin servies par le site Gaiverland.
 # (Le flux interne http://azuracast/... n'est PAS partageable : il n'existe que dans Docker.)
 PUBLIC_BASE = os.environ.get("GAIVERLAND_PUBLIC_URL", "https://gaiverland.gaiver-it.fr").rstrip("/")
@@ -466,7 +471,10 @@ async def on_ready():
                 await np_tracker.start(channel, np)
         poll_now_playing.start()
 
-    update_presence.start()
+    if not update_presence.is_running():
+        update_presence.start()
+    if LISTENERS_REPORT and not report_listeners.is_running():
+        report_listeners.start()
 
 
 @bot.event
@@ -479,6 +487,25 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         log.info("Salon vide — pause")
         if player.voice_client.is_playing():
             player.voice_client.pause()
+
+
+@tasks.loop(seconds=45)
+async def report_listeners():
+    """Nombre d'HUMAINS en vocal avec le bot → gcs-web (anonyme, juste le compte).
+    gcs-web l'ajoute aux auditeurs de la Mainstage. TTL 90 s côté site : si le bot
+    s'arrête, le compte retombe tout seul. On poste aussi 0 (hors vocal) pour le
+    faire redescendre immédiatement."""
+    n = 0
+    try:
+        vc = player.voice_client
+        if vc and vc.is_connected() and vc.channel:
+            n = sum(1 for m in vc.channel.members if not m.bot)
+        async with aiohttp.ClientSession() as s:
+            await s.post(f"{GCS_WEB_URL}/api/ext/listeners",
+                         params={"source": "discord", "count": n},
+                         timeout=aiohttp.ClientTimeout(total=5))
+    except Exception as exc:
+        log.warning("report listeners → %s", exc)
 
 
 @tasks.loop(minutes=1)
