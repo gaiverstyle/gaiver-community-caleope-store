@@ -330,7 +330,15 @@ def analyze_file(path: str) -> dict:
 
 
 def get_conn():
-    return psycopg2.connect(DB_URL)
+    # autocommit : chaque requête est validée immédiatement → la connexion n'est JAMAIS
+    # « idle in transaction » entre deux cycles. Sans ça, un SELECT laissait une transaction
+    # ouverte pendant les sleeps, retenant un verrou sur `tracks` → toutes les lectures du
+    # site (/api/loved) s'empilaient derrière et finissaient par étrangler gcs-web (incident
+    # 15/07 : 44 connexions bloquées, site down). save_track garde ses commit() explicites
+    # (no-op inoffensifs en autocommit).
+    c = psycopg2.connect(DB_URL)
+    c.autocommit = True
+    return c
 
 
 def save_track(conn, data: dict):

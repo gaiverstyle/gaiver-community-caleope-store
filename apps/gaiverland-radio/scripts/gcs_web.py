@@ -101,7 +101,11 @@ STAGE_LABEL = {
 
 
 def get_conn():
-    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    # statement_timeout : une requête qui traîne >15s est tuée au lieu de bloquer un worker
+    # indéfiniment. Sans ça, une requête coincée derrière un verrou s'empilait à chaque poll
+    # du site (44 connexions bloquées → gcs-web étranglé, incident 15/07).
+    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor,
+                            options="-c statement_timeout=15000")
 
 
 @app.get("/health")
@@ -210,17 +214,30 @@ def metrics():
 # Sources non-AzuraCast qui écoutent la Mainstage (ex. le bot Discord compte les
 # membres en vocal avec lui). Uniquement un NOMBRE, anonyme, avec TTL : si la source
 # arrête de rafraîchir, son compte disparaît. Table créée à la première écriture.
+_ext_cache = {"n": 0, "at": 0.0}
 def _ext_listeners_total() -> int:
+    # Caché 12s : /api/live est poll toutes les 10s par chaque client → sans cache, ça
+    # ouvrait une connexion DB par appel sur l'endpoint le plus chaud. Le bot ne poste que
+    # toutes les 45s, donc 12s de fraîcheur suffisent largement.
+    now = time.time()
+    if now - _ext_cache["at"] < 12:
+        return _ext_cache["n"]
+    conn = None
     try:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute("""SELECT COALESCE(SUM(count),0) AS n FROM ext_listeners
                            WHERE updated_at > now() - interval '90 seconds'""")
             r = cur.fetchone()
-        conn.close()
-        return int(r["n"]) if r else 0
+        _ext_cache["n"] = int(r["n"]) if r else 0
+        _ext_cache["at"] = now
+        return _ext_cache["n"]
     except Exception:
-        return 0   # table absente / DB indispo → on ignore, jamais bloquant
+        return _ext_cache["n"]   # table absente / DB indispo → dernière valeur, jamais bloquant
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 @app.post("/api/ext/listeners")
