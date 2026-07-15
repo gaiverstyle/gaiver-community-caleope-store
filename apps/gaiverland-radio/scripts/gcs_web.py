@@ -242,6 +242,8 @@ def live(station: str = "main"):
             s = r.json()
             out["state"] = {
                 "city":         s.get("city", "Toulon"),
+                "home_city":    s.get("home_city", "Toulon"),
+                "is_miniscene": bool(s.get("is_miniscene", False)),
                 "stage":        STAGE_LABEL.get(s.get("stage_active", "mainstage"), "Mainstage"),
                 "energy":       s.get("energy_level", 3),
                 "tod":          s.get("time_of_day", "day"),
@@ -750,6 +752,9 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .city .cn{font-size:30px;font-weight:bold}
 .city .wx{font-style:italic;opacity:.85;margin-top:4px}
 .city .next{margin-left:auto;text-align:right;font-size:14px;opacity:.75;font-style:italic}
+.ms-badge{display:inline-block;background:linear-gradient(90deg,#ff8a3d,#ff3b5c);color:#fff;
+  font-size:12px;font-weight:700;letter-spacing:.03em;padding:3px 9px;border-radius:999px;
+  margin-bottom:5px;box-shadow:0 2px 8px rgba(255,59,92,.35)}
 .journal .ev{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,244,230,.12);
   font-size:15px;align-items:baseline}
 .journal .ev:last-child{border:none}
@@ -927,10 +932,11 @@ footer .c15{margin-top:6px;font-size:12px}
   <div class="city">
     <div class="pin">📍</div>
     <div>
+      <div class="ms-badge" id="ms-badge" hidden>🚐 Mini-scène</div>
       <div class="cn" id="city">…</div>
       <div class="wx" id="wx"></div>
     </div>
-    <div class="next">prochaine ville :<br>le convoi décidera. 🚐</div>
+    <div class="next" id="tour-next">prochaine ville :<br>le convoi décidera. 🚐</div>
   </div>
 </div>
 
@@ -1214,7 +1220,13 @@ async function refresh(){
     document.getElementById('meta').textContent=l;
     audioUrl = ROUTE[curStation] || (d.stream_url||'');  // flux same-origin par station (Web Audio partout)
     const s=d.state||{};
-    document.getElementById('city').textContent=s.city||'Quelque part';
+    // Mini-scène : le festival est en déplacement dans une ville proche → on l'affiche
+    // clairement (« Mini-scène de Marseille ») ; sinon la ville-mère normale.
+    const ms=!!s.is_miniscene, home=s.home_city||'Toulon';
+    document.getElementById('city').textContent = ms ? ('Mini-scène de '+(s.city||'?')) : (s.city||'Quelque part');
+    const badge=document.getElementById('ms-badge'); if(badge) badge.hidden=!ms;
+    const nx=document.getElementById('tour-next');
+    if(nx) nx.innerHTML = ms ? ('de retour à '+home+' bientôt 🚐') : 'prochaine ville :<br>le convoi décidera. 🚐';
     document.getElementById('wx').textContent=(s.weather||'')+(s.stage?' — scène active : '+s.stage:'');
     if(fsOpen) fsSync();
   }catch(e){}

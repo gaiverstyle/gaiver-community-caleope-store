@@ -28,6 +28,33 @@ from fastapi import FastAPI, HTTPException
 DB_URL   = os.environ["DATABASE_URL"]
 GCS_CITY = os.environ.get("GCS_CITY", "Toulon")
 
+import random, threading, time as _time
+
+# ── MINI-SCÈNES (tournée) ─────────────────────────────────────────────────────
+# Le festival part occasionnellement (surtout le week-end) donner une « mini-scène »
+# dans une ville proche de Toulon (~2-3 h de route max), puis rentre. Ça fait varier
+# les photos de fond (récupérées par NOM de ville) et le lore (token {ville}), et le
+# site affiche « Mini-scène de <ville> ». Ville-mère = GCS_CITY (Toulon).
+# CPU-only, aucune API externe : liste de villes curée en dur.
+MINISCENE_ENABLED = os.environ.get("MINISCENE_ENABLED", "true").lower() == "true"
+MINISCENE_HOME    = os.environ.get("MINISCENE_HOME", GCS_CITY)
+MINISCENE_EVAL_S  = int(os.environ.get("MINISCENE_EVAL_S", "1800"))   # ré-évalue /30 min
+MINISCENE_MIN_H   = float(os.environ.get("MINISCENE_MIN_H", "4"))     # durée mini d'une sortie
+MINISCENE_MAX_H   = float(os.environ.get("MINISCENE_MAX_H", "8"))
+MINISCENE_COOLDOWN_H = float(os.environ.get("MINISCENE_COOLDOWN_H", "6"))  # repos maison après retour
+MINISCENE_TZ      = os.environ.get("LORE_TZ", "Europe/Paris")
+# Probabilité de DÉPART à chaque évaluation quand on est à la maison (hors cooldown).
+MINISCENE_P_WEEKEND = float(os.environ.get("MINISCENE_P_WEEKEND", "0.06"))
+MINISCENE_P_WEEKDAY = float(os.environ.get("MINISCENE_P_WEEKDAY", "0.005"))
+
+# Villes proches de Toulon (Provence / Côte d'Azur), ~2-3 h de route max.
+MINISCENE_CITIES = [
+    "Marseille", "Aix-en-Provence", "Nice", "Cannes", "Antibes", "Saint-Tropez",
+    "Hyères", "Fréjus", "Bandol", "Cassis", "La Ciotat", "Aubagne",
+    "Avignon", "Nîmes", "Arles", "Montpellier", "Grasse", "Menton",
+    "Manosque", "Gap", "Digne-les-Bains", "Sisteron",
+]
+
 MOOD_TO_STAGE: dict[str, str] = {
     "drift":    "sunset",
     "pulse":    "mainstage",
@@ -77,6 +104,11 @@ def init_db():
             ("target_energy",      "INTEGER DEFAULT 4"),
             ("festival_direction", "VARCHAR(20) DEFAULT 'cruise'"),
             ("weather_data",       "JSONB DEFAULT '{}'"),
+            # Mini-scènes (tournée)
+            ("home_city",       f"VARCHAR(100) DEFAULT '{MINISCENE_HOME}'"),
+            ("is_miniscene",       "BOOLEAN DEFAULT FALSE"),
+            ("miniscene_until",    "TIMESTAMPTZ"),
+            ("miniscene_return_after", "TIMESTAMPTZ"),  # cooldown maison
         ]:
             cur.execute(f"""
                 DO $$ BEGIN
@@ -201,9 +233,111 @@ def compute_gaiverland_score(conn, artist: str, title: str) -> float | None:
     return score
 
 
+# ── Gestionnaire de mini-scènes (tournée) ────────────────────────────────────
+
+def _is_weekend() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        wd = datetime.datetime.now(ZoneInfo(MINISCENE_TZ)).weekday()
+    except Exception:
+        wd = datetime.datetime.now().weekday()
+    return wd >= 5   # samedi(5) / dimanche(6)
+
+
+def _lore_transition(conn, text: str, city: str):
+    """Écrit une entrée 'city_transition' dans le journal du festival (table partagée)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO lore_events (type, description, city) VALUES ('city_transition', %s, %s)",
+                (text, city))
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠ lore transition: {e}")
+
+
+def _depart(conn, city: str, hours: float):
+    until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=hours)
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE gcs_state
+                       SET city=%s, is_miniscene=TRUE, miniscene_until=%s
+                       WHERE id=1""", (city, until))
+    conn.commit()
+    _lore_transition(conn, f"Le festival plie les enceintes : direction {city}. Mini-scène ce soir.", city)
+    print(f"  🚐 mini-scène → {city} (retour dans ~{hours:.1f} h)")
+
+
+def _go_home(conn):
+    cd = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=MINISCENE_COOLDOWN_H)
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE gcs_state
+                       SET city=home_city, is_miniscene=FALSE,
+                           miniscene_until=NULL, miniscene_return_after=%s
+                       WHERE id=1""", (cd,))
+    conn.commit()
+    _lore_transition(conn, f"Retour à {MINISCENE_HOME}. Le c15 connaît le chemin par cœur.", MINISCENE_HOME)
+    print(f"  🏠 retour à {MINISCENE_HOME}")
+
+
+def _tour_manager():
+    _time.sleep(30)  # laisser init_db finir
+    while True:
+        try:
+            conn = get_conn()
+            with conn.cursor() as cur:
+                cur.execute("""SELECT city, home_city, is_miniscene, miniscene_until,
+                                      miniscene_return_after FROM gcs_state WHERE id=1""")
+                st = cur.fetchone() or {}
+            now = datetime.datetime.now(datetime.timezone.utc)
+
+            if st.get("is_miniscene"):
+                until = st.get("miniscene_until")
+                if not until or now >= until:
+                    _go_home(conn)
+            else:
+                cd = st.get("miniscene_return_after")
+                on_cooldown = cd and now < cd
+                if not on_cooldown:
+                    p = MINISCENE_P_WEEKEND if _is_weekend() else MINISCENE_P_WEEKDAY
+                    if random.random() < p:
+                        # ville différente de la précédente
+                        last = st.get("city")
+                        pool = [c for c in MINISCENE_CITIES if c != last] or MINISCENE_CITIES
+                        city = random.choice(pool)
+                        hours = random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
+                        _depart(conn, city, hours)
+            conn.close()
+        except Exception as e:
+            print(f"  ⚠ tour manager: {e}")
+        _time.sleep(MINISCENE_EVAL_S)
+
+
+@app.post("/tour/depart")
+def tour_depart(city: str = "", hours: float = 0.0):
+    """Déclenche une mini-scène à la demande (test / régie). Ville libre ou tirée au sort."""
+    conn = get_conn()
+    c = city or random.choice(MINISCENE_CITIES)
+    h = hours if hours > 0 else random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
+    _depart(conn, c, h)
+    conn.close()
+    return {"miniscene": True, "city": c, "hours": round(h, 1)}
+
+
+@app.post("/tour/home")
+def tour_home():
+    """Rappelle immédiatement le festival à la ville-mère."""
+    conn = get_conn()
+    _go_home(conn)
+    conn.close()
+    return {"miniscene": False, "city": MINISCENE_HOME}
+
+
 @app.on_event("startup")
 def startup():
     init_db()
+    if MINISCENE_ENABLED:
+        threading.Thread(target=_tour_manager, daemon=True).start()
+        print(f"✓ mini-scènes actives (home={MINISCENE_HOME}, {len(MINISCENE_CITIES)} villes)")
 
 
 @app.get("/health")
@@ -258,9 +392,11 @@ def update_state(body: dict):
         enriched_track["music_profile"] = music_profile
 
     with conn.cursor() as cur:
+        # NB : on ne touche PLUS à `city` ici. La ville courante appartient au gestionnaire
+        # de mini-scènes (_tour_manager) ; l'écraser à chaque morceau ramènerait le festival
+        # à Toulon en pleine mini-scène.
         cur.execute("""
             UPDATE gcs_state SET
-                city               = %s,
                 festival_phase     = 'live',
                 stage_active       = %s,
                 energy_level       = %s,
@@ -269,7 +405,7 @@ def update_state(body: dict):
                 last_track         = %s::jsonb,
                 updated_at         = NOW()
             WHERE id = 1
-        """, (GCS_CITY, stage, energy, direction, tod, json.dumps(enriched_track)))
+        """, (stage, energy, direction, tod, json.dumps(enriched_track)))
     conn.commit()
     conn.close()
 
