@@ -1563,13 +1563,14 @@ setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals
 // Repeint chaque seconde SANS requête réseau : le titre bascule à l'instant précis où
 // l'auditeur entend le changement (le sondage réseau, lui, reste à 10 s).
 setInterval(function(){ if(lastLive && lastLive.song_id) paintTrack(lastLive, lastArt); },1000);
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=__VER__').catch(function(){});}
 </script></body></html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse(PAGE, headers={"Cache-Control": "no-cache, must-revalidate"})
+    return HTMLResponse(PAGE.replace("__VER__", _ASSET_VER),
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/equipe", response_class=HTMLResponse)
@@ -1631,6 +1632,14 @@ self.addEventListener('fetch',function(e){
   );
 });'''
 
+# Version d'assets = empreinte du frontend + du SW. Elle change dès qu'on touche à l'un
+# ou l'autre → on charge le SW via `/sw.js?v=<ver>`. Le proxy public (openresty sur le NPM
+# partagé .10) cache le `/sw.js` ~9h en IGNORANT le Cache-Control:no-cache qu'on envoie ;
+# une nouvelle URL (nouveau ?v=) est vue comme une nouvelle ressource → le proxy la sert
+# fraîche. Ça règle « un appareil marche, pas les autres » (versions figées différentes)
+# SANS toucher au proxy partagé (qui sert TOUS les sites du chef = trop risqué à modifier).
+_ASSET_VER = hashlib.md5((PAGE + _SW_JS).encode("utf-8")).hexdigest()[:8]
+
 
 @app.get("/icon.svg")
 def icon_svg():
@@ -1646,7 +1655,10 @@ def manifest():
 
 @app.get("/sw.js")
 def service_worker():
-    return Response(_SW_JS, media_type="application/javascript",
+    # Nom de cache versionné → à l'activation, le SW purge les anciens caches (il le fait
+    # déjà pour tout nom ≠ CACHE). Nouveau frontend = nouvelle version = SW « à jour ».
+    body = _SW_JS.replace("gaiverland-v2", "gaiverland-" + _ASSET_VER)
+    return Response(body, media_type="application/javascript",
                     headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
 
 
