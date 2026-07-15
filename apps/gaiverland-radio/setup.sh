@@ -325,6 +325,10 @@ REBEXIS_MODE=${REBEXIS_MODE}
 REBEXIS_INTERVAL_MIN=${REBEXIS_INTERVAL_MIN}
 REBEXIS_INTERVAL_MAX=${REBEXIS_INTERVAL_MAX}
 DISCOVERY_RATIO=${DISCOVERY_RATIO}
+# Fuseau des conteneurs : sans ça ils tournent en UTC → l'heure "naïve" du code
+# (datetime.now() sans tz, ex. GENRE_HOURS) décale de 2h et le dayparting se plante.
+# Aligné sur le scheduler qui est déjà tz-aware Europe/Paris. N'affecte PAS AzuraCast (azuracast.env).
+TZ=Europe/Paris
 # Dayparting : genres restreints à certaines plages horaires (format "Genre1,Genre2:HH-HH;...")
 GENRE_HOURS=${GENRE_HOURS}
 TTS_CACHE_DIR=/tts-cache
