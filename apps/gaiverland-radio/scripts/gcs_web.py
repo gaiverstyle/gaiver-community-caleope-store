@@ -33,6 +33,15 @@ except Exception:
 
 DB_URL      = os.environ["DATABASE_URL"]
 TRACK_URL   = os.environ.get("GCS_TRACK_URL",        "http://gcs-track-service:8090")
+# Fuseau du festival : le conteneur tourne en UTC, mais le journal doit afficher
+# l'heure de Toulon (sinon « 05:19 » alors qu'il est 07:19 sur place).
+try:
+    from zoneinfo import ZoneInfo
+    _LOCAL_TZ = ZoneInfo(os.environ.get("LORE_TZ", "Europe/Paris"))
+except Exception:
+    import datetime as _dt
+    _LOCAL_TZ = _dt.timezone.utc
+
 STATE_URL   = os.environ.get("GCS_STATE_ENGINE_URL", "http://gcs-state-engine:8091")
 VOTE_URL    = os.environ.get("GCS_VOTE_URL",         "http://gcs-vote-service:8095")
 AZ_URL      = os.environ.get("AZURACAST_URL",        "http://azuracast:80")
@@ -270,9 +279,11 @@ def events(limit: int = 12):
         rows = cur.fetchall()
     conn.close()
     # Ordre chronologique (journal/diary), pas newest-first (log) : on renverse.
+    # Heure affichée = heure LOCALE du festival (Europe/Paris), pas l'UTC du serveur
+    # (created_at est un timestamptz tz-aware → astimezone convertit proprement).
     return {"events": [
         {"type": r["type"], "text": r["description"], "city": r["city"],
-         "at": r["created_at"].strftime("%H:%M")} for r in reversed(rows)
+         "at": r["created_at"].astimezone(_LOCAL_TZ).strftime("%H:%M")} for r in reversed(rows)
     ]}
 
 

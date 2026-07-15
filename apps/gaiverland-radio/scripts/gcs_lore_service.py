@@ -230,7 +230,9 @@ def _lore_generator():
                 desc  = (random.choice(REACTIVE_SALUTE)
                          .replace("{artist}", artist or "le mix")
                          .replace("{title}", title))
-                etype = "rebexis_intervention"
+                # festival_moment (et PAS rebexis_intervention) : ce dernier est exclu du
+                # journal (gcs_web.events l.267). Le salut aux votes DOIT apparaître au journal.
+                etype = "festival_moment"
             else:
                 types = [t for t in LORE_STARTER if t != last_type] or list(LORE_STARTER)
                 etype = random.choice(types)

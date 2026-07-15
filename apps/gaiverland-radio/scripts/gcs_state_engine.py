@@ -263,7 +263,7 @@ def _depart(conn, city: str, hours: float):
                        SET city=%s, is_miniscene=TRUE, miniscene_until=%s
                        WHERE id=1""", (city, until))
     conn.commit()
-    _lore_transition(conn, f"Le festival plie les enceintes : direction {city}. Mini-scène ce soir.", city)
+    _lore_transition(conn, f"Le festival plie les enceintes : direction {city}. Mini-scène en approche.", city)
     print(f"  🚐 mini-scène → {city} (retour dans ~{hours:.1f} h)")
 
 

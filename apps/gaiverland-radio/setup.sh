@@ -4283,7 +4283,7 @@ def _depart(conn, city: str, hours: float):
                        SET city=%s, is_miniscene=TRUE, miniscene_until=%s
                        WHERE id=1""", (city, until))
     conn.commit()
-    _lore_transition(conn, f"Le festival plie les enceintes : direction {city}. Mini-scène ce soir.", city)
+    _lore_transition(conn, f"Le festival plie les enceintes : direction {city}. Mini-scène en approche.", city)
     print(f"  🚐 mini-scène → {city} (retour dans ~{hours:.1f} h)")
 
 
@@ -5847,7 +5847,9 @@ def _lore_generator():
                 desc  = (random.choice(REACTIVE_SALUTE)
                          .replace("{artist}", artist or "le mix")
                          .replace("{title}", title))
-                etype = "rebexis_intervention"
+                # festival_moment (et PAS rebexis_intervention) : ce dernier est exclu du
+                # journal (gcs_web.events l.267). Le salut aux votes DOIT apparaître au journal.
+                etype = "festival_moment"
             else:
                 types = [t for t in LORE_STARTER if t != last_type] or list(LORE_STARTER)
                 etype = random.choice(types)
