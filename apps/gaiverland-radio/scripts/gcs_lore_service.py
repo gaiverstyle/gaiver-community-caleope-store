@@ -159,7 +159,7 @@ LORE_STARTER = {
 # un simple datetime.now() décalerait la bascule de 2 h l'été (nuit à 22h chez le chef)
 # et ferait sonner les phrases à contretemps — c'est justement le bug qu'on corrige.
 LORE_TZ          = os.environ.get("LORE_TZ", "Europe/Paris")
-LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "8"))    # 08h → ☀️
+LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "6"))    # 06h → ☀️ (on pense aux lève-tôt)
 LORE_NIGHT_START = int(os.environ.get("LORE_NIGHT_START", "20"))  # 20h → 🌙
 
 

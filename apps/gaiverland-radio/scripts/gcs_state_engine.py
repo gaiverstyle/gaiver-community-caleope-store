@@ -127,7 +127,13 @@ def init_db():
 
 
 def time_of_day() -> str:
-    hour = datetime.datetime.now().hour
+    # Heure LOCALE du festival (Toulon), pas l'UTC du conteneur : sinon le « jour »
+    # démarrait à 8h sur place au lieu de 6h. Jour dès 6h (on pense aux lève-tôt).
+    try:
+        from zoneinfo import ZoneInfo
+        hour = datetime.datetime.now(ZoneInfo(MINISCENE_TZ)).hour
+    except Exception:
+        hour = datetime.datetime.now().hour
     if 6 <= hour < 18:
         return "day"
     elif 18 <= hour < 22:

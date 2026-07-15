@@ -4147,7 +4147,13 @@ def init_db():
 
 
 def time_of_day() -> str:
-    hour = datetime.datetime.now().hour
+    # Heure LOCALE du festival (Toulon), pas l'UTC du conteneur : sinon le « jour »
+    # démarrait à 8h sur place au lieu de 6h. Jour dès 6h (on pense aux lève-tôt).
+    try:
+        from zoneinfo import ZoneInfo
+        hour = datetime.datetime.now(ZoneInfo(MINISCENE_TZ)).hour
+    except Exception:
+        hour = datetime.datetime.now().hour
     if 6 <= hour < 18:
         return "day"
     elif 18 <= hour < 22:
@@ -5776,7 +5782,7 @@ LORE_STARTER = {
 # un simple datetime.now() décalerait la bascule de 2 h l'été (nuit à 22h chez le chef)
 # et ferait sonner les phrases à contretemps — c'est justement le bug qu'on corrige.
 LORE_TZ          = os.environ.get("LORE_TZ", "Europe/Paris")
-LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "8"))    # 08h → ☀️
+LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "6"))    # 06h → ☀️ (on pense aux lève-tôt)
 LORE_NIGHT_START = int(os.environ.get("LORE_NIGHT_START", "20"))  # 20h → 🌙
 
 
