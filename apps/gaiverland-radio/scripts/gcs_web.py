@@ -201,7 +201,10 @@ def metrics():
 def live(station: str = "main"):
     az_sid = STATIONS.get(station, AZ_STATION)
     out = {"track": {}, "state": {}, "station": station,
-           "stream_url": STREAM_URL if station == "main" else "", "art": "", "listeners": 0}
+           "stream_url": STREAM_URL if station == "main" else "", "art": "", "listeners": 0,
+           # Heure serveur : le front s'en sert pour caler son horloge sur celle d'AzuraCast
+           # (sinon une horloge locale décalée fausse tout le calcul de synchro).
+           "server_time": time.time()}
     # AzuraCast nowplaying (art, listen_url, listeners)
     try:
         r = httpx.get(f"{AZ_URL}/api/nowplaying/{az_sid}", timeout=4)
@@ -214,6 +217,12 @@ def live(station: str = "main"):
                 "elapsed":  np.get("now_playing", {}).get("elapsed", 0),
                 "duration": np.get("now_playing", {}).get("duration", 0),
                 "song_id":  song.get("id", ""),
+                # Horodatage ABSOLU du début du morceau. `elapsed` est inexploitable pour
+                # se synchroniser : l'API nowplaying d'AzuraCast est mise en cache (~15 s,
+                # observé figé sur 3 sondages), donc `elapsed` avance par paliers. `played_at`,
+                # lui, est une date fixe → le front peut calculer la position réelle au
+                # centième près et afficher le morceau que l'auditeur ENTEND (cf. front).
+                "played_at": np.get("now_playing", {}).get("played_at", 0),
             }
             out["art"]       = _publicize(song.get("art", ""))
             out["listeners"] = np.get("listeners", {}).get("current", 0)
@@ -1116,29 +1125,93 @@ function selectStation(s){
   B.pause(); B.removeAttribute('src'); B.load();
   curStation=s;
   document.querySelectorAll('.stage[data-st]').forEach(t=>t.classList.toggle('on', t.dataset.st===s));
-  audioUrl=''; lastTitle='';
+  audioUrl=''; lastTitle=''; npHist=[];   // autre scène = autre timeline : on repart à zéro
   updateFxAvail();
   refresh().then(()=>{ if(wasPlaying) playLive(); });
 }
+// ── Synchro affichage ⇄ oreille ──────────────────────────────────────────────
+// Le site affichait le DIRECT (le morceau que le serveur joue à l'instant T), alors que
+// l'auditeur entend le flux EN RETARD : burst Icecast (2,7 s à 192 kbps) + tampon du
+// navigateur (variable, plusieurs secondes). D'où le titre qui ne colle pas à l'oreille.
+// On affiche donc le morceau RÉELLEMENT ENTENDU :
+//     instant écouté (horloge serveur) = maintenant − latence audio mesurée
+// puis on cherche le morceau dont la fenêtre [played_at, played_at+durée) le contient.
+const BURST_S = 2.7;        // burst Icecast : 65535 octets à 192 kbps
+let clockOff = 0;           // horloge serveur − horloge locale (corrige un PC mal réglé)
+let npHist = [];            // derniers morceaux vus (fenêtre glissante)
+
+function serverNow(){ return Date.now()/1000 + clockOff; }
+
+// Latence = ce que le navigateur garde en avance + ce que le serveur a envoyé d'un bloc.
+// À l'arrêt, aucune latence : on affiche le direct.
+function audioLag(){
+  const a = AA();
+  if(!a || a.paused) return 0;
+  let ahead = 0;
+  try{
+    if(a.buffered && a.buffered.length)
+      ahead = Math.max(0, a.buffered.end(a.buffered.length-1) - a.currentTime);
+  }catch(e){}
+  return Math.min(60, ahead + BURST_S);   // borne haute : jamais de dérive absurde
+}
+
+// Le morceau que l'auditeur entend maintenant (et non celui du direct).
+function heardTrack(live){
+  const pos = serverNow() - audioLag();
+  for(let i=npHist.length-1; i>=0; i--){
+    const e = npHist[i];
+    if(!e.played_at) continue;
+    const end = e.duration>0 ? e.played_at + e.duration : Infinity;
+    if(e.played_at <= pos && pos < end) return e;
+  }
+  for(let i=npHist.length-1; i>=0; i--)         // sinon : le dernier commencé avant
+    if(npHist[i].played_at && npHist[i].played_at <= pos) return npHist[i];
+  return live;                                   // pas d'historique → direct
+}
+
+// Repeint le titre depuis le modèle local, sans requête réseau (appelé chaque seconde) :
+// la bascule tombe pile au moment où l'auditeur entend le changement.
+function paintTrack(live, art){
+  const t = heardTrack(live) || {};
+  const cover = t.art || art || '';
+  document.getElementById('title').textContent=t.title||'Gaiverland Radio';
+  document.getElementById('artist').textContent=t.artist||'';
+  if(cover) document.getElementById('hero-cover').src=cover;
+  if(t.title && t.title!==lastTitle){ lastTitle=t.title; bgIdx++; setBg(); }  // nouveau fond par morceau
+  if('mediaSession' in navigator && (t.title||t.artist)){
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:t.title||'Gaiverland Radio', artist:t.artist||'Gaiverland Radio',
+      album:'Gaiverland — le festival permanent',
+      artwork:cover?[{src:cover,sizes:'512x512',type:'image/jpeg'}]:[]
+    });
+  }
+  // Progression calculée sur l'instant ENTENDU (played_at est fiable, elapsed est caché).
+  if(t.duration>0 && t.played_at){
+    const el=Math.max(0,Math.min(t.duration, serverNow()-audioLag()-t.played_at));
+    document.getElementById('prog').style.width=(100*el/t.duration)+'%';
+  } else if(t.duration>0 && t.elapsed>=0){
+    document.getElementById('prog').style.width=Math.min(100,100*t.elapsed/t.duration)+'%';
+  }
+}
+
+let lastLive={}, lastArt='';
 async function refresh(){
   try{
     const d=await (await fetch('/api/live?station='+curStation)).json();
     const t=d.track||{};
-    document.getElementById('title').textContent=t.title||'Gaiverland Radio';
-    document.getElementById('artist').textContent=t.artist||'';
-    if(d.art) document.getElementById('hero-cover').src=d.art;
-    if(t.title && t.title!==lastTitle){ lastTitle=t.title; bgIdx++; setBg(); }  // nouveau fond Toulon par morceau
+    if(d.server_time) clockOff = d.server_time - Date.now()/1000;
+    // Historique : un morceau n'entre qu'une fois (l'API est sondée plus souvent qu'elle ne change).
+    if(t.song_id){
+      const last=npHist[npHist.length-1];
+      if(!last || last.song_id!==t.song_id){
+        npHist.push(Object.assign({}, t, {art:d.art||''}));
+        if(npHist.length>6) npHist.shift();
+      }
+    }
+    lastLive=t; lastArt=d.art||'';
+    paintTrack(t, d.art);
     const l=d.listeners?d.listeners+' personne(s) dans la foule':'';
     document.getElementById('meta').textContent=l;
-    // Media Session — titre/artiste/cover sur l'écran verrouillé + widgets média de l'OS
-    if('mediaSession' in navigator && (t.title||t.artist)){
-      navigator.mediaSession.metadata=new MediaMetadata({
-        title:t.title||'Gaiverland Radio', artist:t.artist||'Gaiverland Radio',
-        album:'Gaiverland — le festival permanent',
-        artwork:d.art?[{src:d.art,sizes:'512x512',type:'image/jpeg'}]:[]
-      });
-    }
-    if(t.duration>0){document.getElementById('prog').style.width=Math.min(100,100*t.elapsed/t.duration)+'%';}
     audioUrl = ROUTE[curStation] || (d.stream_url||'');  // flux same-origin par station (Web Audio partout)
     const s=d.state||{};
     document.getElementById('city').textContent=s.city||'Quelque part';
@@ -1400,6 +1473,9 @@ function initFxUI(){
 refresh();loadEvents();loadLoved();
 loadVisuals();loadAuth();
 setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);setInterval(loadLoved,60000);
+// Repeint chaque seconde SANS requête réseau : le titre bascule à l'instant précis où
+// l'auditeur entend le changement (le sondage réseau, lui, reste à 10 s).
+setInterval(function(){ if(lastLive && lastLive.song_id) paintTrack(lastLive, lastArt); },1000);
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}
 </script></body></html>"""
 

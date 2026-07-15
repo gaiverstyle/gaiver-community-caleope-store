@@ -5499,6 +5499,7 @@ except ImportError:
 import psycopg2.extras
 from fastapi import FastAPI, HTTPException
 from typing import Optional
+import datetime          # jour/nuit du lore (heure locale du festival)
 
 DB_URL = os.environ["DATABASE_URL"]
 VALID_TYPES = {"c15_event","stagiaire_event","city_transition",
@@ -5536,54 +5537,142 @@ def init_db():
 GCS_CITY = os.environ.get("GCS_CITY", "Toulon")
 LORE_INTERVAL_S = int(os.environ.get("LORE_GEN_INTERVAL_S", "1500"))  # ~25 min
 LORE_STARTER = {
-    "c15_event": [
-        "Le C15 est garé à {city}. Le festival est chez lui.",
-        "On a retrouvé le C15 exactement là où il devait être. Pour une fois.",
-        "Le C15 ronronne dans la nuit de {city}. Il veille.",
-        "Quelqu'un a lavé le C15. Personne n'avoue.",
-        "Le C15 a démarré au quart de tour ce matin. À {city}, on savoure le miracle.",
-        "Nouvel autocollant sur le pare-chocs du C15. On ne sait pas d'où il vient.",
-        "Le C15 a fait le plein, vérifié les niveaux, et refuse de commenter la suite.",
-        "Le C15 connaît la route de {city} mieux que le GPS. Il ne le dit pas, ça se sent.",
-        "Quelqu'un a laissé un café tiède sur le capot du C15. Il fait avec.",
-        "Le C15 a passé le contrôle technique. Le contrôleur n'en revient toujours pas.",
-    ],
-    "stagiaire_event": [
-        "Le stagiaire a encore perdu la carte SD.",
-        "Le stagiaire jure qu'il a tout sauvegardé. On vérifie... non.",
-        "Le stagiaire a rebranché un câble à l'envers. Encore.",
-        "On cherche le stagiaire. Le stagiaire cherche la sortie.",
-        "Le stagiaire a appris ce qu'est un XLR aujourd'hui. À la dure.",
-        "Le stagiaire a apporté des cafés. Trois sucres partout. Personne n'a demandé.",
-        "Le stagiaire a rangé les câbles. En nœud marin. On salue l'intention.",
-        "Le stagiaire a disparu pile au moment du montage. Comme un vrai pro.",
-        "Le stagiaire a nommé un fichier « final_final_vrai2 ». On n'ose pas l'ouvrir.",
-        "Le stagiaire a trouvé l'interrupteur. Toute la régie a clignoté. On respire.",
-    ],
-    "festival_moment": [
-        "La foule de {city} ne veut pas que ça s'arrête.",
-        "Un frisson a traversé {city} sur ce drop.",
-        "Quelque part à {city}, quelqu'un danse seul et c'est parfait.",
-        "L'air de {city} sent la basse et la nuit.",
-        "Les mains se lèvent à {city} comme une seule vague.",
-        "À {city}, deux inconnus viennent de devenir amis sur un refrain.",
-        "Le sol de {city} vibre encore. On appelle ça la mémoire des enceintes.",
-        "Il est tard à {city} et personne n'a envie de dormir.",
-        "À {city}, même ceux qui ne dansent jamais tapent du pied.",
-        "Une basse a fait trembler une vitre à {city}. On assume.",
-    ],
+    "c15_event": {
+        # ☀️ jour
+        "day": [   # ☀️ jour
+        "Le c15 a démarré du premier coup aujourd'hui. On a applaudi. Il l'a mérité.",
+        "Le c15 est garé de travers derrière la scène. En plein soleil, personne n'ose le déplacer, moi la première.",
+        "Quelqu'un a lavé le c15 en douce. Aujourd'hui, une enquête est ouverte.",
+        "Le c15 chauffe au soleil et sent le vieux vinyle et l'essence. C'est le parfum officiel du festival, encadrez-le.",
+        "Une mouette s'est posée sur le toit du c15. Elle reste pour l'ambiance, comme tout le monde à cette heure.",
+        "On a chargé le c15 à ras bord pour la journée. Il tient. Il tient toujours. C'est un poète.",
+        "Le c15 a sa place réservée près de la scène, en plein jour. Il l'a prise lui-même.",
+        "Le c15 a plus de kilomètres au compteur que nous d'heures de sommeil. Et en plein soleil, ça ne se voit sur personne.",
+        "On a proposé une remorque au c15 aujourd'hui. Il a refusé. Dignement.",
+        "Le compteur du c15 est bloqué depuis des lustres. Franchement, il a bien raison, surtout un jour pareil.",
+        "Le c15 refuse d'avancer sans musique. Sur ce point, en plein jour, on se comprend.",
+        "Le c15 a un point de rouille qu'on appelle affectueusement « la mélodie ». En pleine lumière, il brille presque.",
+        ],
+        "night": [   # 🌙 nuit
+        "Le c15 ronronne dans la nuit de {ville}. Il veille.",
+        "Phares éteints, le c15 monte la garde derrière la scène. On dort mieux en le sachant là.",
+        "La nuit, le c15 grince à chaque coup de vent. On dit qu'il chante en sourdine.",
+        "Il paraît que le c15 était déjà là avant le premier morceau. La nuit, on y croit vraiment, et on n'ose pas vérifier.",
+        "Le c15 connaît la route par cœur. La nuit, c'est lui qui la garde au chaud pour demain.",
+        "Dans la boîte à gants du c15 : trois cafés froids et une setlist qui a de la bouteille. Parfait pour la veille.",
+        "Le c15 démarre mieux quand on lui parle gentiment. À voix basse, la nuit, encore mieux.",
+        "Une lueur traîne sur le tableau de bord du c15. Il ne dort pas non plus, on est deux.",
+        "Le c15 n'a jamais raté un festival. La nuit, il compte les étoiles au-dessus de {ville} à notre place.",
+        "On a voulu changer l'autoradio du c15. Il a fait la tête pendant deux nuits.",
+        "La nuit, le c15 sent le café froid et la fatigue heureuse. C'est notre odeur d'after à nous.",
+        "Quelqu'un a proposé de repeindre le c15. Silence gêné dans le noir, sujet clos pour la nuit.",
+        ],
+    },
+    "stagiaire_event": {
+        # ☀️ jour
+        "day": [   # ☀️ jour
+        "Le stagiaire a disparu en plein jour. La musique, elle, tient bon.",
+        "On a envoyé le stagiaire chercher un câble aujourd'hui. On garde espoir, mollement.",
+        "Le stagiaire a laissé son gilet sur une chaise en plein soleil. Le gilet est là. Le stagiaire, mystère.",
+        "Quelqu'un jure avoir vu le stagiaire près de la buvette. En plein jour. Information non confirmée, comme toujours.",
+        "On a crié le nom du stagiaire trois fois en plein jour. Rien. Le classique.",
+        "Le stagiaire aurait appris à faire le café. On demande à voir. On demande surtout à goûter, là, maintenant.",
+        "On a mis une part de pizza de côté pour le stagiaire aujourd'hui. On va devoir se dévouer.",
+        "Bonne nouvelle : le stagiaire n'a rien cassé aujourd'hui. Parce qu'il n'est pas là.",
+        "On a confié une tâche simple au stagiaire en plein jour. On a bien fait de préciser « simple ».",
+        "Le stagiaire a coché « présent » aujourd'hui. Nous, on coche « à confirmer ».",
+        "Le badge du stagiaire a été retrouvé sur une table. Le stagiaire qui va avec, toujours pas.",
+        "Si vous croisez le stagiaire aujourd'hui, dites-lui qu'on l'aime bien. Et qu'on attend toujours le câble.",
+        ],
+        "night": [   # 🌙 nuit
+        "La nuit tombe sur {ville}, et le stagiaire reste introuvable. La régularité, au moins, il l'a.",
+        "Le talkie du stagiaire répond « pschit » dans le noir. C'est déjà plus que d'habitude.",
+        "On a laissé un mot au stagiaire avant la nuit. Le mot a disparu. Cohérent.",
+        "Le stagiaire a promis de revenir dans cinq minutes. C'était il y a plusieurs heures. Belle promesse.",
+        "Quelqu'un a demandé où était le stagiaire à la nuit. Grand moment de solidarité dans le vide.",
+        "Le stagiaire est officiellement notre meilleur fantôme. Et la nuit, c'est sa spécialité.",
+        "On a gardé une lampe allumée pour le stagiaire. Au cas où. On n'y croit pas trop.",
+        "Le stagiaire a un talent rare : être partout où on ne le cherche pas, surtout la nuit.",
+        "La nuit, on jure entendre le stagiaire brancher quelque chose quelque part. Tout le monde retient son souffle.",
+        "On a rangé une chaise pour le stagiaire près de la régie de nuit. Elle est toujours vide, fidèlement.",
+        "Le stagiaire aurait laissé une trace de café encore tiède. Preuve qu'il existe, la nuit s'en contentera.",
+        "Dernière nouvelle de la nuit : toujours pas de stagiaire. On l'aime quand même, ce courant d'air.",
+        ],
+    },
+    "festival_moment": {
+        # ☀️ jour
+        "day": [   # ☀️ jour
+        "Le soleil cogne, les basses répondent. Voilà, c'est le genre de journée que je préfère.",
+        "Il y a ce moment où tout le monde lève la tête pile en même temps, plein soleil. On y est.",
+        "La poussière danse dans la lumière de {ville}. Nous, on appelle ça la déco.",
+        "Quelque part dans la foule, quelqu'un vient de trouver son nouveau morceau préféré. De rien.",
+        "Les enceintes chauffent, le public aussi. Tout est parfaitement sous contrôle. Ou pas.",
+        "Un inconnu vient de se faire trois amis sur un refrain, en plein jour. C'est exactement ça, ici.",
+        "Les mains sont en l'air avant même le drop. En plein soleil, on appelle ça de la confiance.",
+        "On a monté le son d'un cran, tiens. Juste pour voir. On garde, évidemment.",
+        "Le sol vibre, les sourires suivent. Rien de cassé, tout de branché.",
+        "On a compté trois éclats de rire pendant l'intro. En plein jour, bon présage.",
+        "Il y a une odeur de fête dans l'air chaud et un truc qui va lâcher dans les graves. J'adore.",
+        "Quelqu'un danse comme si personne ne regardait. Tout le monde regarde. Tout le monde adore.",
+        ],
+        "night": [   # 🌙 nuit
+        "La nuit s'installe sur {ville}, les basses baissent la voix mais ne se taisent jamais.",
+        "On a perdu le fil du temps il y a deux morceaux. En pleine nuit, on ne compte pas le chercher.",
+        "Le festival ne dort jamais. Nous non plus, visiblement, et on assume, lueurs aux yeux.",
+        "On dirait que la nuit a décidé de rester un peu plus longtemps sur {ville}. Bonne décision.",
+        "Il est tard, les projecteurs dessinent des ombres qui dansent mieux que nous. On les laisse faire.",
+        "Le silence entre deux morceaux a duré une seconde dans le noir. Personne n'a eu le temps d'avoir peur.",
+        "Ce morceau-là, gardez-le quelque part. La nuit de {ville}, elle, s'en souviendra.",
+        "La régie veille, les cœurs aussi. Rien à signaler, tout à savourer, en douceur.",
+        "Il y a des nuits où tout tombe juste. Devinez quelle nuit on est.",
+        "Les lueurs remplacent le soleil, l'énergie reste. On appelle ça l'heure des vrais.",
+        "Le festival respire plus doucement, là, maintenant. Restez, la nuit vaut le détour.",
+        "Quelqu'un s'endort presque sur un accord et se réveille sur le suivant. Nuit parfaite.",
+        ],
+    },
 }
+
+
+# ── Jour / nuit ──────────────────────────────────────────────────────────────
+# Le générateur piochait dans une liste PLATE : il pouvait sortir « Le c15 a démarré ce
+# matin » à 19h34. Les phrases sont désormais rangées ☀️ jour / 🌙 nuit et on pioche
+# dans la bonne moitié.
+# ⚠️ HEURE LOCALE DU FESTIVAL, pas celle du serveur : le conteneur tourne en UTC, donc
+# un simple datetime.now() décalerait la bascule de 2 h l'été (nuit à 22h chez le chef)
+# et ferait sonner les phrases à contretemps — c'est justement le bug qu'on corrige.
+LORE_TZ          = os.environ.get("LORE_TZ", "Europe/Paris")
+LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "8"))    # 08h → ☀️
+LORE_NIGHT_START = int(os.environ.get("LORE_NIGHT_START", "20"))  # 20h → 🌙
+
+
+def _time_of_day() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        h = datetime.datetime.now(ZoneInfo(LORE_TZ)).hour
+    except Exception:
+        h = datetime.datetime.now().hour      # repli : mieux que rien
+    return "day" if LORE_DAY_START <= h < LORE_NIGHT_START else "night"
 
 
 def _lore_generator():
     time.sleep(20)  # laisser init_db finir
     last_type = None
+    recent = []          # anti-répétition : on ne rejoue pas les dernières phrases
     while True:
         try:
             types = [t for t in LORE_STARTER if t != last_type] or list(LORE_STARTER)
             etype = random.choice(types)
             last_type = etype
-            desc = random.choice(LORE_STARTER[etype]).replace("{city}", GCS_CITY)
+            tod  = _time_of_day()
+            pool = LORE_STARTER[etype].get(tod) or LORE_STARTER[etype].get("day") or []
+            fresh = [p for p in pool if p not in recent] or pool
+            if not fresh:
+                time.sleep(LORE_INTERVAL_S); continue
+            phrase = random.choice(fresh)
+            recent.append(phrase)
+            if len(recent) > 12:
+                recent.pop(0)
+            desc = phrase.replace("{ville}", GCS_CITY).replace("{city}", GCS_CITY)
             conn = get_conn(); conn.autocommit = True
             with conn.cursor() as cur:
                 cur.execute("INSERT INTO lore_events (type,description,city) VALUES (%s,%s,%s)",
