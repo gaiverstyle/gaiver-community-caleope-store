@@ -215,6 +215,18 @@ def vote_scores(cur) -> dict:
         return {}
 
 
+def denylisted_ids(cur, sid) -> set:
+    """track.id bannis DÉFINITIVEMENT de CETTE station (station_denylist, bouton blacklist
+    scène-aware). Dégradé-safe : {} si la table n'existe pas encore (autocommit = pas de savepoint)."""
+    try:
+        cur.execute("""SELECT t.id FROM tracks t JOIN station_denylist d
+                       ON d.song_id = t.song_id AND d.station_id = %s""", (sid,))
+        return {r["id"] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"  ⚠ denylist scène ignorée: {e}", flush=True)
+        return set()
+
+
 # ─────────────────────────────────────────────
 # Rotation d'une station
 # ─────────────────────────────────────────────
@@ -231,6 +243,15 @@ def rotate_station(cur, st: dict) -> None:
     if not rows:
         print(f"  ∅ {label}: bac vide (0 track analysée pour ce filtre) — rotation inchangée", flush=True)
         return
+
+    # ── Denylist de la station (bouton blacklist scène-aware) : bannissement DUR ──
+    dl = denylisted_ids(cur, sid)
+    if dl:
+        rows = [r for r in rows if r["id"] not in dl]
+        if not rows:
+            print(f"  ∅ {label}: tout le bac est blacklisté — rotation inchangée", flush=True)
+            return
+        print(f"  🚫 {label}: {len(dl)} titre(s) blacklisté(s) exclu(s)", flush=True)
 
     # ── Effet des votes (auto, comme la Mainstage) ──
     vs = vote_scores(cur)

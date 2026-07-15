@@ -104,14 +104,32 @@ def init_db():
                 added_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Denylist PAR STATION (bouton blacklist station-aware). station_id 1 = mainstage
+        # (lue par playlist.py), 3-7 = scènes chill/hard/phonk/lofi/synthwave (multi_rotation.py).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS station_denylist (
+                station_id INTEGER      NOT NULL,
+                song_id    VARCHAR(100) NOT NULL,
+                artist     TEXT,
+                title      TEXT,
+                added_by   VARCHAR(64),
+                added_at   TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (station_id, song_id)
+            )
+        """)
+        # Migration one-shot : l'ancienne mainstage_denylist = station 1.
+        cur.execute("""INSERT INTO station_denylist (station_id, song_id, artist, title, added_by, added_at)
+                       SELECT 1, song_id, artist, title, added_by, added_at FROM mainstage_denylist
+                       ON CONFLICT (station_id, song_id) DO NOTHING""")
     conn.commit()
     conn.close()
 
 
-def _now_playing() -> dict:
+def _now_playing(shortcode: str = None) -> dict:
     import urllib.request, json
+    sc = shortcode or AZ_SHORTCODE
     try:
-        with urllib.request.urlopen(f"{AZ_URL}/api/nowplaying/{AZ_SHORTCODE}", timeout=5) as r:
+        with urllib.request.urlopen(f"{AZ_URL}/api/nowplaying/{sc}", timeout=5) as r:
             return json.load(r)
     except Exception as e:
         return {"_err": str(e)}
@@ -121,16 +139,17 @@ def _is_current(song_id: str, np: dict) -> bool:
     return ((np.get("now_playing") or {}).get("song") or {}).get("id") == song_id
 
 
-def _do_skip() -> bool:
-    """POST backend/skip sur AzuraCast (saute le titre EN COURS). True si OK."""
+def _do_skip(station_id=None) -> bool:
+    """POST backend/skip sur AzuraCast (saute le titre EN COURS de la station). True si OK."""
     import urllib.request
+    sid = station_id or AZ_STATION
     try:
-        req = urllib.request.Request(f"{AZ_URL}/api/station/{AZ_STATION}/backend/skip",
+        req = urllib.request.Request(f"{AZ_URL}/api/station/{sid}/backend/skip",
                                      method="POST", headers={"X-API-Key": AZ_KEY})
         urllib.request.urlopen(req, timeout=5).read()
         return True
     except Exception as e:
-        print(f"  ⚠ skip API: {e}")
+        print(f"  ⚠ skip API (station {sid}): {e}")
         return False
 
 
@@ -145,11 +164,11 @@ def _founder_gem(song_id: str, conn) -> bool:
     return (f["enc"] or 0) > (f["skp"] or 0)
 
 
-def _democratic_pass(song_id: str, conn) -> dict:
-    """Passe le titre EN COURS si ≥ SKIP_VOTE_RATIO des auditeurs ont cliqué « passer » dessus.
+def _democratic_pass(song_id: str, conn, shortcode: str = None, station_id=None) -> dict:
+    """Passe le titre EN COURS de la station si ≥ SKIP_VOTE_RATIO des auditeurs ont cliqué « passer ».
     Compte la table `passes` (action « passer »), PAS les votes SKIP (« j'aime pas » = quarantaine)."""
     import math
-    np = _now_playing()
+    np = _now_playing(shortcode)
     if np.get("_err"):
         return {"skipped": False, "reason": f"nowplaying err: {np['_err']}"}
     if not _is_current(song_id, np):
@@ -166,7 +185,7 @@ def _democratic_pass(song_id: str, conn) -> dict:
                          AND created_at >= to_timestamp(%s)""", (song_id, started))
         n = cur.fetchone()["n"]
     needed = max(SKIP_MIN_VOTES, math.ceil(SKIP_VOTE_RATIO * listeners))
-    if n >= needed and _do_skip():
+    if n >= needed and _do_skip(station_id):
         print(f"  ⏭ PASSER DÉMOCRATIQUE : {n}/{listeners} auditeurs → titre passé")
         return {"skipped": True, "passes": n, "listeners": listeners}
     return {"skipped": False, "passes": n, "listeners": listeners, "needed": needed}
@@ -242,50 +261,56 @@ def pass_track(body: dict):
     (≥ SKIP_VOTE_RATIO des auditeurs, plancher SKIP_MIN_LISTENERS/SKIP_MIN_VOTES, pépite protégée)."""
     song_id = (body.get("song_id") or "").strip()
     user_id = (body.get("user_id") or "").strip() or None
+    station_id = body.get("station_id") or AZ_STATION
+    shortcode  = body.get("shortcode") or AZ_SHORTCODE
     if not song_id:
         raise HTTPException(400, "song_id required")
     conn = get_conn()
     try:
         if user_id and user_id in FOUNDER_IDS:
-            np = _now_playing()
+            np = _now_playing(shortcode)
             if np.get("_err") or not _is_current(song_id, np):
                 return {"ok": True, "skipped": False, "reason": "titre plus en cours"}
-            ok = _do_skip()
-            print(f"  ⏭ PASSER FONDATEUR → {'passé' if ok else 'échec'}")
+            ok = _do_skip(station_id)
+            print(f"  ⏭ PASSER FONDATEUR [st {station_id}] → {'passé' if ok else 'échec'}")
             return {"ok": True, "skipped": ok, "founder": True}
         with conn.cursor() as cur:
             cur.execute("INSERT INTO passes (song_id, user_id) VALUES (%s,%s)", (song_id, user_id))
         conn.commit()
-        return {"ok": True, **_democratic_pass(song_id, conn)}
+        return {"ok": True, **_democratic_pass(song_id, conn, shortcode, station_id)}
     finally:
         conn.close()
 
 
 @app.post("/blacklist")
 def blacklist(body: dict):
-    """Bannir DÉFINITIVEMENT le titre EN COURS de la mainstage (fondateur uniquement)."""
+    """Bannir DÉFINITIVEMENT le titre EN COURS d'une STATION (fondateur uniquement).
+    station_id 1 = mainstage, 3-7 = scènes. Insère dans station_denylist + saute la station."""
     song_id = (body.get("song_id") or "").strip()
     user_id = (body.get("user_id") or "").strip() or None
+    station_id = int(body.get("station_id") or AZ_STATION)
+    shortcode  = body.get("shortcode") or AZ_SHORTCODE
     if not song_id:
         raise HTTPException(400, "song_id required")
     if not (user_id and user_id in FOUNDER_IDS):
         raise HTTPException(403, "founder only")
-    np   = _now_playing()
+    np   = _now_playing(shortcode)
     song = ((np.get("now_playing") or {}).get("song")) or {}
     artist = (body.get("artist") or song.get("artist") or "").strip()
     title  = (body.get("title")  or song.get("title")  or "").strip()
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("""INSERT INTO mainstage_denylist (song_id, artist, title, added_by)
-                           VALUES (%s,%s,%s,%s) ON CONFLICT (song_id) DO NOTHING""",
-                        (song_id, artist, title, user_id))
+            cur.execute("""INSERT INTO station_denylist (station_id, song_id, artist, title, added_by)
+                           VALUES (%s,%s,%s,%s,%s) ON CONFLICT (station_id, song_id) DO NOTHING""",
+                        (station_id, song_id, artist, title, user_id))
         conn.commit()
     finally:
         conn.close()
-    skipped = _do_skip() if _is_current(song_id, np) else False
-    print(f"  🚫 BLACKLIST {artist} - {title} (skip={skipped})")
-    return {"ok": True, "blacklisted": True, "skipped": skipped, "artist": artist, "title": title}
+    skipped = _do_skip(station_id) if _is_current(song_id, np) else False
+    print(f"  🚫 BLACKLIST [st {station_id}] {artist} - {title} (skip={skipped})")
+    return {"ok": True, "blacklisted": True, "skipped": skipped, "station_id": station_id,
+            "artist": artist, "title": title}
 
 
 @app.get("/track/{song_id}/score")

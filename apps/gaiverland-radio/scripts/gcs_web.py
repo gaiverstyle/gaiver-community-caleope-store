@@ -514,6 +514,21 @@ FOUNDER_IDS = {f.strip() for f in os.environ.get("FOUNDER_IDS",
     "e49e9b4f66961841181c2fa7751fdabc,bc29f0601314241ebd7a6974a8541f88,2194b5b1bd76539a5aac0dd5fb314f25"
     ).split(",") if f.strip()}
 
+def _station_current(station_key: str):
+    """(song_id, artist, title, az_station_id) du titre EN COURS sur la STATION écoutée.
+    AzuraCast accepte l'ID station comme shortcode → /api/nowplaying/{id}. Sert aux boutons
+    vote/passer/blacklist station-aware (avant : tout tapait sur la mainstage)."""
+    az_sid = STATIONS.get(station_key, AZ_STATION)
+    try:
+        r = httpx.get(f"{AZ_URL}/api/nowplaying/{az_sid}", timeout=4)
+        if r.status_code == 200:
+            song = (r.json().get("now_playing", {}) or {}).get("song", {}) or {}
+            return song.get("id", ""), song.get("artist", ""), song.get("title", ""), az_sid
+    except Exception:
+        pass
+    return "", "", "", az_sid
+
+
 def _login_ok(provider: str, sub: str):
     r = RedirectResponse("/?login=ok", status_code=302)
     r.set_cookie("gsid", _sign(f"{provider}:{sub}"), max_age=2592000,
@@ -598,14 +613,8 @@ def vote(request: Request, body: dict = Body(...)):
     v = str(body.get("vote", "")).upper()
     if v not in ("ENCORE", "REVIEW", "SKIP"):
         return {"ok": False, "error": "vote invalide"}
-    # Résoudre le morceau en cours
-    song_id = ""
-    try:
-        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
-        if r.status_code == 200:
-            song_id = r.json().get("song_id", "")
-    except Exception:
-        pass
+    # Résoudre le morceau en cours SUR LA STATION ÉCOUTÉE (pas forcément la mainstage)
+    song_id, _a, _t, _s = _station_current(str(body.get("station") or "main"))
     if not song_id:
         return {"ok": False, "error": "pas de morceau en cours"}
     try:
@@ -620,22 +629,18 @@ def vote(request: Request, body: dict = Body(...)):
 
 
 @app.post("/api/pass")
-def api_pass(request: Request):
-    """« Passer » le titre en cours : fondateur = immédiat, public = démocratique (côté vote-service)."""
+def api_pass(request: Request, body: dict = Body(default={})):
+    """« Passer » le titre en cours de la STATION écoutée : fondateur = immédiat, public = démocratique."""
     uid = _uid(request)
     if not uid:
         return {"ok": False, "error": "login requis", "need_login": True}
-    song_id = ""
-    try:
-        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
-        if r.status_code == 200:
-            song_id = r.json().get("song_id", "")
-    except Exception:
-        pass
+    song_id, _a, _t, az_sid = _station_current(str(body.get("station") or "main"))
     if not song_id:
         return {"ok": False, "error": "pas de morceau en cours"}
     try:
-        r = httpx.post(f"{VOTE_URL}/pass", json={"song_id": song_id, "user_id": uid}, timeout=6)
+        r = httpx.post(f"{VOTE_URL}/pass",
+                       json={"song_id": song_id, "user_id": uid,
+                             "station_id": az_sid, "shortcode": str(az_sid)}, timeout=6)
         if r.status_code == 200:
             return {"ok": True, **r.json()}
         return {"ok": False, "error": f"vote-service {r.status_code}"}
@@ -644,24 +649,20 @@ def api_pass(request: Request):
 
 
 @app.post("/api/blacklist")
-def api_blacklist(request: Request):
-    """Bannir DÉFINITIVEMENT le titre en cours de la mainstage. Réservé au fondateur."""
+def api_blacklist(request: Request, body: dict = Body(default={})):
+    """Bannir DÉFINITIVEMENT le titre en cours de la STATION écoutée. Réservé au fondateur."""
     uid = _uid(request)
     if not uid:
         return {"ok": False, "error": "login requis", "need_login": True}
     if uid not in FOUNDER_IDS:
         return {"ok": False, "error": "réservé au chef"}
-    song_id = ""
-    try:
-        r = httpx.get(f"{TRACK_URL}/track/current", timeout=3)
-        if r.status_code == 200:
-            song_id = r.json().get("song_id", "")
-    except Exception:
-        pass
+    song_id, artist, title, az_sid = _station_current(str(body.get("station") or "main"))
     if not song_id:
         return {"ok": False, "error": "pas de morceau en cours"}
     try:
-        r = httpx.post(f"{VOTE_URL}/blacklist", json={"song_id": song_id, "user_id": uid}, timeout=6)
+        r = httpx.post(f"{VOTE_URL}/blacklist",
+                       json={"song_id": song_id, "user_id": uid, "station_id": az_sid,
+                             "shortcode": str(az_sid), "artist": artist, "title": title}, timeout=6)
         if r.status_code == 200:
             return {"ok": True, **r.json()}
         return {"ok": False, "error": f"vote-service {r.status_code}"}
@@ -1330,7 +1331,7 @@ async function vote(v){
   const m=document.getElementById('votemsg');
   try{
     const r=await (await fetch('/api/vote',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({vote:v})})).json();
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({vote:v,station:curStation})})).json();
     if(r.need_login){ m.textContent='Connecte-toi pour voter 👇'; return; }
     m.textContent=r.ok?'« '+(VLABEL[v]||v)+' » enregistré. Le festival vous a entendu. ✦'
                        :'Hmm… '+(r.error||'réessayez');
@@ -1341,7 +1342,7 @@ async function passTrack(){
   const m=document.getElementById('votemsg');
   try{
     const r=await (await fetch('/api/pass',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({station:curStation})})).json();
     if(r.need_login){ m.textContent='Connecte-toi pour passer un titre 👇'; return; }
     if(r.skipped){ m.textContent=r.founder?'Titre passé. ⏭':'Assez de monde a voté : titre passé ! ⏭'; }
     else if(r.reason && r.reason.indexOf('pépite')>=0){ m.textContent='Titre protégé (coup de cœur du chef) — pas passé.'; }
@@ -1368,7 +1369,7 @@ async function blacklistTrack(){
   if(!confirm('Bannir DÉFINITIVEMENT ce titre de la mainstage ?')) return;
   try{
     const r=await (await fetch('/api/blacklist',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({station:curStation})})).json();
     if(r.need_login){ m.textContent='Connecte-toi 👇'; return; }
     m.textContent=r.ok?('🚫 Banni de la mainstage'+(r.skipped?' + titre passé.':'.')):('Hmm… '+(r.error||'réessaye'));
   }catch(e){ m.textContent='Le stagiaire a débranché quelque chose. Réessaye.'; }

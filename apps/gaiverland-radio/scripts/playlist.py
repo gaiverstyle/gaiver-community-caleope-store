@@ -608,7 +608,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     denylisted = set()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT t.id FROM tracks t JOIN mainstage_denylist d ON d.song_id = t.song_id")
+            cur.execute("SELECT t.id FROM tracks t JOIN station_denylist d ON d.song_id = t.song_id AND d.station_id = 1")
             denylisted = {r["id"] for r in cur.fetchall()}
     except Exception as e:
         print(f"  ⚠ denylist ignorée: {e}")
