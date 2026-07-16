@@ -161,6 +161,8 @@ LORE_STARTER = {
 LORE_TZ          = os.environ.get("LORE_TZ", "Europe/Paris")
 LORE_DAY_START   = int(os.environ.get("LORE_DAY_START", "6"))    # 06h → ☀️ (on pense aux lève-tôt)
 LORE_NIGHT_START = int(os.environ.get("LORE_NIGHT_START", "20"))  # 20h → 🌙
+# Anti-répétition : nb de dernières phrases interdites au tirage (36 dispo par demi-journée).
+LORE_RECENT_WINDOW = int(os.environ.get("LORE_RECENT_WINDOW", "26"))
 
 
 def _time_of_day() -> str:
@@ -214,6 +216,97 @@ def _hot_track(conn):
     return None
 
 
+# ── MINI-ARCS narratifs (dispatch Cassy 15/07) ────────────────────────────────
+# Un arc = une SÉQUENCE ORDONNÉE d'étapes qui se déroule sur plusieurs heures. Le temps
+# est porté par l'ORDRE, jamais par le texte (aucune ancre horaire : contrainte Rebexis).
+# Chaque étape doit rester lisible isolée. Ex. : « On a envoyé le stagiaire chercher un
+# câble. » → « Toujours pas de stagiaire. Le câble non plus. » → « Le câble est arrivé.
+# Sans le stagiaire. »
+#
+# CONTENU = domaine de Rebexis (`lore-arcs-rebexis.md`). Yann ne câble que la mécanique.
+# Tant que le dict est vide, le moteur est un NO-OP total → déployable sans risque.
+# Format (rempli à la livraison de Rebexis, parsé depuis son .md) :
+#   LORE_ARCS = {"<cle_arc>": {"type": "stagiaire_event", "steps": ["étape 1", "étape 2", ...]}}
+LORE_ARCS: dict = {}
+
+ARC_START_P     = float(os.environ.get("LORE_ARC_START_P", "0.25"))   # proba de lancer un arc
+ARC_GAP_MIN_H   = float(os.environ.get("LORE_ARC_GAP_MIN_H", "2"))    # espacement entre étapes
+ARC_GAP_MAX_H   = float(os.environ.get("LORE_ARC_GAP_MAX_H", "4"))
+
+
+def _arc_init(conn):
+    """État de l'arc en cours, persistant (survit aux redémarrages)."""
+    with conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS lore_arc_state (
+                         id        INTEGER PRIMARY KEY DEFAULT 1,
+                         arc_key   VARCHAR(64),
+                         step_idx  INTEGER NOT NULL DEFAULT 0,
+                         next_due  TIMESTAMPTZ,
+                         recent    JSONB NOT NULL DEFAULT '[]')""")
+        cur.execute("INSERT INTO lore_arc_state (id) VALUES (1) ON CONFLICT DO NOTHING")
+
+
+def _arc_state(conn) -> dict:
+    with conn.cursor() as cur:
+        cur.execute("SELECT arc_key, step_idx, next_due, recent FROM lore_arc_state WHERE id=1")
+        return dict(cur.fetchone() or {})
+
+
+def _arc_save(conn, arc_key, step_idx, next_due, recent):
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE lore_arc_state SET arc_key=%s, step_idx=%s, next_due=%s, recent=%s::jsonb
+                       WHERE id=1""", (arc_key, step_idx, next_due, json.dumps(recent)))
+
+
+def _arc_next(conn):
+    """Retourne (type, texte) de la prochaine étape à publier, ou None.
+
+    Fait avancer l'arc en cours quand son étape est due ; sinon en démarre un
+    parfois. None => le générateur sort une phrase normale.
+    """
+    if not LORE_ARCS:
+        return None
+    st  = _arc_state(conn)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    key, idx = st.get("arc_key"), st.get("step_idx") or 0
+    recent   = st.get("recent") or []
+    gap      = lambda: now + datetime.timedelta(hours=random.uniform(ARC_GAP_MIN_H, ARC_GAP_MAX_H))
+
+    # 1) Arc en cours : on publie l'étape suivante si elle est due.
+    if key and key in LORE_ARCS:
+        steps = LORE_ARCS[key]["steps"]
+        due   = st.get("next_due")
+        if idx < len(steps) and (not due or now >= due):
+            text = steps[idx]
+            nxt  = idx + 1
+            if nxt >= len(steps):      # arc terminé → on le retient pour ne pas le rejouer
+                recent = (recent + [key])[-6:]
+                _arc_save(conn, None, 0, None, recent)
+            else:
+                _arc_save(conn, key, nxt, gap(), recent)
+            return (LORE_ARCS[key].get("type", "festival_moment"), text)
+        return None                    # arc en attente de son heure → phrase normale
+
+    # 2) Aucun arc en cours : on en démarre un de temps en temps.
+    if random.random() < ARC_START_P:
+        candidates = [k for k in LORE_ARCS if k not in recent]
+        if not candidates:
+            # Peu d'arcs → tous « récents ». On autorise le rejeu, mais JAMAIS celui qu'on
+            # vient de terminer (sinon il repart 1h après sa chute — vu en simulation).
+            last = recent[-1] if recent else None
+            candidates = [k for k in LORE_ARCS if k != last] or list(LORE_ARCS)
+        key   = random.choice(candidates)
+        steps = LORE_ARCS[key]["steps"]
+        if not steps:
+            return None
+        if len(steps) > 1:
+            _arc_save(conn, key, 1, gap(), recent)
+        else:
+            _arc_save(conn, None, 0, None, (recent + [key])[-6:])
+        return (LORE_ARCS[key].get("type", "festival_moment"), steps[0])
+    return None
+
+
 def _lore_generator():
     time.sleep(20)  # laisser init_db finir
     last_type = None
@@ -222,10 +315,15 @@ def _lore_generator():
         try:
             conn = get_conn(); conn.autocommit = True
             city = _current_city(conn)   # suit la mini-scène en cours
+            _arc_init(conn)
 
+            # Priorité 1 : une étape d'arc narratif si elle est due (le journal RACONTE).
+            arc = _arc_next(conn)
             # ~1 génération sur 4 : saluer un titre plébiscité (lore RÉACTIF aux votes).
-            hot = _hot_track(conn) if random.random() < 0.25 else None
-            if hot and hot[1]:
+            hot = None if arc else (_hot_track(conn) if random.random() < 0.25 else None)
+            if arc:
+                etype, desc = arc[0], arc[1].replace("{ville}", city).replace("{city}", city)
+            elif hot and hot[1]:
                 artist, title = hot
                 desc  = (random.choice(REACTIVE_SALUTE)
                          .replace("{artist}", artist or "le mix")
@@ -244,7 +342,11 @@ def _lore_generator():
                     conn.close(); time.sleep(LORE_INTERVAL_S); continue
                 phrase = random.choice(fresh)
                 recent.append(phrase)
-                if len(recent) > 12:
+                # Fenêtre élargie 12 → 26 (demande Cassy 15/07 : « 25-30 »). Il y a 36 phrases
+                # par demi-journée (3 types × 12) : à 26, on exclut la grande majorité du vivier
+                # avant de rejouer quoi que ce soit. Le `or pool` plus haut évite la famine si
+                # la fenêtre vide un type (on retombe alors sur son pool complet).
+                if len(recent) > LORE_RECENT_WINDOW:
                     recent.pop(0)
                 desc = phrase.replace("{ville}", city).replace("{city}", city)
 
