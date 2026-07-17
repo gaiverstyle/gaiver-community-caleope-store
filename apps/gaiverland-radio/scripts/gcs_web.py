@@ -31,6 +31,13 @@ try:
 except Exception:
     TEAM_HTML = None
 
+# Page « Notre modèle » — Tomorrowland (saisonnière). On EMBARQUE l'officiel, jamais de
+# re-stream (cf module). Import guardé : si absent, le site reste debout.
+try:
+    import modele_page
+except Exception:
+    modele_page = None
+
 DB_URL      = os.environ["DATABASE_URL"]
 TRACK_URL   = os.environ.get("GCS_TRACK_URL",        "http://gcs-track-service:8090")
 # Fuseau du festival : le conteneur tourne en UTC, mais le journal doit afficher
@@ -1048,6 +1055,7 @@ footer .c15{margin-top:6px;font-size:12px}
   Gaiverland Radio — présente, comme toujours.
   <div class="c15">Le C15 veille sur ce site. Personne ne sait pourquoi.</div>
   <div style="margin-top:14px"><a href="/equipe" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">L'équipe du festival →</a></div>
+  <div id="modele-link" hidden style="margin-top:10px"><a href="/modele" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">🎪 Notre modèle : Tomorrowland →</a></div>
 </footer>
 
 </div>
@@ -1564,6 +1572,11 @@ setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals
 // Repeint chaque seconde SANS requête réseau : le titre bascule à l'instant précis où
 // l'auditeur entend le changement (le sondage réseau, lui, reste à 10 s).
 setInterval(function(){ if(lastLive && lastLive.song_id) paintTrack(lastLive, lastArt); },1000);
+
+// Lien « Notre modèle » (Tomorrowland) : affiché seulement pendant l'événement (saisonnier).
+fetch('/api/modele-active').then(function(r){return r.json();}).then(function(d){
+  if(d && d.active){ var el=document.getElementById('modele-link'); if(el) el.hidden=false; }
+}).catch(function(){});
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=__VER__').catch(function(){});}
 </script></body></html>"""
 
@@ -1584,6 +1597,46 @@ def equipe():
             'border-radius:20px;padding:7px 14px;font:13px Helvetica,Arial,sans-serif;'
             'text-decoration:none;backdrop-filter:blur(3px)">← Retour à la radio</a>')
     return HTMLResponse(TEAM_HTML.replace("</body>", back + "</body>", 1))
+
+
+def _ui_cfg(key: str) -> dict:
+    """Lit une valeur jsonb de la table ui_config (dict), {} si absente / DB indispo."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM ui_config WHERE key=%s", (key,))
+            r = cur.fetchone()
+        conn.close()
+        v = r["value"] if r else None
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+
+@app.get("/modele", response_class=HTMLResponse)
+def modele():
+    if not modele_page:
+        return RedirectResponse("/", status_code=302)
+    cfg = _ui_cfg("tomorrowland")
+    # Saisonnière : masquée hors événement. Défaut = active (env de secours possible).
+    active = cfg.get("active", os.environ.get("TOMORROWLAND_ACTIVE", "true").lower() == "true")
+    if not active:
+        return RedirectResponse("/", status_code=302)
+    yt = cfg.get("yt") or os.environ.get("TOMORROWLAND_YT", "")
+    embed = modele_page.yt_embed_src(yt)
+    back = ('<a href="/" style="position:fixed;top:16px;left:18px;z-index:99;'
+            'color:#fff4e6;background:rgba(0,0,0,.28);border:1px solid rgba(255,244,230,.35);'
+            'border-radius:20px;padding:7px 14px;font:13px Helvetica,Arial,sans-serif;'
+            'text-decoration:none;backdrop-filter:blur(3px)">← Retour à la radio</a>')
+    return HTMLResponse(modele_page.render(embed).replace("</body>", back + "</body>", 1),
+                        headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/api/modele-active")
+def modele_active():
+    """Le front décide d'afficher le bouton « Notre modèle » selon cette réponse."""
+    cfg = _ui_cfg("tomorrowland")
+    return {"active": bool(cfg.get("active", os.environ.get("TOMORROWLAND_ACTIVE", "true").lower() == "true"))}
 
 
 # ── PWA : favicon SVG on-brand, manifest installable, service worker ──────────
