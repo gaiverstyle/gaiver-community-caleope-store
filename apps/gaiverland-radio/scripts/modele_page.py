@@ -33,24 +33,42 @@ def yt_embed_src(raw: str):
     return "https://www.youtube.com/embed/" + vid if vid else None
 
 
-def _live_block(embed_src):
+def _esc(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _one_embed(label, embed_src):
+    """Un direct officiel étiqueté (Mainstage, Freedom Stage, One World Radio…)."""
     if embed_src:
-        # Embed officiel : l'audio+vidéo restent servis par YouTube. loading=lazy, pas d'autoplay.
+        # Embed officiel : audio+vidéo servis par YouTube. loading=lazy, pas d'autoplay.
         return (
+            '<div class="stream"><h3>' + _esc(label) + '</h3>'
             '<div class="frame"><iframe src="' + embed_src + '"'
-            ' title="Live officiel Tomorrowland (YouTube)" loading="lazy"'
+            ' title="' + _esc(label) + ' — diffusion officielle (YouTube)" loading="lazy"'
             ' allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen'
-            ' referrerpolicy="strict-origin-when-cross-origin"></iframe></div>'
-            '<p class="cap">Diffusion officielle Tomorrowland via YouTube — pubs et vues chez eux. '
-            'Le direct s\'affiche pendant leurs horaires de stream.</p>'
+            ' referrerpolicy="strict-origin-when-cross-origin"></iframe></div></div>'
         )
     return (
-        '<div class="offline">'
-        '<p>Le direct officiel s\'affichera ici pendant leurs horaires de stream.</p>'
+        '<div class="stream"><h3>' + _esc(label) + '</h3>'
+        '<div class="offline"><p>Direct affiché pendant leurs horaires de stream.</p>'
         '<a class="btn" href="' + OFFICIAL_LIVE + '" target="_blank" rel="noopener noreferrer">'
-        '▶ Regarder le live officiel sur YouTube</a>'
-        '</div>'
+        '▶ Voir sur la chaîne officielle</a></div></div>'
     )
+
+
+def _live_block(streams):
+    """streams = [(label, embed_src), …]. Rien de configuré → repli lien officiel."""
+    if not streams:
+        return (
+            '<div class="offline">'
+            '<p>Les directs officiels s\'afficheront ici pendant leurs horaires de stream.</p>'
+            '<a class="btn" href="' + OFFICIAL_LIVE + '" target="_blank" rel="noopener noreferrer">'
+            '▶ Regarder le live officiel sur YouTube</a></div>'
+        )
+    inner = "".join(_one_embed(lbl, src) for lbl, src in streams)
+    return (inner +
+            '<p class="cap">Diffusions officielles Tomorrowland via YouTube — pubs et vues chez eux. '
+            'Chaque direct s\'affiche pendant ses horaires de stream.</p>')
 
 
 _CSS = """
@@ -70,6 +88,9 @@ a{color:#ffd7a8}
 .card{background:rgba(255,244,230,.08);border:1px solid rgba(255,244,230,.22);border-radius:16px;
  padding:22px;margin-bottom:20px}
 .card h2{margin:0 0 12px;font-size:19px}
+.stream{margin-bottom:18px}
+.stream:last-child{margin-bottom:0}
+.stream h3{margin:0 0 8px;font-size:15px;letter-spacing:.02em;opacity:.95}
 .frame{position:relative;padding-bottom:56.25%;height:0;border-radius:12px;overflow:hidden;background:#000}
 .frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .cap{font-size:12px;opacity:.7;margin:10px 2px 0}
@@ -98,7 +119,8 @@ _WHY = (
 )
 
 
-def render(embed_src=None) -> str:
+def render(streams=None) -> str:
+    streams = streams or []
     parts = []
     parts.append('<!doctype html><html lang="fr"><head><meta charset="utf-8">')
     parts.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
@@ -115,7 +137,7 @@ def render(embed_src=None) -> str:
         'chez nous&nbsp;: le direct est servi par YouTube, avec leurs pubs et à leur bénéfice. '
         'Tomorrowland® et leurs marques appartiennent à leurs détenteurs.</div>'
     )
-    parts.append('<div class="card"><h2>🎪 Le live officiel</h2>' + _live_block(embed_src) + '</div>')
+    parts.append('<div class="card"><h2>🎪 Les directs officiels</h2>' + _live_block(streams) + '</div>')
     parts.append(
         '<div class="card"><h2>🔗 Chez eux, en officiel</h2><div class="links">'
         '<a href="' + OFFICIAL_LIVE + '" target="_blank" rel="noopener noreferrer">Live YouTube ▶</a>'

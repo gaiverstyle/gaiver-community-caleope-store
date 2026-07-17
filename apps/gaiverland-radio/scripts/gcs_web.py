@@ -1622,13 +1622,21 @@ def modele():
     active = cfg.get("active", os.environ.get("TOMORROWLAND_ACTIVE", "true").lower() == "true")
     if not active:
         return RedirectResponse("/", status_code=302)
-    yt = cfg.get("yt") or os.environ.get("TOMORROWLAND_YT", "")
-    embed = modele_page.yt_embed_src(yt)
+    # Streams officiels à embarquer. Format riche : cfg["streams"]=[{"label":..,"yt":..}].
+    # Compat : ancien cfg["yt"] (un seul) → Mainstage. Chaque yt = URL/id vidéo/id chaîne.
+    streams = []
+    for s in (cfg.get("streams") or []):
+        src = modele_page.yt_embed_src(s.get("yt", ""))
+        streams.append((s.get("label", "Direct"), src))
+    if not streams:
+        yt = cfg.get("yt") or os.environ.get("TOMORROWLAND_YT", "")
+        if yt:
+            streams.append(("Mainstage", modele_page.yt_embed_src(yt)))
     back = ('<a href="/" style="position:fixed;top:16px;left:18px;z-index:99;'
             'color:#fff4e6;background:rgba(0,0,0,.28);border:1px solid rgba(255,244,230,.35);'
             'border-radius:20px;padding:7px 14px;font:13px Helvetica,Arial,sans-serif;'
             'text-decoration:none;backdrop-filter:blur(3px)">← Retour à la radio</a>')
-    return HTMLResponse(modele_page.render(embed).replace("</body>", back + "</body>", 1),
+    return HTMLResponse(modele_page.render(streams).replace("</body>", back + "</body>", 1),
                         headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
