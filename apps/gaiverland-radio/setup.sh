@@ -2568,13 +2568,13 @@ def should_intervene(conn) -> bool:
 
 # Phrases « nouveauté » : Rebexis annonce une première diffusion (surprise auditeurs).
 # Fallback en dur → marche même si rebexis-templates.json n'a pas de section nouveauté.
+# GÉNÉRIQUES (pas de nom de titre) → texte FIXE identique → TTS mis en cache une seule
+# fois (cache_key = hash(texte)) puis réutilisé = ZÉRO token par nouveauté. Ne PAS
+# interpoler le titre (ça rendrait chaque phrase unique = un TTS payant à chaque fois).
 NOUVEAUTE_TEMPLATES = [
-    "Nouveauté sur Gaiverland ! Première pour {next} — ouvrez grand les oreilles.",
-    "Fraîche du convoi : {next} débarque pour la toute première fois. C'est maintenant.",
-    "Grande première : {next}. Vous l'entendez ici, avant tout le monde.",
-    "Alerte nouveauté ! {next} entre dans la danse. Montez le son.",
-    "Ça sort du carton : {next}, jamais joué avant sur l'antenne. Savourez.",
-    "Le convoi a ramené du neuf — {next}, en exclu, tout de suite sur Gaiverland.",
+    "Attention : le prochain titre, c'est une nouveauté. Ouvrez grand les oreilles.",
+    "Petite première qui arrive juste après — du neuf sur Gaiverland.",
+    "Ça sent le neuf : une nouveauté débarque, tout de suite après.",
 ]
 
 
@@ -2593,9 +2593,10 @@ def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> st
         if len(next_artist) > 40:
             next_artist = next_artist[:40].rstrip()
 
-    # NOUVEAUTÉ : le prochain titre est une première → annonce dédiée (surprend l'auditeur).
-    if new_track and next_artist:
-        return random.choice(NOUVEAUTE_TEMPLATES).format(next=next_artist, next_track=next_track)
+    # NOUVEAUTÉ : le prochain titre est une première → annonce GÉNÉRIQUE fixe (sans le nom
+    # du titre) → TTS caché/réutilisé, zéro token répété.
+    if new_track:
+        return random.choice(NOUVEAUTE_TEMPLATES)
 
     if next_artist and "templates_with_next" in mode_data:
         # Préférer les templates avec prochain titre (2 chances sur 3)
@@ -2665,9 +2666,13 @@ def generate(mood: str = "energique", context_track: str = "",
         cur.execute("SELECT intervention FROM rebexis_sessions ORDER BY generated_at DESC LIMIT 5")
         recent = [r["intervention"] for r in cur.fetchall()]
 
-    text = gen_ollama(mood, context_track, recent, next_track, new_track) if MODE == "ollama" else \
-           gen_api(mood, context_track, recent, next_track, new_track)    if MODE == "api"    else \
-           gen_template(mood, next_track, new_track)
+    if new_track:
+        # Nouveauté = phrase fixe générique (0 appel LLM, TTS caché) quel que soit le mode.
+        text = gen_template(mood, next_track, True)
+    else:
+        text = gen_ollama(mood, context_track, recent, next_track) if MODE == "ollama" else \
+               gen_api(mood, context_track, recent, next_track)    if MODE == "api"    else \
+               gen_template(mood, next_track)
 
     with conn.cursor() as cur:
         cur.execute("""
