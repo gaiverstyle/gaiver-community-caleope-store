@@ -12,7 +12,7 @@ Config (lue au moment de la requête, cf gcs_web) :
 - TOMORROWLAND_YT     : cible du live — URL YouTube, ID vidéo (11 car.) ou ID chaîne (UC…).
                         Vide → repli « Regarder le live officiel » (lien, pas d'embed).
 """
-import re
+import re, json
 
 # Liens OFFICIELS (on POINTE, on ne réhéberge pas). Le suffixe /live d'une chaîne
 # redirige vers son direct courant → repli fiable sans ID vidéo à maintenir.
@@ -37,38 +37,37 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def _one_embed(label, embed_src):
-    """Un direct officiel étiqueté (Mainstage, Freedom Stage, One World Radio…)."""
-    if embed_src:
-        # Embed officiel : audio+vidéo servis par YouTube. loading=lazy, pas d'autoplay.
-        return (
-            '<div class="stream"><h3>' + _esc(label) + '</h3>'
-            '<div class="frame"><iframe src="' + embed_src + '"'
-            ' title="' + _esc(label) + ' — diffusion officielle (YouTube)" loading="lazy"'
-            ' allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen'
-            ' referrerpolicy="strict-origin-when-cross-origin"></iframe></div></div>'
-        )
-    return (
-        '<div class="stream"><h3>' + _esc(label) + '</h3>'
-        '<div class="offline"><p>Direct affiché pendant leurs horaires de stream.</p>'
-        '<a class="btn" href="' + OFFICIAL_LIVE + '" target="_blank" rel="noopener noreferrer">'
-        '▶ Voir sur la chaîne officielle</a></div></div>'
-    )
-
-
 def _live_block(streams):
-    """streams = [(label, embed_src), …]. Rien de configuré → repli lien officiel."""
-    if not streams:
+    """streams = [(label, embed_src), …]. MENU de scènes + UN seul lecteur (on choisit).
+    Rien d'embarquable → repli lien officiel."""
+    valid = [(lbl, src) for lbl, src in streams if src]
+    if not valid:
         return (
             '<div class="offline">'
             '<p>Les directs officiels s\'afficheront ici pendant leurs horaires de stream.</p>'
             '<a class="btn" href="' + OFFICIAL_LIVE + '" target="_blank" rel="noopener noreferrer">'
             '▶ Regarder le live officiel sur YouTube</a></div>'
         )
-    inner = "".join(_one_embed(lbl, src) for lbl, src in streams)
-    return (inner +
-            '<p class="cap">Diffusions officielles Tomorrowland via YouTube — pubs et vues chez eux. '
-            'Chaque direct s\'affiche pendant ses horaires de stream.</p>')
+    # Boutons de sélection (comme le sélecteur de stations de l'accueil).
+    tabs = "".join(
+        '<button class="ms-tab' + (' on' if i == 0 else '') + '" type="button" '
+        'onclick="msPick(' + str(i) + ')">' + _esc(lbl) + '</button>'
+        for i, (lbl, _) in enumerate(valid))
+    data = json.dumps([{"l": lbl, "s": src} for lbl, src in valid])
+    # UN iframe, dont on change juste la source au clic → un seul flux chargé à la fois.
+    return (
+        '<div class="ms-picker">' + tabs + '</div>'
+        '<div class="frame"><iframe id="ms-frame" src="' + valid[0][1] + '"'
+        ' title="Diffusion officielle Tomorrowland (YouTube)" loading="lazy"'
+        ' allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen'
+        ' referrerpolicy="strict-origin-when-cross-origin"></iframe></div>'
+        '<p class="cap">Diffusion officielle Tomorrowland via YouTube — pubs et vues chez eux. '
+        'Chaque scène s\'affiche pendant ses horaires de stream. Choisis la scène ci-dessus.</p>'
+        '<script>var MS=' + data + ';function msPick(i){'
+        'var f=document.getElementById("ms-frame");if(f)f.src=MS[i].s;'
+        'var b=document.querySelectorAll(".ms-tab");for(var j=0;j<b.length;j++)'
+        'b[j].classList.toggle("on",j===i);}</script>'
+    )
 
 
 _CSS = """
@@ -88,9 +87,12 @@ a{color:#ffd7a8}
 .card{background:rgba(255,244,230,.08);border:1px solid rgba(255,244,230,.22);border-radius:16px;
  padding:22px;margin-bottom:20px}
 .card h2{margin:0 0 12px;font-size:19px}
-.stream{margin-bottom:18px}
-.stream:last-child{margin-bottom:0}
-.stream h3{margin:0 0 8px;font-size:15px;letter-spacing:.02em;opacity:.95}
+.ms-picker{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.ms-tab{background:rgba(255,244,230,.1);border:1px solid rgba(255,244,230,.25);color:var(--cream);
+ border-radius:999px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
+.ms-tab:hover{background:rgba(255,244,230,.2)}
+.ms-tab.on{background:linear-gradient(90deg,#ff8a3d,#ff3b5c);border-color:transparent;
+ box-shadow:0 2px 10px rgba(255,59,92,.35)}
 .frame{position:relative;padding-bottom:56.25%;height:0;border-radius:12px;overflow:hidden;background:#000}
 .frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .cap{font-size:12px;opacity:.7;margin:10px 2px 0}
