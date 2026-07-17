@@ -5839,7 +5839,7 @@ REACTIVE_SALUTE = [
     "Le public a tranché : {artist} — « {title} » repasse, et personne ne râle.",
     "« {title} » de {artist} met tout le monde d'accord. Les ENCORE pleuvent.",
     "On garde {artist} dans la rotation : « {title} » a chauffé la foule pour de bon.",
-    "{artist} squatte les cœurs ce soir. « {title} », encore réclamé.",
+    "{artist} squatte les cœurs. « {title} », encore réclamé.",
     "Vous avez voté, on a écouté : « {title} » de {artist} reste à l'affiche.",
     "« {title} » — {artist}. La foule en redemande, la régie s'exécute.",
 ]
