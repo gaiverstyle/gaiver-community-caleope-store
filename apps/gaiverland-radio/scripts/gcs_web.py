@@ -981,7 +981,6 @@ footer .c15{margin-top:6px;font-size:12px}
     <div class="fx-checks">
       <label><input type="checkbox" class="js-keepbass"> <b>Keep-bass</b> <span>baisse sans étouffer</span></label>
       <label><input type="checkbox" class="js-loud"> <b>Loudness</b> <span>niveau constant</span></label>
-      <label><input type="checkbox" class="js-festival"> <b>Depuis la scène</b> <span>immersion festival 🎪</span></label>
       <label><input type="checkbox" class="js-mono"> <b>Mono</b> <span>1 seul HP</span></label>
     </div>
     <div class="fx-lab">Visualizer</div>
@@ -1134,7 +1133,7 @@ const PRESETS=[['flat','Flat'],['bassboost','Bass boost'],['keepbass','Keep-bass
 const VIZS=[['bars','Barres'],['radial','Radial'],['wave','Onde']];
 const AFX={
   ctx:null,src:null,n:null,an:null,freq:null,tim:null,ready:false,
-  o:Object.assign({vol:1,preset:'flat',bass:0,keepbass:false,loud:false,mono:false,festival:false,viz:'bars'},
+  o:Object.assign({vol:1,preset:'flat',bass:0,keepbass:false,loud:false,mono:false,viz:'bars'},
      (function(){try{return JSON.parse(localStorage.getItem(FX_KEY))||{};}catch(e){return {};}})()),
   save(){try{localStorage.setItem(FX_KEY,JSON.stringify(this.o));}catch(e){}},
   setup(){
@@ -1149,24 +1148,11 @@ const AFX={
       const treb=c.createBiquadFilter(); treb.type='highshelf'; treb.frequency.value=6200;
       const comp=c.createDynamicsCompressor();
       const mono=c.createGain();
-      // ── Immersion « depuis la scène » : réverb d'arène en parallèle (chemin humide) ──
-      // Impulse synthétisée (bruit blanc décroissant) → grand espace réverbérant, façon
-      // captation live dans le champ. CPU-only, aucun fichier audio à charger.
-      const conv=c.createConvolver();
-      (function(){var sr=c.sampleRate,ln=Math.floor(sr*2.6),ib=c.createBuffer(2,ln,sr);
-        for(var ch=0;ch<2;ch++){var d=ib.getChannelData(ch);
-          for(var i=0;i<ln;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/ln,2.4);}
-        conv.buffer=ib;})();
-      const wetLP=c.createBiquadFilter(); wetLP.type='lowpass'; wetLP.frequency.value=9000; // un peu voilé, "au loin"
-      const dry=c.createGain(); const wet=c.createGain(); wet.gain.value=0;
       const master=c.createGain();
       const an=c.createAnalyser(); an.fftSize=512; an.smoothingTimeConstant=0.82;
       this.src.connect(bass); bass.connect(mid); mid.connect(treb); treb.connect(comp);
-      comp.connect(mono);
-      mono.connect(dry); dry.connect(master);                               // chemin sec (toujours)
-      mono.connect(conv); conv.connect(wetLP); wetLP.connect(wet); wet.connect(master);  // chemin réverbéré
-      master.connect(an); an.connect(c.destination);
-      this.n={bass:bass,mid:mid,treb:treb,comp:comp,mono:mono,dry:dry,wet:wet,master:master}; this.an=an;
+      comp.connect(mono); mono.connect(master); master.connect(an); an.connect(c.destination);
+      this.n={bass:bass,mid:mid,treb:treb,comp:comp,mono:mono,master:master}; this.an=an;
       this.freq=new Uint8Array(an.frequencyBinCount); this.tim=new Uint8Array(an.fftSize);
       A.volume=1; this.ready=true; this.apply();
       return true;
@@ -1188,13 +1174,7 @@ const AFX={
     n.comp.threshold.value=uc?-22:0; n.comp.ratio.value=uc?4:1; n.comp.knee.value=uc?26:0;
     n.comp.attack.value=0.003; n.comp.release.value=0.25;
     n.mono.channelCount=o.mono?1:2; n.mono.channelCountMode=o.mono?'explicit':'max'; n.mono.channelInterpretation='speakers';
-    // Immersion festival : dosage humide/sec. Sec toujours plein, humide = réverb d'arène.
-    n.dry.gain.value=1;
-    n.wet.gain.value=o.festival?0.34:0;
-    // Loudness « niveau constant » : le compresseur seul ne fait qu'écraser les crêtes → ça
-    // sonnait PLUS BAS (d'où « ça marche pas »). On ajoute le MAKEUP GAIN qui manquait :
-    // les passages faibles remontent, le niveau perçu devient constant. Borné pour ne pas saturer.
-    A.volume=1; n.master.gain.value=o.vol*(uc?1.6:1);
+    A.volume=1; n.master.gain.value=o.vol;
   },
   set(k,v){ this.o[k]=v; this.save(); this.apply(); },
   resume(){ if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(function(){}); }
@@ -1524,7 +1504,6 @@ function syncFxUI(){
   document.querySelectorAll('.js-keepbass').forEach(el=>el.checked=o.keepbass);
   document.querySelectorAll('.js-loud').forEach(el=>el.checked=o.loud);
   document.querySelectorAll('.js-mono').forEach(el=>el.checked=o.mono);
-  document.querySelectorAll('.js-festival').forEach(el=>el.checked=o.festival);
   document.querySelectorAll('[data-preset]').forEach(el=>el.classList.toggle('active', el.dataset.preset===o.preset));
   document.querySelectorAll('[data-viz]').forEach(el=>el.classList.toggle('active', el.dataset.viz===o.viz));
 }
@@ -1575,7 +1554,6 @@ function initFxUI(){
     if(e.target.classList.contains('js-keepbass')) AFX.set('keepbass',e.target.checked);
     else if(e.target.classList.contains('js-loud')) AFX.set('loud',e.target.checked);
     else if(e.target.classList.contains('js-mono')) AFX.set('mono',e.target.checked);
-    else if(e.target.classList.contains('js-festival')) AFX.set('festival',e.target.checked);
   });
   syncFxUI(); updateFxAvail(); AFX.apply();
 }
