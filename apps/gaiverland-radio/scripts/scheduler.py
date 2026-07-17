@@ -215,6 +215,27 @@ def process_tts_queue():
         print(f"  ⚠ TTS queue: {e}")
 
 
+def _is_new_track(song_id: str) -> bool:
+    """Nouveauté = titre jamais/quasi jamais diffusé (play_history < 2). Signal fiable pour
+    l'annonce Rebexis, immunisé au bump `updated_at` de la ré-analyse (backfill vocalness).
+    Dégradé-safe : False si la DB/table manque."""
+    if not song_id:
+        return False
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT COUNT(*) AS n FROM play_history ph
+                               JOIN tracks t ON t.id = ph.track_id
+                               WHERE t.song_id = %s""", (song_id,))
+                n = cur.fetchone()["n"]
+            return n < 2
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def maybe_generate_rebexis():
     """Déclenche la génération d'une intervention Rebexis.
 
@@ -241,8 +262,9 @@ def maybe_generate_rebexis():
             song = np_data.get("now_playing", {}).get("song", {})
             context = f"{song.get('artist', '')} — {song.get('title', '')}".strip(" —")
 
-        # Prochain titre musical (skip les jingles Rebexis)
+        # Prochain titre musical (skip les jingles Rebexis) + son song_id (détection nouveauté)
         next_music = ""
+        next_song_id = ""
         try:
             queue = get_queue(limit=6)
             for entry in queue:
@@ -251,20 +273,26 @@ def maybe_generate_rebexis():
                 artist = song.get("artist", "")
                 if title and "rebexis" not in title.lower() and "rebexis" not in artist.lower():
                     next_music = f"{artist} — {title}".strip(" —") if artist else title
+                    next_song_id = song.get("id", "")
                     break
         except Exception:
             pass
 
+        # NOUVEAUTÉ : le prochain titre est-il une première diffusion ? → Rebexis l'annonce.
+        is_new = _is_new_track(next_song_id) if next_song_id else False
+
         resp = httpx.post(f"{REBEXIS_URL}/generate",
                           params={"mood": mood, "context_track": context,
-                                  "next_track": next_music, "force": str(force_lore).lower()},
+                                  "next_track": next_music, "force": str(force_lore).lower(),
+                                  "new_track": str(is_new).lower()},
                           timeout=30)
         data = resp.json()
         if data.get("intervention"):
             if force_lore:
                 _lore_last_time = now
+            tag = "🆕" if is_new else "🎙"
             suffix = f" → {next_music[:35]}" if next_music else ""
-            print(f"  🎙 Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
+            print(f"  {tag} Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
     except Exception as e:
         print(f"  ⚠ Rebexis: {e}")
 

@@ -76,7 +76,19 @@ def should_intervene(conn) -> bool:
     return elapsed >= random.randint(INT_MIN, INT_MAX)
 
 
-def gen_template(mood: str, next_track: str = "") -> str:
+# Phrases « nouveauté » : Rebexis annonce une première diffusion (surprise auditeurs).
+# Fallback en dur → marche même si rebexis-templates.json n'a pas de section nouveauté.
+NOUVEAUTE_TEMPLATES = [
+    "Nouveauté sur Gaiverland ! Première pour {next} — ouvrez grand les oreilles.",
+    "Fraîche du convoi : {next} débarque pour la toute première fois. C'est maintenant.",
+    "Grande première : {next}. Vous l'entendez ici, avant tout le monde.",
+    "Alerte nouveauté ! {next} entre dans la danse. Montez le son.",
+    "Ça sort du carton : {next}, jamais joué avant sur l'antenne. Savourez.",
+    "Le convoi a ramené du neuf — {next}, en exclu, tout de suite sur Gaiverland.",
+]
+
+
+def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> str:
     key = "hype" if mood in ("festival", "energique") else \
           "peak" if mood == "intense" else \
           "flow" if mood in ("nocturne", "melodique") else "normal"
@@ -91,6 +103,10 @@ def gen_template(mood: str, next_track: str = "") -> str:
         if len(next_artist) > 40:
             next_artist = next_artist[:40].rstrip()
 
+    # NOUVEAUTÉ : le prochain titre est une première → annonce dédiée (surprend l'auditeur).
+    if new_track and next_artist:
+        return random.choice(NOUVEAUTE_TEMPLATES).format(next=next_artist, next_track=next_track)
+
     if next_artist and "templates_with_next" in mode_data:
         # Préférer les templates avec prochain titre (2 chances sur 3)
         pool = mode_data["templates_with_next"] * 2 + mode_data.get("templates_no_next", mode_data.get("templates", []))
@@ -101,9 +117,11 @@ def gen_template(mood: str, next_track: str = "") -> str:
         return random.choice(t)
 
 
-def gen_ollama(mood: str, context: str, recent: list, next_track: str = "") -> str:
+def gen_ollama(mood: str, context: str, recent: list, next_track: str = "", new_track: bool = False) -> str:
     prompt = f"Génère UNE intervention de Rebexis (2 phrases, 20-40 mots). Morceau en cours: {context}. Ambiance: {mood}."
-    if next_track:
+    if next_track and new_track:
+        prompt += f" Le prochain morceau est une NOUVEAUTÉ, sa TOUTE PREMIÈRE diffusion sur la radio : {next_track}. Annonce-le comme une première/découverte, avec enthousiasme (mot 'nouveauté' ou 'première')."
+    elif next_track:
         prompt += f" Le prochain morceau sera : {next_track}. Termine ta phrase en lançant vers ce prochain titre."
     if recent:
         prompt += f" Phrases à éviter: {' / '.join(recent[:2])}"
@@ -115,12 +133,14 @@ def gen_ollama(mood: str, context: str, recent: list, next_track: str = "") -> s
         return r.json().get("response", "").strip()
     except Exception as e:
         print(f"⚠ Ollama: {e}")
-        return gen_template(mood)
+        return gen_template(mood, next_track, new_track)
 
 
-def gen_api(mood: str, context: str, recent: list, next_track: str = "") -> str:
+def gen_api(mood: str, context: str, recent: list, next_track: str = "", new_track: bool = False) -> str:
     user = f"Morceau en cours : {context}. Ambiance : {mood}."
-    if next_track:
+    if next_track and new_track:
+        user += f" Le prochain morceau est une NOUVEAUTÉ, sa TOUTE PREMIÈRE diffusion : {next_track}. Annonce-le comme une première/découverte enthousiaste (dis 'nouveauté' ou 'première')."
+    elif next_track:
         user += f" Prochain morceau : {next_track}. Termine en lançant vers ce titre."
     if recent:
         user += f" Évite: {' / '.join(recent[:2])}"
@@ -136,7 +156,7 @@ def gen_api(mood: str, context: str, recent: list, next_track: str = "") -> str:
         return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"⚠ API LLM: {e}")
-        return gen_template(mood, next_track)
+        return gen_template(mood, next_track, new_track)
 
 
 @app.get("/health")
@@ -146,7 +166,7 @@ def health():
 
 @app.post("/generate")
 def generate(mood: str = "energique", context_track: str = "",
-             next_track: str = "", force: bool = False):
+             next_track: str = "", force: bool = False, new_track: bool = False):
     conn = get_conn()
     if not force and not should_intervene(conn):
         return {"intervention": None, "reason": "intervalle_non_atteint"}
@@ -155,9 +175,9 @@ def generate(mood: str = "energique", context_track: str = "",
         cur.execute("SELECT intervention FROM rebexis_sessions ORDER BY generated_at DESC LIMIT 5")
         recent = [r["intervention"] for r in cur.fetchall()]
 
-    text = gen_ollama(mood, context_track, recent, next_track) if MODE == "ollama" else \
-           gen_api(mood, context_track, recent, next_track)    if MODE == "api"    else \
-           gen_template(mood, next_track)
+    text = gen_ollama(mood, context_track, recent, next_track, new_track) if MODE == "ollama" else \
+           gen_api(mood, context_track, recent, next_track, new_track)    if MODE == "api"    else \
+           gen_template(mood, next_track, new_track)
 
     with conn.cursor() as cur:
         cur.execute("""

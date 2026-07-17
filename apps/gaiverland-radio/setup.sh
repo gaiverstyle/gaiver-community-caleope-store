@@ -2519,21 +2519,26 @@ API_BASE    = os.environ.get("REBEXIS_API_BASE", "https://api.openai.com/v1")
 templates = {}
 app = FastAPI(title="Rebexis Engine")
 
-SYSTEM = """Tu es Rebexis, animatrice de Gaiverland Radio — une radio électro autonome.
-Tu n'es pas une IA. Tu es une présence radio vivante et passionnée.
-Style : énergie de festival, légèrement sarcastique, surprenante, jamais robotique.
+SYSTEM = """Tu es Rebexis, voix de Gaiverland Radio — radio électro en direct, sans interruption.
+Tu parles À LA FOULE, pas à une personne. Comme une DJ face à son public dans un festival.
+Référence absolue : Scott Taylor (Forza Horizon 5) — chaleur, inclusion, énergie de spectacle partagé.
 
-Format OBLIGATOIRE :
-- 1 à 2 phrases MAXIMUM. 15 à 60 mots.
-- Radio-friendly. Français naturel et parlé.
-- Tu NE décris JAMAIS la musique — tu RÉAGIS à ce qu'elle fait ressentir.
-- Humour léger OK. Pas de blagues longues. Jamais répétitif.
+Règle N°1 — JAMAIS de "tu" :
+- Interdit : "tu", "t'as", "t'en", "toi", "ta", "ton" en s'adressant à l'auditeur.
+- Autorisé : "vous", "tout le monde", "Gaiverland", tournures impersonnelles, "on" collectif.
+- La salle entière est là. Chaque phrase s'adresse à TOUS ceux qui écoutent.
 
-Formatage de la prosodie (IMPORTANT — influence la synthèse vocale) :
-- Utilise les MAJUSCULES pour les mots à accentuer fortement (ex: "c'est ÉNORME")
-- Utilise "..." pour marquer des pauses dramatiques (ex: "Et là... ça commence.")
-- Phrases COURTES pour l'énergie. Pas de subordonnées longues.
-- Ponctuation expressive : points d'exclamation, mais avec parcimonie."""
+Style :
+- Chaud, celebratoire, inclusif. PAS sarcastique, PAS cynique.
+- Énergie de spectacle : "Ce moment est pour VOUS TOUS."
+- Court et ancré : 1 à 2 phrases MAX, 15 à 50 mots.
+- Français radio naturel. Jamais robotique, jamais pontifiant.
+- Tu NE décris JAMAIS la musique — tu réagis à l'ambiance collective qu'elle crée.
+
+Formatage prosodie (influence la synthèse vocale ElevenLabs) :
+- MAJUSCULES pour l'emphase forte : "c'est ÉNORME", "vous TOUS"
+- "..." pour les pauses dramatiques : "Et là... le drop arrive."
+- Ponctuation expressive sobre : pas plus d'un point d'exclamation par phrase."""
 
 
 def load_tpl():
@@ -2561,16 +2566,53 @@ def should_intervene(conn) -> bool:
     return elapsed >= random.randint(INT_MIN, INT_MAX)
 
 
-def gen_template(mood: str) -> str:
+# Phrases « nouveauté » : Rebexis annonce une première diffusion (surprise auditeurs).
+# Fallback en dur → marche même si rebexis-templates.json n'a pas de section nouveauté.
+NOUVEAUTE_TEMPLATES = [
+    "Nouveauté sur Gaiverland ! Première pour {next} — ouvrez grand les oreilles.",
+    "Fraîche du convoi : {next} débarque pour la toute première fois. C'est maintenant.",
+    "Grande première : {next}. Vous l'entendez ici, avant tout le monde.",
+    "Alerte nouveauté ! {next} entre dans la danse. Montez le son.",
+    "Ça sort du carton : {next}, jamais joué avant sur l'antenne. Savourez.",
+    "Le convoi a ramené du neuf — {next}, en exclu, tout de suite sur Gaiverland.",
+]
+
+
+def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> str:
     key = "hype" if mood in ("festival", "energique") else \
           "peak" if mood == "intense" else \
           "flow" if mood in ("nocturne", "melodique") else "normal"
-    t = templates.get("modes", {}).get(key, {}).get("templates", ["La radio continue."])
-    return random.choice(t)
+    mode_data = templates.get("modes", {}).get(key, {})
+
+    # Extraire l'artiste du prochain titre (avant le "—")
+    next_artist = ""
+    if next_track:
+        parts = next_track.split("—")
+        next_artist = parts[0].strip() if parts else next_track.strip()
+        # Nettoyer les noms trop longs ou parasites
+        if len(next_artist) > 40:
+            next_artist = next_artist[:40].rstrip()
+
+    # NOUVEAUTÉ : le prochain titre est une première → annonce dédiée (surprend l'auditeur).
+    if new_track and next_artist:
+        return random.choice(NOUVEAUTE_TEMPLATES).format(next=next_artist, next_track=next_track)
+
+    if next_artist and "templates_with_next" in mode_data:
+        # Préférer les templates avec prochain titre (2 chances sur 3)
+        pool = mode_data["templates_with_next"] * 2 + mode_data.get("templates_no_next", mode_data.get("templates", []))
+        tpl = random.choice(pool)
+        return tpl.format(next=next_artist, next_track=next_track)
+    else:
+        t = mode_data.get("templates_no_next") or mode_data.get("templates", ["La radio continue."])
+        return random.choice(t)
 
 
-def gen_ollama(mood: str, context: str, recent: list) -> str:
-    prompt = f"Génère UNE intervention courte de Rebexis. Morceau: {context}. Ambiance: {mood}."
+def gen_ollama(mood: str, context: str, recent: list, next_track: str = "", new_track: bool = False) -> str:
+    prompt = f"Génère UNE intervention de Rebexis (2 phrases, 20-40 mots). Morceau en cours: {context}. Ambiance: {mood}."
+    if next_track and new_track:
+        prompt += f" Le prochain morceau est une NOUVEAUTÉ, sa TOUTE PREMIÈRE diffusion sur la radio : {next_track}. Annonce-le comme une première/découverte, avec enthousiasme (mot 'nouveauté' ou 'première')."
+    elif next_track:
+        prompt += f" Le prochain morceau sera : {next_track}. Termine ta phrase en lançant vers ce prochain titre."
     if recent:
         prompt += f" Phrases à éviter: {' / '.join(recent[:2])}"
     try:
@@ -2581,11 +2623,15 @@ def gen_ollama(mood: str, context: str, recent: list) -> str:
         return r.json().get("response", "").strip()
     except Exception as e:
         print(f"⚠ Ollama: {e}")
-        return gen_template(mood)
+        return gen_template(mood, next_track, new_track)
 
 
-def gen_api(mood: str, context: str, recent: list) -> str:
+def gen_api(mood: str, context: str, recent: list, next_track: str = "", new_track: bool = False) -> str:
     user = f"Morceau en cours : {context}. Ambiance : {mood}."
+    if next_track and new_track:
+        user += f" Le prochain morceau est une NOUVEAUTÉ, sa TOUTE PREMIÈRE diffusion : {next_track}. Annonce-le comme une première/découverte enthousiaste (dis 'nouveauté' ou 'première')."
+    elif next_track:
+        user += f" Prochain morceau : {next_track}. Termine en lançant vers ce titre."
     if recent:
         user += f" Évite: {' / '.join(recent[:2])}"
     try:
@@ -2594,13 +2640,13 @@ def gen_api(mood: str, context: str, recent: list) -> str:
                        json={"model": "gpt-4o-mini",
                              "messages": [{"role": "system", "content": SYSTEM},
                                           {"role": "user", "content": user}],
-                             "max_tokens": 70, "temperature": 1.0},
+                             "max_tokens": 100, "temperature": 1.0},
                        timeout=15)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"⚠ API LLM: {e}")
-        return gen_template(mood)
+        return gen_template(mood, next_track, new_track)
 
 
 @app.get("/health")
@@ -2609,7 +2655,8 @@ def health():
 
 
 @app.post("/generate")
-def generate(mood: str = "energique", context_track: str = "", force: bool = False):
+def generate(mood: str = "energique", context_track: str = "",
+             next_track: str = "", force: bool = False, new_track: bool = False):
     conn = get_conn()
     if not force and not should_intervene(conn):
         return {"intervention": None, "reason": "intervalle_non_atteint"}
@@ -2618,9 +2665,9 @@ def generate(mood: str = "energique", context_track: str = "", force: bool = Fal
         cur.execute("SELECT intervention FROM rebexis_sessions ORDER BY generated_at DESC LIMIT 5")
         recent = [r["intervention"] for r in cur.fetchall()]
 
-    text = gen_ollama(mood, context_track, recent) if MODE == "ollama" else \
-           gen_api(mood, context_track, recent)    if MODE == "api"    else \
-           gen_template(mood)
+    text = gen_ollama(mood, context_track, recent, next_track, new_track) if MODE == "ollama" else \
+           gen_api(mood, context_track, recent, next_track, new_track)    if MODE == "api"    else \
+           gen_template(mood, next_track, new_track)
 
     with conn.cursor() as cur:
         cur.execute("""
@@ -2631,6 +2678,8 @@ def generate(mood: str = "energique", context_track: str = "", force: bool = Fal
         cur.execute("UPDATE radio_state SET last_rebexis=NOW() WHERE id=1")
     conn.commit()
 
+    if next_track:
+        print(f"  🎙 Rebexis [{mood}] → {next_track[:40]}: {text[:60]}…")
     return {"intervention": text, "session_id": sid, "mode": MODE}
 
 
@@ -3431,6 +3480,27 @@ def process_tts_queue():
         print(f"  ⚠ TTS queue: {e}")
 
 
+def _is_new_track(song_id: str) -> bool:
+    """Nouveauté = titre jamais/quasi jamais diffusé (play_history < 2). Signal fiable pour
+    l'annonce Rebexis, immunisé au bump `updated_at` de la ré-analyse (backfill vocalness).
+    Dégradé-safe : False si la DB/table manque."""
+    if not song_id:
+        return False
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT COUNT(*) AS n FROM play_history ph
+                               JOIN tracks t ON t.id = ph.track_id
+                               WHERE t.song_id = %s""", (song_id,))
+                n = cur.fetchone()["n"]
+            return n < 2
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def maybe_generate_rebexis():
     """Déclenche la génération d'une intervention Rebexis.
 
@@ -3457,8 +3527,9 @@ def maybe_generate_rebexis():
             song = np_data.get("now_playing", {}).get("song", {})
             context = f"{song.get('artist', '')} — {song.get('title', '')}".strip(" —")
 
-        # Prochain titre musical (skip les jingles Rebexis)
+        # Prochain titre musical (skip les jingles Rebexis) + son song_id (détection nouveauté)
         next_music = ""
+        next_song_id = ""
         try:
             queue = get_queue(limit=6)
             for entry in queue:
@@ -3467,20 +3538,26 @@ def maybe_generate_rebexis():
                 artist = song.get("artist", "")
                 if title and "rebexis" not in title.lower() and "rebexis" not in artist.lower():
                     next_music = f"{artist} — {title}".strip(" —") if artist else title
+                    next_song_id = song.get("id", "")
                     break
         except Exception:
             pass
 
+        # NOUVEAUTÉ : le prochain titre est-il une première diffusion ? → Rebexis l'annonce.
+        is_new = _is_new_track(next_song_id) if next_song_id else False
+
         resp = httpx.post(f"{REBEXIS_URL}/generate",
                           params={"mood": mood, "context_track": context,
-                                  "next_track": next_music, "force": str(force_lore).lower()},
+                                  "next_track": next_music, "force": str(force_lore).lower(),
+                                  "new_track": str(is_new).lower()},
                           timeout=30)
         data = resp.json()
         if data.get("intervention"):
             if force_lore:
                 _lore_last_time = now
+            tag = "🆕" if is_new else "🎙"
             suffix = f" → {next_music[:35]}" if next_music else ""
-            print(f"  🎙 Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
+            print(f"  {tag} Rebexis [{mood}]{suffix} : {data['intervention'][:60]}…")
     except Exception as e:
         print(f"  ⚠ Rebexis: {e}")
 
