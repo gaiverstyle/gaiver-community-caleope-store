@@ -5887,7 +5887,73 @@ def _hot_track(conn):
 # Tant que le dict est vide, le moteur est un NO-OP total → déployable sans risque.
 # Format (rempli à la livraison de Rebexis, parsé depuis son .md) :
 #   LORE_ARCS = {"<cle_arc>": {"type": "stagiaire_event", "steps": ["étape 1", "étape 2", ...]}}
-LORE_ARCS: dict = {}
+LORE_ARCS: dict = {
+    "stagiaire_le_cable": {"type": "stagiaire_event", "steps": [
+        "On a envoyé le stagiaire chercher un câble. Il a dit « deux minutes ».",
+        "Toujours pas de stagiaire. Le câble non plus. On s'habitue.",
+        "Le câble est arrivé. Sans le stagiaire. On ne pose plus de questions.",
+    ]},
+    "stagiaire_le_cafe": {"type": "stagiaire_event", "steps": [
+        "Le stagiaire s'est porté volontaire pour le café. Personne ne l'a forcé, c'est ça le plus troublant.",
+        "Il y a une odeur de café quelque part. Aucune trace de café. Aucune trace de stagiaire.",
+        "On a retrouvé le café. Froid, posé sur une enceinte, avec un mot : « j'arrive ». Touchant.",
+    ]},
+    "stagiaire_le_badge": {"type": "stagiaire_event", "steps": [
+        "Le stagiaire a perdu son badge. Il nous l'annonce fièrement, comme un exploit.",
+        "Le badge a été retrouvé. Il servait à caler une table. Ingénieux, on ne peut pas lui enlever ça.",
+        "Le stagiaire a un nouveau badge. Il l'a déjà perdu. Le record tient toujours.",
+    ]},
+    "stagiaire_le_truc_a_verifier": {"type": "stagiaire_event", "steps": [
+        "Le stagiaire a dit qu'il allait « juste vérifier un truc ». Personne n'a demandé quoi.",
+        "Le truc n'a pas été vérifié. Le stagiaire non plus, d'ailleurs.",
+        "Le stagiaire est revenu. Il ne sait plus quel truc. Nous non plus. Dossier classé.",
+    ]},
+    "stagiaire_le_talkie": {"type": "stagiaire_event", "steps": [
+        "On a donné un talkie au stagiaire. Grand moment de confiance collective.",
+        "Le talkie grésille tout seul depuis un moment. On préfère croire que c'est lui.",
+        "Le talkie est revenu. Sans pile, sans stagiaire, sans explication. Le trio habituel.",
+    ]},
+    "stagiaire_la_chaise": {"type": "stagiaire_event", "steps": [
+        "On a installé une chaise pour le stagiaire, avec son nom dessus. Un vrai geste.",
+        "La chaise est vide. Le nom est toujours là. C'est déjà ça de pris.",
+        "Quelqu'un s'est assis sur la chaise du stagiaire. Ce n'était pas le stagiaire. Personne n'a bronché.",
+    ]},
+    "c15_le_demarrage": {"type": "c15_event", "steps": [
+        "Le c15 refuse de démarrer. On lui a parlé gentiment, on en est là.",
+        "Le c15 a toussé une fois. Petit espoir dans l'équipe, on n'ose rien dire.",
+        "Le c15 a démarré. Personne n'a compris pourquoi. On applaudit quand même.",
+    ]},
+    "c15_le_lavage": {"type": "c15_event", "steps": [
+        "Quelqu'un a proposé de laver le c15. Silence dans les rangs.",
+        "Le c15 est toujours sale. La proposition, elle, a disparu.",
+        "Le c15 a un point de rouille en plus. On appelle ça de la personnalité, maintenant.",
+    ]},
+    "c15_l_autoradio": {"type": "c15_event", "steps": [
+        "L'autoradio du c15 a lâché. On a fait comme si de rien n'était.",
+        "Le c15 n'avance plus sans musique. On avait prévenu.",
+        "On a remis l'autoradio. Le c15 est reparti. Coïncidence, sûrement.",
+    ]},
+    "c15_la_place_de_parking": {"type": "c15_event", "steps": [
+        "Le c15 s'est garé de travers. On a tracé une place autour de lui, c'était plus simple.",
+        "Quelqu'un a voulu redresser le c15. Le c15 a fait un bruit. Le sujet est clos.",
+        "La place de travers est devenue officielle. Le c15 avait raison depuis le début.",
+    ]},
+    "festival_le_cran_de_trop": {"type": "festival_moment", "steps": [
+        "On a monté le son d'un cran. Juste pour voir.",
+        "Personne ne s'est plaint. On a monté encore un cran.",
+        "On en est à trois crans. Toujours aucune plainte. Le public est complice.",
+    ]},
+    "festival_la_vibration": {"type": "festival_moment", "steps": [
+        "Il y a un truc qui vibre dans les graves. On surveille, mollement.",
+        "Le truc vibre toujours. On a décidé que c'était voulu.",
+        "Le truc a arrêté de vibrer. Ça nous manque déjà. Dossier clos.",
+    ]},
+    "festival_le_morceau_prefere": {"type": "festival_moment", "steps": [
+        "Quelqu'un dans la foule vient de trouver son nouveau morceau préféré. Ça se voit d'ici.",
+        "La même personne le redemande. On note. On ne promet rien.",
+        "Le morceau est repassé. La personne a disparu dans la foule, heureuse. De rien.",
+    ]},
+}
 
 ARC_START_P     = float(os.environ.get("LORE_ARC_START_P", "0.25"))   # proba de lancer un arc
 ARC_GAP_MIN_H   = float(os.environ.get("LORE_ARC_GAP_MIN_H", "2"))    # espacement entre étapes
