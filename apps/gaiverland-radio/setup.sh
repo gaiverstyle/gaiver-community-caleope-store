@@ -1812,6 +1812,12 @@ INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
 _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
                      "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' "
                      "THEN 1 ELSE 0 END))")
+# Clé « chanson » normalisée (artiste+titre en alphanumérique minuscule) — sert à traiter
+# les DOUBLONS (même chanson sous plusieurs file_path/track_id) comme UN seul titre pour
+# l'anti-répétition. Sans ça, « Call On Me » en 3 copies passe 3× en 6h (chaque track_id
+# est distinct). Cf répétitions constatées le 18/07.
+_SONG_KEY_SQL = ("lower(regexp_replace(coalesce(artist,'') || ' ' || coalesce(title,''), "
+                 "'[^a-z0-9]', '', 'g'))")
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
@@ -2334,17 +2340,26 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     current_energy = float(state.get("energy_avg") or 0.6)
 
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT track_id FROM play_history
-            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        # Anti-répétition PAR CHANSON : on exclut tous les track_id dont la clé chanson
+        # (artiste+titre normalisé) a été jouée dans la fenêtre → une chanson en N copies
+        # ne repasse pas N fois. Le join ramène toutes les copies d'un titre joué.
+        cur.execute(f"""
+            SELECT t.id FROM tracks t
+            WHERE {_SONG_KEY_SQL} IN (
+                SELECT {_SONG_KEY_SQL} FROM play_history ph JOIN tracks tp ON tp.id = ph.track_id
+                WHERE ph.played_at > NOW() - (%s * INTERVAL '1 hour')
+            )
         """, (NO_REPEAT_HOURS,))
-        recent_ids = [r["track_id"] for r in cur.fetchall()] or [0]
+        recent_ids = [r["id"] for r in cur.fetchall()] or [0]
         # Fenêtre courte pour les boostés : un titre ENCORE peut revenir après 2h.
-        cur.execute("""
-            SELECT track_id FROM play_history
-            WHERE played_at > NOW() - (%s * INTERVAL '1 hour')
+        cur.execute(f"""
+            SELECT t.id FROM tracks t
+            WHERE {_SONG_KEY_SQL} IN (
+                SELECT {_SONG_KEY_SQL} FROM play_history ph JOIN tracks tp ON tp.id = ph.track_id
+                WHERE ph.played_at > NOW() - (%s * INTERVAL '1 hour')
+            )
         """, (BOOST_NO_REPEAT_HOURS,))
-        recent_ids_boost = {r["track_id"] for r in cur.fetchall()}
+        recent_ids_boost = {r["id"] for r in cur.fetchall()}
 
     # --- Effet des votes (spec Cassy) : score net pondéré Bible sur 14 j ---
     #  SKIP net ≤ -0.4 → quarantaine jour ; ENCORE ≥ +0.4 → boost fréquence.
