@@ -37,6 +37,19 @@ def itunes(q):
     return json.load(urllib.request.urlopen(u, timeout=12)).get("results", [])
 
 
+def deezer(q):
+    """Second recours (base Deezer, gratuite, sans clé). Normalisé au format d'itunes()."""
+    u = "https://api.deezer.com/search?" + urllib.parse.urlencode({"q": q, "limit": 3})
+    d = json.load(urllib.request.urlopen(u, timeout=12))
+    out = []
+    for r in d.get("data", []):
+        alb = r.get("album") or {}
+        out.append({"trackName": r.get("title", ""),
+                    "artistName": (r.get("artist") or {}).get("name", ""),
+                    "_art": alb.get("cover_xl") or alb.get("cover_big")})
+    return out
+
+
 def pick(artist, title, results):
     """Retient un résultat seulement si le TITRE recoupe ET (l'artiste recoupe le nôtre)."""
     tw = words(re.sub(r"\([^)]*\)", "", title or ""))
@@ -59,6 +72,8 @@ def has_art(path):
 
 
 def artwork_url(r):
+    if r.get("_art"):                       # Deezer : URL directe haute résolution
+        return r["_art"]
     u = r.get("artworkUrl100") or r.get("artworkUrl60") or ""
     return u.replace("100x100", "600x600").replace("60x60", "600x600") or None
 
@@ -106,6 +121,14 @@ def main():
         try:
             time.sleep(THROTTLE)
             r = pick(artist, title, itunes(q))
+            src = "it"
+            if not r:                       # iTunes rate → on tente Deezer
+                time.sleep(THROTTLE)
+                try:
+                    r = pick(artist, title, deezer(q))
+                    src = "dz"
+                except Exception:
+                    r = None
             if not r:
                 miss += 1
                 print("MISS", title[:42], flush=True)
@@ -113,7 +136,7 @@ def main():
             img = urllib.request.urlopen(artwork_url(r), timeout=15).read()
             if embed(path, img):
                 done += 1
-                print("OK  ", title[:34], "<-", r.get("artistName", "")[:16], "-", r.get("trackName", "")[:20], flush=True)
+                print(f"OK[{src}]", title[:32], "<-", r.get("artistName", "")[:16], "-", r.get("trackName", "")[:20], flush=True)
             else:
                 miss += 1
                 print("FAIL", title[:38], flush=True)
