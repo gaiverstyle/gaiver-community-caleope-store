@@ -19,7 +19,11 @@ NOISE = re.compile(r"\b(official|music|video|lyric|audio|visualizer|hd|extended|
 
 def clean_query(artist, title):
     t = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", title or "")
-    q = NOISE.sub(" ", (artist or "") + " " + t)
+    # Titres à préfixe uploader (« Uploader - Vrai Artiste - Chanson ») : le vrai couple
+    # artiste+chanson = les 2 DERNIERS segments « - ». Sinon on prend l'artiste + le titre.
+    segs = [s.strip() for s in re.split(r"\s+[-–]\s+", t) if s.strip()]
+    core = (segs[-2] + " " + segs[-1]) if len(segs) >= 2 else ((artist or "") + " " + t)
+    q = NOISE.sub(" ", core)
     return re.sub(r"\s+", " ", q).strip()
 
 
