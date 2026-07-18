@@ -87,6 +87,18 @@ NOUVEAUTE_TEMPLATES = [
     "Ça sent le neuf : une nouveauté débarque, tout de suite après.",
 ]
 
+# Annonce d'un SET DJ VIRTUEL (bloc d'1h dédié à un artiste). Le {label} varie → un TTS
+# par set (occasionnel, coût négligeable). Ouverture (dj_set non vide) et clôture (dj_set_end).
+DJSET_TEMPLATES = [
+    "L'heure qui vient est à {label}. Installez-vous, c'est du lourd du début à la fin.",
+    "Changement de programme : une heure entière de {label}. Que le grand mix commence.",
+    "Gaiverland passe en mode set : {label}, sans interruption, pendant une heure.",
+]
+DJSET_END_TEMPLATES = [   # clôture GÉNÉRIQUE (pas de label) → texte fixe, TTS mis en cache
+    "Fin de l'heure spéciale. On repart sur le grand mélange Gaiverland.",
+    "Le set est terminé — retour à la programmation, toujours plein pot.",
+]
+
 
 def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> str:
     key = "hype" if mood in ("festival", "energique") else \
@@ -167,7 +179,8 @@ def health():
 
 @app.post("/generate")
 def generate(mood: str = "energique", context_track: str = "",
-             next_track: str = "", force: bool = False, new_track: bool = False):
+             next_track: str = "", force: bool = False, new_track: bool = False,
+             dj_set: str = "", dj_set_end: bool = False):
     conn = get_conn()
     if not force and not should_intervene(conn):
         return {"intervention": None, "reason": "intervalle_non_atteint"}
@@ -176,7 +189,13 @@ def generate(mood: str = "energique", context_track: str = "",
         cur.execute("SELECT intervention FROM rebexis_sessions ORDER BY generated_at DESC LIMIT 5")
         recent = [r["intervention"] for r in cur.fetchall()]
 
-    if new_track:
+    if dj_set_end:
+        # Clôture de set = phrase fixe générique (TTS caché).
+        text = random.choice(DJSET_END_TEMPLATES)
+    elif dj_set:
+        # Ouverture de set = template fixe avec le nom de l'artiste (LLM court-circuité).
+        text = random.choice(DJSET_TEMPLATES).format(label=dj_set)
+    elif new_track:
         # Nouveauté = phrase fixe générique (0 appel LLM, TTS caché) quel que soit le mode.
         text = gen_template(mood, next_track, True)
     else:

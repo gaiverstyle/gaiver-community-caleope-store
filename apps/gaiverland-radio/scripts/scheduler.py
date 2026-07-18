@@ -236,6 +236,49 @@ def _is_new_track(song_id: str) -> bool:
         return False
 
 
+def _dj_set_pending():
+    """(params /generate, set_id, kind) d'une annonce de set à diffuser UNE fois, ou None.
+    Ouverture = set actif non encore annoncé ; clôture = set expiré non encore annoncé.
+    Ne marque PAS (le caller marque après diffusion réussie). Tolérant si table absente."""
+    conn = None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, label FROM dj_set WHERE ends_at > NOW() "
+                        "AND NOT start_announced ORDER BY started_at DESC LIMIT 1")
+            r = cur.fetchone()
+            if r:
+                return ({"mood": "festival", "dj_set": r["label"], "force": "true"}, r["id"], "start")
+            cur.execute("SELECT id FROM dj_set WHERE ends_at <= NOW() AND start_announced "
+                        "AND NOT end_announced ORDER BY ends_at DESC LIMIT 1")
+            r = cur.fetchone()
+            if r:
+                return ({"dj_set_end": "true", "force": "true"}, r["id"], "end")
+        return None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
+
+
+def _dj_set_mark(set_id, kind):
+    col = "start_announced" if kind == "start" else "end_announced"
+    conn = None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE dj_set SET {col}=true WHERE id=%s", (set_id,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
+
+
 def maybe_generate_rebexis():
     """Déclenche la génération d'une intervention Rebexis.
 
@@ -246,6 +289,16 @@ def maybe_generate_rebexis():
     """
     global _lore_last_time
     try:
+        # Annonce de set DJ (ouverture/clôture) = priorité, diffusée via le même chemin.
+        pending = _dj_set_pending()
+        if pending:
+            params, set_id, kind = pending
+            resp = httpx.post(f"{REBEXIS_URL}/generate", params=params, timeout=30)
+            if resp.json().get("intervention"):
+                _dj_set_mark(set_id, kind)
+                print(f"  🎧 Set DJ [{kind}] annoncé.")
+            return
+
         now = time.time()
         force_lore = (now - _lore_last_time >= LORE_INTERVAL_S)
 

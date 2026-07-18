@@ -564,6 +564,19 @@ def vote_scores_debug(limit: int = 100):
                        "fenetre_jours": VOTE_WINDOW_DAYS}}
 
 
+def _active_dj_set(conn):
+    """Set DJ virtuel actif (bloc d'1h par artiste/setlist) ou None. Table créée par
+    dj_set.py ; tolérant si absente (dégradé propre → rotation normale)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, label, artist_filter, ends_at "
+                        "FROM dj_set WHERE ends_at > NOW() ORDER BY started_at DESC LIMIT 1")
+            return cur.fetchone()
+    except Exception:
+        conn.rollback()
+        return None
+
+
 @app.get("/playlist/next")
 def generate_playlist(count: int = 20, mood: Optional[str] = None):
     conn = get_conn()
@@ -630,6 +643,39 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
         conn.rollback()
     # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
     exclude_ids = list(set(recent_ids) | quarantined | denylisted) or [0]
+
+    # --- SET DJ VIRTUEL : si un set est actif, la mainstage ne pioche QUE dans l'artiste/setlist
+    # (ignore le mood/genre — c'est SON heure). On garde l'anti-répétition SI l'artiste a assez
+    # de titres, sinon on autorise la répétition (mieux qu'un set qui s'épuise). Denylist respectée.
+    dj = _active_dj_set(conn)
+    if dj:
+        like = f"%{dj['artist_filter']}%"
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                       key_note, key_scale
+                FROM tracks
+                WHERE analyzed=TRUE AND az_id IS NOT NULL
+                  AND file_path !~ %s
+                  AND (artist ILIKE %s OR title ILIKE %s)
+                  AND id != ALL(%s)
+                ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC
+                LIMIT %s
+            """, (SCENE_PATH_RE, like, like, list(denylisted) or [0],
+                  VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 3))
+            cand = list(cur.fetchall())
+        fresh = [c for c in cand if c["id"] not in set(recent_ids)]
+        pool = fresh if len(fresh) >= count else cand  # assez de neuf ? sinon on autorise la répète
+        selected = order_for_coherence(pool, count, current_energy)
+        if selected:
+            avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)
+            with conn.cursor() as cur:
+                cur.execute("UPDATE radio_state SET energy_avg=%s, updated_at=NOW() WHERE id=1",
+                            (round(avg_e, 3),))
+            conn.commit()
+        conn.close()
+        return {"mood": current_mood, "tracks": selected,
+                "count": len(selected), "dj_set": dj["label"]}
 
     candidate_moods = list({current_mood} | set(MOOD_TRANSITIONS.get(current_mood, [])))
     # En mood jour, on écarte aussi les titres dont le TITRE trahit un genre dur
