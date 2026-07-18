@@ -424,10 +424,14 @@ def events(limit: int = 12):
 _visuals_cache = {"city": "", "at": 0.0, "imgs": []}
 
 # Fichiers à écarter du fond : blasons, cartes, drapeaux, logos, plans, portraits…
+# … + vieilles cartes postales / photos N&B / gravures (années 1800→1959) : pas l'ambiance festival.
 _PHOTO_REJECT = re.compile(
     r"(blason|armoiries|coat[_ ]?of[_ ]?arms|wappen|logo|drapeau|flag|"
     r"carte|\bmap\b|plan_|localisation|location_|situation|position|"
-    r"seal|sceau|diagram|graph|chart|\.svg)", re.I)
+    r"seal|sceau|diagram|graph|chart|\.svg|"
+    r"postcard|postale|ancien|vintage|s[ée]pia|noir[_ ]et[_ ]blanc|"
+    r"black[_ ]?and[_ ]?white|\bn&b\b|gravure|lithograph|estampe|"
+    r"18\d\d|19[0-5]\d)", re.I)
 
 
 def _wm_upscale(src: str, target: int = 1920) -> str:
@@ -557,6 +561,9 @@ def visuals():
                 city = c
     except Exception:
         pass
+    # Épine dorsale du fond : les photos de la balade (locales, sûres, choisies par le chef).
+    # Toujours présentes → dominent la rotation ; les photos de ville viennent en complément.
+    imgs += ["/assets/balade/" + fn for fn in _scan_balade()]
     imgs += _city_photos(city)
     return {"images": imgs}
 
