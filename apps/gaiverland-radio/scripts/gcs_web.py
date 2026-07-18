@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import psycopg2.extras
 from fastapi import FastAPI, Body, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response
+from fastapi.staticfiles import StaticFiles
 import secrets, hmac, hashlib, base64
 
 # Page « L'équipe » (maquette Cassy, avatars embarqués). Import guardé : si le
@@ -78,6 +79,72 @@ SESSION_SECRET = os.environ.get("OAUTH_SESSION_SECRET", "change-me")
 PUBLIC_BASE    = os.environ.get("GCS_PUBLIC_BASE", "https://gaiverland.gaiver-it.fr").rstrip("/")
 
 app = FastAPI(title="Gaiverland Web")
+
+# ── Assets statiques embarqués (photos de la galerie, etc.) ───────────────────
+# Copiés du store → app-config/scripts/assets par setup.sh, montés /app/assets:ro.
+# check_dir=False : si le dossier manque (install partiel), le site reste debout,
+# seule la galerie est vide. On sert /assets/... en lecture seule.
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+app.mount("/assets", StaticFiles(directory=_ASSETS_DIR, check_dir=False), name="assets")
+
+
+def _scan_balade():
+    """Liste les photos de la balade présentes dans assets/balade (triées par nom).
+    Dynamique : on sert TOUT ce qui a été déployé, sans nom de fichier codé en dur —
+    le chef peut ajouter/retirer des recadrages, un simple redeploy suffit. Chaque
+    entrée doit exister en plein format ET en vignette (thumbs/) pour être retenue."""
+    base = os.path.join(_ASSETS_DIR, "balade")
+    thumbs = os.path.join(base, "thumbs")
+    out = []
+    try:
+        for fn in sorted(os.listdir(base)):
+            if not fn.lower().endswith((".jpg", ".jpeg")):
+                continue
+            if not os.path.isfile(os.path.join(thumbs, fn)):
+                continue
+            out.append(fn)
+    except FileNotFoundError:
+        pass
+    return out
+
+
+# Légendes lisibles dérivées du nom de fichier (balade-hyeres-1-mer-ile-rochers → « Hyères — mer ile rochers »).
+def _balade_caption(fn: str) -> str:
+    stem = re.sub(r"\.(jpe?g)$", "", fn, flags=re.I)
+    parts = stem.split("-")
+    # parts = ['balade', '<ville>', '<n>', 'mot', 'mot', ...]
+    ville = parts[1].capitalize() if len(parts) > 1 else ""
+    if ville.lower() == "hyeres":
+        ville = "Hyères"
+    words = " ".join(parts[3:]) if len(parts) > 3 else ""
+    return (ville + (" — " + words if words else "")).strip(" —")
+
+
+def _gallery_html() -> str:
+    """Grille de la galerie, rendue côté serveur. Vignettes lazy-load + lightbox.
+    Fallback (aucune photo) = le gag stagiaire d'origine, pour ne jamais afficher un trou."""
+    photos = _scan_balade()
+    if not photos:
+        return ('<div class="soon">📸 Les souvenirs du festival arrivent bientôt.<br>'
+                'Le stagiaire a promis de retrouver la carte SD.</div>')
+    cells = []
+    for fn in photos:
+        cap = _balade_caption(fn).replace('"', "&quot;").replace("<", "&lt;")
+        cells.append(
+            '<button type="button" class="gal-cell" '
+            'onclick="openGal(this)" '
+            'data-full="/assets/balade/{fn}" data-cap="{cap}" aria-label="{cap}">'
+            '<img loading="lazy" decoding="async" src="/assets/balade/thumbs/{fn}" alt="{cap}">'
+            '</button>'.format(fn=fn, cap=cap)
+        )
+    intro = ('<p class="gal-intro">De la rade de Toulon aux îles d\'Hyères — '
+             'la côte que le festival regarde en respirant.</p>')
+    return intro + '<div class="gal-grid">' + "".join(cells) + '</div>'
+
+
+# Rendu figé au démarrage : le conteneur redémarre à chaque déploiement (setup.sh
+# restart gcs-web), donc la liste est rafraîchie sans logique de cache à maintenir.
+_GALLERY_HTML = _gallery_html()
 
 
 def _publicize(url: str) -> str:
@@ -849,6 +916,26 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 .loved-rank{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;background:linear-gradient(120deg,var(--sun2),var(--sun1));color:#2a1a33}
 .loved-t{flex:1;font-size:15px;line-height:1.3}
 .loved-fire{flex:0 0 auto;opacity:.85;font-size:14px;white-space:nowrap}
+/* ── Galerie balade (paysages mer Toulon→Hyères) ── */
+.gal-intro{opacity:.75;font-size:14px;line-height:1.5;margin-bottom:14px}
+.gal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.gal-cell{padding:0;border:0;cursor:pointer;border-radius:12px;overflow:hidden;position:relative;
+  aspect-ratio:3/2;background:rgba(0,0,0,.25);box-shadow:0 6px 20px rgba(0,0,0,.35);
+  transition:transform .18s,box-shadow .18s}
+.gal-cell:hover{transform:translateY(-3px);box-shadow:0 12px 34px rgba(0,0,0,.55)}
+.gal-cell img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s ease}
+.gal-cell:hover img{transform:scale(1.06)}
+.gal-cell:focus-visible{outline:2px solid var(--sun2);outline-offset:2px}
+.gal-lb{position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;
+  background:rgba(10,6,20,.9);backdrop-filter:blur(6px);padding:24px}
+.gal-lb.on{display:flex}
+.gal-lb img{max-width:96vw;max-height:82vh;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.75)}
+.gal-lb-cap{position:absolute;bottom:22px;left:0;right:0;text-align:center;color:var(--cream);
+  font-size:14px;letter-spacing:.5px;opacity:.9;text-shadow:0 2px 8px rgba(0,0,0,.8)}
+.gal-lb-x{position:absolute;top:16px;right:18px;width:44px;height:44px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.22);background:rgba(0,0,0,.4);color:#fff;font-size:20px;
+  cursor:pointer;line-height:1}
+.gal-lb-x:hover{background:rgba(0,0,0,.6)}
 footer{text-align:center;margin-top:44px;font-size:13px;opacity:.65;font-style:italic}
 footer .c15{margin-top:6px;font-size:12px}
 .hero{position:relative;width:100%;aspect-ratio:4/3;border-radius:16px;overflow:hidden;
@@ -1047,8 +1134,7 @@ footer .c15{margin-top:6px;font-size:12px}
 
 <div class="card">
   <h2>Galerie</h2>
-  <div class="soon">📸 Les souvenirs du festival arrivent bientôt.<br>
-  Le stagiaire a promis de retrouver la carte SD.</div>
+  <!--GALERIE-->
 </div>
 
 <footer>
@@ -1058,6 +1144,12 @@ footer .c15{margin-top:6px;font-size:12px}
   <div id="modele-link" hidden style="margin-top:10px"><a href="/modele" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">🎪 Notre modèle : Tomorrowland →</a></div>
 </footer>
 
+</div>
+
+<div id="gal-lb" class="gal-lb" onclick="if(event.target===this)closeGal()">
+  <button class="gal-lb-x" onclick="closeGal()" aria-label="Fermer" title="Fermer">✕</button>
+  <img id="gal-lb-img" src="" alt="">
+  <div id="gal-lb-cap" class="gal-lb-cap"></div>
 </div>
 
 <div id="fs" class="fs-hidden">
@@ -1606,13 +1698,31 @@ setInterval(function(){ if(lastLive && lastLive.song_id) paintTrack(lastLive, la
 fetch('/api/modele-active').then(function(r){return r.json();}).then(function(d){
   if(d && d.active){ var el=document.getElementById('modele-link'); if(el) el.hidden=false; }
 }).catch(function(){});
+// ── Galerie : lightbox (charge le plein format au clic seulement) ──
+function openGal(el){
+  var lb=document.getElementById('gal-lb');
+  var img=document.getElementById('gal-lb-img');
+  var cap=document.getElementById('gal-lb-cap');
+  img.src=el.getAttribute('data-full');
+  img.alt=el.getAttribute('data-cap')||'';
+  cap.textContent=el.getAttribute('data-cap')||'';
+  lb.classList.add('on');
+}
+function closeGal(){
+  var lb=document.getElementById('gal-lb');
+  lb.classList.remove('on');
+  document.getElementById('gal-lb-img').src='';
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeGal();});
+
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=__VER__').catch(function(){});}
 </script></body></html>"""
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse(PAGE.replace("__VER__", _ASSET_VER),
+    html = PAGE.replace("<!--GALERIE-->", _GALLERY_HTML).replace("__VER__", _ASSET_VER)
+    return HTMLResponse(html,
                         headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
