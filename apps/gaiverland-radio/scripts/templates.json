@@ -353,13 +353,13 @@
       ]
     },
     "vote_love": {
-      "_note": "Coup de cœur communauté — salue un titre qui cartonne aux votes ENCORE. Tokens {love_artist}/{love_title}. (placeholder Yann, à affiner par Rebexis)",
+      "_note": "Coup de cœur communauté — salue un titre qui cartonne aux votes ENCORE. Tokens {love_artist}/{love_title}. (réécrit par Rebexis 16/07 — ton antenne). ⚠️ Phrases écrites FALLBACK-SAFE : {love_artist} retombe sur 'vous', donc il n'est utilisé qu'en complément ('chapeau à {love_artist}' → 'chapeau à vous'), JAMAIS en sujet d'un verbe conjugué ('{love_artist} monte' → 'vous monte' = cassé). ⚠️ Aucune phrase ne promet de rejouer le titre : la diffusion est décidée par la régie, pas par l'antenne.",
       "templates": [
-        "Gros amour du public pour {love_artist} — {love_title}. Les ENCORE pleuvent, on garde ça au chaud.",
-        "Vous avez parlé : {love_title}, ça cartonne aux votes. Le festival a bon goût.",
-        "{love_title}... vous l'adorez. C'est vous qui faites la programmation, et là, chapeau.",
-        "Le peuple a tranché : {love_artist} monte dans les coups de cœur. On note, on rejoue.",
-        "Coup de cœur du moment : {love_title}. Continuez à voter, ça oriente vraiment l'antenne."
+        "Vous n'arrêtez pas de voter pour {love_title}. On a compris, on n'est pas sourds.",
+        "Les ENCORE pleuvent sur {love_title}. Quelque part, quelqu'un avait raison.",
+        "Chapeau à {love_artist} : le public en redemande, et le public est têtu.",
+        "Vous avez voté, et vous avez voté fort. Résultat : {love_title} arrive en tête des coups de cœur.",
+        "Il y a {love_title}, et il y a vos ENCORE qui s'empilent dessus. Le festival a du goût."
       ]
     }
   }

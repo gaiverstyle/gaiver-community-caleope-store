@@ -151,32 +151,49 @@ def _cookies_ok() -> bool:
         return False
 
 
-def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
-    """Cherche + télécharge le meilleur audio en MP3 dans target_dir. True si OK."""
-    os.makedirs(target_dir, exist_ok=True)
-    out = os.path.join(target_dir, "%(artist,uploader)s - %(title)s.%(ext)s")
-    # ytsearch5 + filtre durée : on écarte les résultats hors 45s–15min (compilations
-    # « 12 HOURS », mixes, clips vides) et on prend le PREMIER titre valide (--max-downloads 1).
-    # Sans ça, ytsearch1 peut ramener une compilation de plusieurs heures = disque plein + analyzer étranglé.
-    # Requête « official audio » : biaise YouTube vers les canaux « Artiste - Topic » (audio officiel
-    # propre, sans intro/voix de clip vidéo) — cf demande chef « bruits relou de clip ». Le filtre durée
-    # + ytsearch5 garantissent qu'on trouve quand même un résultat si aucun officiel n'existe.
+# Marqueurs de clip vidéo (intro/outro/voix parlée = « casse le mood »). Exclus par
+# défaut du téléchargement pour préférer l'audio propre (Short Edit / Original Mix /
+# canal « - Topic »). On GARDE les « Lyric Video » (leur audio est le master propre) et
+# les tags promo ([OUT NOW], BEATPORT…). Le « music video » du label gagne sinon la
+# recherche même avec « official audio » (constaté sur la campagne Tomorrowland → re-source
+# des 44 clips). `!~=` = le titre NE doit PAS matcher.
+_CLEAN_FILTER = ("duration>=45 & duration<=900 & "
+                 "title!~=(?i)(official.?music.?video|official.?video|music.?video|album teaser)")
+_DUR_FILTER   = "duration>=45 & duration<=900"
+
+
+def _ytdlp(query: str, out: str, match_filter: str) -> subprocess.CompletedProcess:
     cmd = ["yt-dlp", "--cookies", COOKIES, "-f", "bestaudio",
            "-x", "--audio-format", "mp3", "--audio-quality", "0",
            "--no-playlist", "--embed-metadata", "--no-progress",
-           "--match-filter", "duration<=900 & duration>=45",
-           "--max-downloads", "1",
-           "-o", out, f"ytsearch5:{query} official audio"]
+           "--match-filter", match_filter, "--max-downloads", "1",
+           "-o", out, f"ytsearch8:{query} audio"]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+
+def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
+    """Cherche + télécharge le meilleur audio PROPRE en MP3 dans target_dir. True si OK.
+
+    Passe 1 : filtre anti-clip (exclut Official/Music Video → prend l'audio propre).
+    Passe 2 (fallback) : si aucun résultat propre (titre qui n'existe QU'en clip), on
+    réessaie sans le filtre vidéo — mieux vaut un clip que rien. ytsearch8 = marge pour
+    que le filtre trouve une version propre parmi les résultats. Le filtre durée écarte
+    les compilations « 12 HOURS » (disque plein + analyzer étranglé)."""
+    os.makedirs(target_dir, exist_ok=True)
+    out = os.path.join(target_dir, "%(artist,uploader)s - %(title)s.%(ext)s")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        blob = (r.stdout or "") + (r.stderr or "")
-        # 101 = limite --max-downloads atteinte = 1 titre bien téléchargé (succès).
-        if r.returncode in (0, 101) or "has already been downloaded" in blob:
-            return True
-        tail = blob[-250:]
-        if "sign in" in tail.lower() or "cookies" in tail.lower() or "not a bot" in tail.lower():
-            print("  🔴 COOKIES YouTube invalides/expirés — refaire la procédure "
-                  "(procedure-cookies-downloader.md)", flush=True)
+        for match_filter in (_CLEAN_FILTER, _DUR_FILTER):
+            r = _ytdlp(query, out, match_filter)
+            blob = (r.stdout or "") + (r.stderr or "")
+            # 101 = limite --max-downloads atteinte = 1 titre bien téléchargé (succès).
+            if r.returncode in (0, 101) or "has already been downloaded" in blob:
+                return True
+            tail = blob[-250:]
+            if "sign in" in tail.lower() or "cookies" in tail.lower() or "not a bot" in tail.lower():
+                print("  🔴 COOKIES YouTube invalides/expirés — refaire la procédure "
+                      "(procedure-cookies-downloader.md)", flush=True)
+                return False  # inutile de retenter le fallback si les cookies sont morts
+            # Passe 1 sans résultat propre → on tombe dans le fallback (filtre durée seul).
         print(f"  ⚠ échec '{query}': {tail}", flush=True)
         return False
     except Exception as e:
