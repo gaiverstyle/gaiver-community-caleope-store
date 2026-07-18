@@ -446,8 +446,25 @@ def _good_photo(src: str) -> bool:
     return not _PHOTO_REJECT.search(src)
 
 
+def _bg_own_photos() -> list:
+    """Fond du player = UNIQUEMENT les photos du chef (balade + Toulon), locales et sûres.
+    Remplace Wikipédia → plus aucune rue à voitures ni carte postale N&B parasite.
+    Trié pour un ordre stable ; le front alterne dessus."""
+    out = []
+    for sub in ("balade", "toulon"):
+        base = os.path.join(_ASSETS_DIR, sub)
+        try:
+            for fn in sorted(os.listdir(base)):
+                if fn.lower().endswith((".jpg", ".jpeg")):
+                    out.append(f"/assets/{sub}/{fn}")
+        except FileNotFoundError:
+            pass
+    return out
+
+
 def _wiki_media(title: str, lang: str = "fr") -> list:
-    """Photos JPG d'une page Wikipedia (media-list), upscalées + filtrées."""
+    """Photos JPG d'une page Wikipedia (media-list), upscalées + filtrées.
+    NB : plus appelé pour le fond (on ne sert QUE les photos du chef) — conservé au cas où."""
     out = []
     try:
         r = httpx.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/media-list/{title}",
@@ -541,7 +558,8 @@ def _city_photos(city: str):
 
 @app.get("/api/visuals")
 def visuals():
-    """Images du 'clip' in-page : cover courante + photos de la ville. Fail-safe (cover au minimum)."""
+    """Images du fond du player : cover courante + photos DU CHEF (balade + Toulon).
+    Wikipédia retiré → zéro rue à voitures / carte postale N&B. Fail-safe (cover au minimum)."""
     imgs = []
     try:
         r = httpx.get(f"{AZ_URL}/api/nowplaying/{AZ_STATION}", timeout=4)
@@ -551,20 +569,7 @@ def visuals():
                 imgs.append(art)
     except Exception:
         pass
-    # Ville : GCS_CITY (fiable, statique) ; le state-engine, s'il est joignable, peut surcharger.
-    city = os.environ.get("GCS_CITY", "").strip()
-    try:
-        r = httpx.get(f"{STATE_URL}/state/current", timeout=2)
-        if r.status_code == 200:
-            c = r.json().get("city", "")
-            if c:
-                city = c
-    except Exception:
-        pass
-    # Épine dorsale du fond : les photos de la balade (locales, sûres, choisies par le chef).
-    # Toujours présentes → dominent la rotation ; les photos de ville viennent en complément.
-    imgs += ["/assets/balade/" + fn for fn in _scan_balade()]
-    imgs += _city_photos(city)
+    imgs += _bg_own_photos()
     return {"images": imgs}
 
 
