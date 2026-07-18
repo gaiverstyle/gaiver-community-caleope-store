@@ -1186,15 +1186,31 @@ const AFX={
   resume(){ if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(function(){}); }
 };
 
+// Auto-reconnect : le flux live peut décrocher (coupure réseau, bascule wifi/4G, onglet
+// mobile mis en veille qui met l'audio en pause). On mémorise l'INTENTION de lecture
+// (wantPlaying) et on re-branche un src frais avec backoff. Sans ça, le player restait en
+// pause après une coupure (pauses signalées sur téléphone le 18/07).
+var wantPlaying=false, rcTimer=null, rcDelay=1000;
+function _tryReconnect(){
+  rcTimer=null;
+  if(!wantPlaying) return;
+  const a=AA();
+  if(a.paused || a.readyState<3){ playLive(); rcDelay=Math.min(rcDelay*2,15000); }
+}
+function reconnectSoon(){
+  if(!wantPlaying || rcTimer || document.hidden) return;   // en arrière-plan on attend le retour
+  rcTimer=setTimeout(_tryReconnect, rcDelay);
+}
 function playLive(){
   const a=AA();
   if(!audioUrl) return;
+  wantPlaying=true;
   a.src = audioUrl + (audioUrl.indexOf('?')>=0?'&':'?') + '_=' + Date.now();
   a.load();
   if(a===A){ AFX.setup(); AFX.resume(); }
   a.play().catch(function(){});
 }
-function stopStream(){ const a=AA(); a.pause(); a.removeAttribute('src'); a.load(); }
+function stopStream(){ wantPlaying=false; const a=AA(); a.pause(); a.removeAttribute('src'); a.load(); }
 function togglePlay(){ const a=AA(); if(a.paused){ playLive(); } else { stopStream(); } }
 // Clip in-page : composition fixe par morceau — fond Toulon + cover devant + titre dessous.
 async function loadVisuals(){
@@ -1567,7 +1583,14 @@ function initFxUI(){
   const bmain=gid('playbtn'), bfs=gid('fs-play');
   function onPlay(){ if(bmain)bmain.textContent='⏸'; if(bfs)bfs.textContent='⏸'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'; startViz(); }
   function onPause(){ if(bmain)bmain.textContent='▶'; if(bfs)bfs.textContent='▶'; if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'; }
-  [A,B].forEach(el=>{ el.addEventListener('play',onPlay); el.addEventListener('pause',onPause); });
+  [A,B].forEach(el=>{
+    el.addEventListener('play',onPlay); el.addEventListener('pause',onPause);
+    el.addEventListener('playing',function(){ rcDelay=1000; });   // flux OK → reset backoff
+    el.addEventListener('stalled',reconnectSoon);
+    el.addEventListener('error',reconnectSoon);
+    el.addEventListener('ended',reconnectSoon);                    // un live ne "finit" jamais → décrochage
+  });
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden) reconnectSoon(); });
   ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
   if('mediaSession' in navigator){ navigator.mediaSession.setActionHandler('play',togglePlay); navigator.mediaSession.setActionHandler('pause',stopStream); }
   initFxUI();
