@@ -1776,7 +1776,7 @@ Moteur de playlist Gaiverland — API FastAPI.
 Cohérence énergétique, transitions de mood, anti-répétition artiste,
 danceability, découverte.
 """
-import os, sys, subprocess, random, json
+import os, sys, subprocess, random, json, re
 
 def install_deps():
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
@@ -1820,12 +1820,34 @@ INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
 _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
                      "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' "
                      "THEN 1 ELSE 0 END))")
-# Clé « chanson » normalisée (artiste+titre en alphanumérique minuscule) — sert à traiter
-# les DOUBLONS (même chanson sous plusieurs file_path/track_id) comme UN seul titre pour
-# l'anti-répétition. Sans ça, « Call On Me » en 3 copies passe 3× en 6h (chaque track_id
-# est distinct). Cf répétitions constatées le 18/07.
-_SONG_KEY_SQL = ("lower(regexp_replace(coalesce(artist,'') || ' ' || coalesce(title,''), "
-                 "'[^a-z0-9]', '', 'g'))")
+# Clé « chanson » normalisée = TITRE débarrassé des parenthèses/crochets, en alphanumérique.
+# Traite comme UNE seule chanson toutes ses VERSIONS (Remix, Visualizer, Extended, uploaders
+# différents…) : « David Guetta, Hypaton - Walked Away (Rocco Prince Remix) » et « … (Visualizer) »
+# ont la même clé. Sur le TITRE seul (pas l'artiste) car l'artiste = souvent l'uploader/remixer,
+# qui varie d'une version à l'autre. Sert à l'anti-répétition ET au dédup des versions au tirage.
+# Cf répétitions de versions constatées le 18/07 (Walked Away ×4, Call On Me ×3).
+_SONG_KEY_SQL = ("regexp_replace(lower(regexp_replace(coalesce(title,''), "
+                 "'\\([^)]*\\)|\\[[^\\]]*\\]', '', 'g')), '[^a-z0-9]', '', 'g')")
+_PAREN_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+
+
+def _base_key(title: str) -> str:
+    """Version Python de _SONG_KEY_SQL (titre sans parenthèses, alphanumérique)."""
+    return re.sub(r"[^a-z0-9]", "", _PAREN_RE.sub("", title or "").lower())
+
+
+def _dedupe_versions(rows):
+    """Garde UNE version par chanson (clé titre de base) — l'ordre d'entrée décide laquelle
+    (le tirage est déjà pondéré, donc la 1re rencontrée est la mieux classée). Évite 2 versions
+    du même titre dans le même lot de playlist."""
+    seen, out = set(), []
+    for r in rows:
+        k = _base_key(r.get("title", ""))
+        if k and k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
 # Beatmatch : nombre de morceaux entre deux interventions Rebexis (= play_per_songs
 # de la playlist Rebexis). Les sauts de tempo/style sont calés sur ces frontières.
 REBEXIS_EVERY = int(os.environ.get("REBEXIS_SONGS_INTERVAL", "3"))
@@ -2436,7 +2458,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 LIMIT %s
             """, (SCENE_PATH_RE, like, like, list(denylisted) or [0],
                   VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 3))
-            cand = list(cur.fetchall())
+            cand = _dedupe_versions(list(cur.fetchall()))   # une seule version par chanson
         fresh = [c for c in cand if c["id"] not in set(recent_ids)]
         pool = fresh if len(fresh) >= count else cand  # assez de neuf ? sinon on autorise la répète
         selected = order_for_coherence(pool, count, current_energy)
@@ -2526,6 +2548,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
             """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
             candidates = list(cur.fetchall())
+
+    # Une seule version par chanson dans le lot (pas 2 remixes du même titre à la suite).
+    candidates = _dedupe_versions(candidates)
 
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
     # au lieu de garder l'ordre aléatoire du tirage SQL.
