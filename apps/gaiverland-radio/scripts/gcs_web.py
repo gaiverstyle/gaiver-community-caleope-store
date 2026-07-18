@@ -108,16 +108,12 @@ def _scan_balade():
     return out
 
 
-# Légendes lisibles dérivées du nom de fichier (balade-hyeres-1-mer-ile-rochers → « Hyères — mer ile rochers »).
+# Légendes lisibles dérivées du nom de fichier (balade-01-mer-ile-rochers → « Mer ile rochers »).
+# Générique, sans ville : on ignore le préfixe 'balade' et le numéro d'ordre.
 def _balade_caption(fn: str) -> str:
     stem = re.sub(r"\.(jpe?g)$", "", fn, flags=re.I)
-    parts = stem.split("-")
-    # parts = ['balade', '<ville>', '<n>', 'mot', 'mot', ...]
-    ville = parts[1].capitalize() if len(parts) > 1 else ""
-    if ville.lower() == "hyeres":
-        ville = "Hyères"
-    words = " ".join(parts[3:]) if len(parts) > 3 else ""
-    return (ville + (" — " + words if words else "")).strip(" —")
+    words = " ".join(p for p in stem.split("-") if p and p != "balade" and not p.isdigit())
+    return (words[:1].upper() + words[1:]) if words else "Gaiverland"
 
 
 def _gallery_html() -> str:
