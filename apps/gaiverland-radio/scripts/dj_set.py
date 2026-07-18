@@ -13,7 +13,7 @@ Usage (dans le conteneur scheduler) :
   python3 dj_set.py stop                        # clôt le set en cours (annonce de fin)
   python3 dj_set.py status                      # état + nb de titres dispo
 """
-import os, sys
+import os, sys, random, datetime
 import psycopg2, psycopg2.extras
 
 DB = os.environ["DATABASE_URL"]
@@ -21,6 +21,21 @@ DB = os.environ["DATABASE_URL"]
 SCENE_RE = os.environ.get(
     "SCENE_PATH_RE",
     r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|phonk2)/|/gaiverland_[a-z0-9]+/media/)")
+
+# ── Automate de sets (le chef ne veut QUE écouter) ────────────────────────────
+# Têtes d'affiche festival Tomorrowland ; filtrées par nb de titres au lancement.
+AUTO_CANDIDATES = [
+    "David Guetta", "Dimitri Vegas", "Martin Garrix", "Swedish House Mafia",
+    "Calvin Harris", "Avicii", "Hardwell", "Tiesto", "Afrojack", "Alesso",
+    "Armin van Buuren", "Steve Aoki", "Don Diablo", "W&W", "Nicky Romero",
+    "Oliver Heldens", "Axwell", "Timmy Trumpet", "Robin Schulz", "Marshmello",
+]
+AUTO_ENABLED   = os.environ.get("AUTO_DJSET_ENABLED", "1") == "1"
+AUTO_PERIOD    = int(os.environ.get("AUTO_DJSET_PERIOD_MIN", "180"))   # écart mini entre 2 débuts de set
+AUTO_DURATION  = int(os.environ.get("AUTO_DJSET_DURATION_MIN", "60"))  # durée d'un set auto
+AUTO_MIN_TRACKS = int(os.environ.get("AUTO_DJSET_MIN_TRACKS", "12"))   # sinon l'artiste boucle
+AUTO_COOLDOWN  = int(os.environ.get("AUTO_DJSET_COOLDOWN", "4"))       # pas de reprise dans les N derniers sets
+AUTO_HOURS     = os.environ.get("AUTO_DJSET_HOURS", "10-23")           # heures Paris autorisées (début de set)
 
 DDL = """
 CREATE TABLE IF NOT EXISTS dj_set (
@@ -101,6 +116,59 @@ def status():
         print("  Aucun set actif (rotation normale).")
 
 
+def _hours_ok(spec):
+    """spec 'h0-h1' (heures Paris) → True si l'heure locale actuelle est dans la plage.
+    Le conteneur scheduler a TZ=Europe/Paris → datetime.now() = heure de Paris."""
+    try:
+        h0, h1 = (int(x) for x in spec.split("-"))
+    except Exception:
+        return True
+    h = datetime.datetime.now().hour
+    return h0 <= h <= h1 if h0 <= h1 else (h >= h0 or h <= h1)  # gère les plages nuit (22-2)
+
+
+def auto_tick(verbose=False):
+    """Appelé à chaque cycle du scheduler. Lance un set auto si : activé, dans la plage
+    horaire, aucun set actif, et le dernier set a débuté il y a ≥ AUTO_PERIOD. Choisit une
+    tête d'affiche viable hors des AUTO_COOLDOWN derniers sets. No-op sinon (silencieux)."""
+    if not AUTO_ENABLED:
+        return
+    if not _hours_ok(AUTO_HOURS):
+        return
+    c = _conn()
+    try:
+        with c.cursor() as cur:
+            cur.execute("SELECT 1 FROM dj_set WHERE ends_at > NOW() LIMIT 1")
+            if cur.fetchone():
+                return                                            # set déjà en cours
+            cur.execute("SELECT 1 FROM dj_set WHERE started_at > NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
+                        (AUTO_PERIOD,))
+            if cur.fetchone():
+                return                                            # pas encore l'heure du prochain
+            cur.execute("SELECT label FROM dj_set ORDER BY started_at DESC LIMIT %s", (AUTO_COOLDOWN,))
+            recent = {r["label"].lower() for r in cur.fetchall()}
+        viable = [a for a in AUTO_CANDIDATES
+                  if a.lower() not in recent and _count(c, a) >= AUTO_MIN_TRACKS]
+        if not viable:  # tout en cooldown ? on relâche pour ne pas rester bloqué
+            viable = [a for a in AUTO_CANDIDATES if _count(c, a) >= AUTO_MIN_TRACKS]
+        if not viable:
+            if verbose:
+                print("  (auto set : aucun artiste viable)")
+            return
+        artist = random.choice(viable)
+        with c.cursor() as cur:
+            cur.execute("""INSERT INTO dj_set (label, artist_filter, ends_at)
+                           VALUES (%s, %s, NOW() + (%s * INTERVAL '1 minute'))""",
+                        (artist, artist, AUTO_DURATION))
+        c.commit()
+        print(f"  🎧 Set AUTO lancé : {artist} ({AUTO_DURATION} min)")
+    except Exception as e:
+        print(f"  ⚠ auto_tick: {e}")
+    finally:
+        try: c.close()
+        except Exception: pass
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -113,5 +181,7 @@ if __name__ == "__main__":
         stop()
     elif a[0] == "status":
         status()
+    elif a[0] == "auto":            # test manuel d'un tick d'automate
+        auto_tick(verbose=True)
     else:
         print(__doc__)

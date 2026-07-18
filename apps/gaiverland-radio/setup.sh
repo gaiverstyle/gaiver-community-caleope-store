@@ -3384,6 +3384,7 @@ sys.path.insert(0, "/app")
 from az_utils import (get_or_create_playlist, batch_assign_playlist, replace_playlist,
                       set_playlist_order, get_station, now_playing, get_queue, update_playlist,
                       _get_all_files)
+import dj_set  # automate de sets DJ (auto_tick appelé dans la boucle)
 
 DB_URL       = os.environ["DATABASE_URL"]
 PLAYLIST_URL = "http://gaiverland-playlist:8080"
@@ -4028,6 +4029,13 @@ def main():
 
         # 1. Traitement TTS en attente (priorité : audio prêt avant diffusion)
         process_tts_queue()
+
+        # 1b. Automate de sets DJ : lance seul un set (~1/3h, têtes d'affiche) si c'est l'heure.
+        #     Placé AVANT Rebexis + playlist → l'annonce et la bascule se font le même cycle.
+        try:
+            dj_set.auto_tick()
+        except Exception as e:
+            print(f"  ⚠ auto set DJ : {e}")
 
         # 2. Générer Rebexis si intervalle atteint (lore timer indépendant)
         maybe_generate_rebexis()
