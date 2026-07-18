@@ -22,12 +22,28 @@ CLIP_RE = r"(official music video|official video|music video|clip officiel|\[hd\
 HARD_TITLE_RE = r"(hardstyle|rawstyle|frenchcore|uptempo|tekno|hardcore|gabber|sub ?zero)"
 SONG_KEY = "lower(regexp_replace(coalesce(artist,'')||' '||coalesce(title,''),'[^a-z0-9]','','g'))"
 
-OK, WARN, FAIL = "OK", "WARN", "FAIL"
+OK, FIXED, WARN, FAIL = "OK", "FIXÉ", "WARN", "FAIL"
 results = []  # (name, status, detail)
+_flags = {"needs_restart": False}   # demandé au wrapper hôte (redémarrage docker)
 
 
 def add(name, status, detail):
     results.append((name, status, detail))
+
+
+def _quarantine(cur, pred_sql, pred_params, limit=300):
+    """Met en quarantaine (station_denylist mainstage) les titres jour ciblés — NON destructif,
+    RÉVERSIBLE (retirer de station_denylist les rétablit). Requiert un song_id. Retourne le nb."""
+    cur.execute(f"""
+        INSERT INTO station_denylist (station_id, song_id, artist, title, added_by, added_at)
+        SELECT 1, t.song_id, t.artist, t.title, 'qc-auto', NOW()
+        FROM tracks t
+        WHERE {pred_sql} AND t.song_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM station_denylist d
+                          WHERE d.station_id = 1 AND d.song_id = t.song_id)
+        LIMIT %s
+    """, list(pred_params) + [limit])
+    return cur.rowcount
 
 
 def q1(cur, sql, params=None):
@@ -47,7 +63,10 @@ def check_all():
         age = q1(cur, "SELECT extract(epoch FROM (now()-max(played_at)))/60 FROM play_history")
         age = float(age) if age is not None else 9999
         st = OK if age < 12 else WARN if age < 25 else FAIL
-        add("rotation_vivante", st, f"dernier passage il y a {age:.0f} min")
+        if st == FAIL:
+            _flags["needs_restart"] = True     # le wrapper hôte redémarre scheduler+playlist
+        add("rotation_vivante", st,
+            f"dernier passage il y a {age:.0f} min" + (" → redémarrage demandé" if st == FAIL else ""))
     except Exception as e:
         add("rotation_vivante", WARN, f"erreur: {e}")
 
@@ -83,12 +102,20 @@ def check_all():
     except Exception as e:
         add("repetitions", WARN, f"erreur: {e}")
 
-    # 4. Clips vidéo / déchet revenus dans le pool jour
+    # 4. Clips vidéo / déchet revenus dans le pool jour → AUTO-QUARANTAINE (réversible)
     try:
-        n = q1(cur, "SELECT count(*) FROM tracks WHERE analyzed AND mood = ANY(%s) AND title ~* %s",
+        pred = "t.analyzed AND t.mood = ANY(%s) AND t.title ~* %s"
+        n = q1(cur, f"SELECT count(*) FROM tracks t WHERE {pred} AND t.song_id IS NOT NULL AND NOT EXISTS "
+                    "(SELECT 1 FROM station_denylist d WHERE d.station_id=1 AND d.song_id=t.song_id)",
                (list(DAY_MOODS), CLIP_RE))
-        add("clips_dechet", OK if n == 0 else WARN, f"{n} titre(s) clip/déchet dans le pool jour")
+        if n == 0:
+            add("clips_dechet", OK, "0 clip/déchet actif dans le pool jour")
+        else:
+            qn = _quarantine(cur, pred, (list(DAY_MOODS), CLIP_RE))
+            conn.commit()
+            add("clips_dechet", FIXED if qn else WARN, f"{n} clip/déchet → {qn} mis en quarantaine")
     except Exception as e:
+        conn.rollback()
         add("clips_dechet", WARN, f"erreur: {e}")
 
     # 5. Doublons (copies en trop) dans le pool jour
@@ -101,12 +128,20 @@ def check_all():
     except Exception as e:
         add("doublons", WARN, f"erreur: {e}")
 
-    # 6. Titres tronqués (<90s) diffusés récemment (previews/rips coupés)
+    # 6. Titres tronqués (<90s) encore actifs dans le pool jour → AUTO-QUARANTAINE
     try:
-        n = q1(cur, "SELECT count(distinct t.id) FROM play_history ph JOIN tracks t ON t.id=ph.track_id "
-                    "WHERE ph.played_at > now()-interval '4 hours' AND t.duration < 90")
-        add("titres_tronques", OK if n == 0 else WARN, f"{n} titre(s) <90s diffusé(s) sur 4h")
+        pred = "t.analyzed AND t.mood = ANY(%s) AND t.duration < 90"
+        n = q1(cur, f"SELECT count(*) FROM tracks t WHERE {pred} AND t.song_id IS NOT NULL AND NOT EXISTS "
+                    "(SELECT 1 FROM station_denylist d WHERE d.station_id=1 AND d.song_id=t.song_id)",
+               (list(DAY_MOODS),))
+        if n == 0:
+            add("titres_tronques", OK, "aucun titre <90s actif dans le pool jour")
+        else:
+            qn = _quarantine(cur, pred, (list(DAY_MOODS),))
+            conn.commit()
+            add("titres_tronques", FIXED if qn else WARN, f"{n} titre(s) <90s → {qn} mis en quarantaine")
     except Exception as e:
+        conn.rollback()
         add("titres_tronques", WARN, f"erreur: {e}")
 
     # 7. Musique dure / nuit en pleine journée (le chef tolère un peu, pas beaucoup)
@@ -161,18 +196,18 @@ def main():
     except Exception as e:
         add("qc_lui_meme", FAIL, f"le QC a planté: {e}")
 
+    icon = {OK: "✅", FIXED: "🔧", WARN: "⚠️", FAIL: "🔴"}
     worst = FAIL if any(s == FAIL for _, s, _ in results) else \
-            WARN if any(s == WARN for _, s, _ in results) else OK
-    icon = {OK: "✅", WARN: "⚠️", FAIL: "🔴"}
+            WARN if any(s == WARN for _, s, _ in results) else \
+            FIXED if any(s == FIXED for _, s, _ in results) else OK
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"[{ts}] QC Gaiverland — {icon[worst]} {worst}"]
     for name, st, detail in results:
         lines.append(f"  {icon[st]} {name}: {detail}")
-    report = "\n".join(lines)
-    print(report, flush=True)
+    print("\n".join(lines), flush=True)
 
-    # Alerte Discord si anomalie ET webhook configuré, AVEC throttle (anti-spam) :
-    # on n'alerte qu'au CHANGEMENT d'état ou au max 1×/heure pour un même niveau.
+    # Alerte Discord si anomalie/auto-fix ET webhook configuré, throttlée (changement d'état
+    # ou 1×/h). Sépare « auto-corrigé » (info) de « à regarder » (demande une action humaine).
     if worst != OK and WEBHOOK:
         state_path = "/tmp/qc_state.json"
         try:
@@ -180,13 +215,16 @@ def main():
         except Exception:
             prev = {}
         now_ts = datetime.datetime.now().timestamp()
-        changed = prev.get("worst") != worst
-        stale = (now_ts - float(prev.get("alert_ts", 0))) > 3600
-        if changed or stale:
-            anomalies = [f"{icon[st]} **{name}** — {detail}" for name, st, detail in results if st != OK]
-            body = {"content": f"{icon[worst]} **QC Gaiverland {worst}** ({ts})\n" + "\n".join(anomalies)}
+        if prev.get("worst") != worst or (now_ts - float(prev.get("alert_ts", 0))) > 3600:
+            fixed = [f"🔧 **{n}** — {d}" for n, s, d in results if s == FIXED]
+            probs = [f"{icon[s]} **{n}** — {d}" for n, s, d in results if s in (WARN, FAIL)]
+            content = f"{icon[worst]} **QC Gaiverland {worst}** ({ts})"
+            if fixed:
+                content += "\n__Auto-corrigé (rien à faire) :__\n" + "\n".join(fixed)
+            if probs:
+                content += "\n__À regarder :__\n" + "\n".join(probs)
             try:
-                req = urllib.request.Request(WEBHOOK, data=json.dumps(body).encode(),
+                req = urllib.request.Request(WEBHOOK, data=json.dumps({"content": content}).encode(),
                                              headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req, timeout=8).read()
                 prev = {"worst": worst, "alert_ts": now_ts}
@@ -197,7 +235,10 @@ def main():
         except Exception:
             pass
 
-    sys.exit(0 if worst == OK else 1 if worst == WARN else 2)
+    # Code retour : 3 = demande de redémarrage au wrapper hôte ; sinon 2 FAIL / 1 WARN|FIXÉ / 0 OK.
+    if _flags["needs_restart"]:
+        sys.exit(3)
+    sys.exit(0 if worst == OK else 2 if worst == FAIL else 1)
 
 
 if __name__ == "__main__":
