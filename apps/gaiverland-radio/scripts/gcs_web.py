@@ -1131,6 +1131,12 @@ function AA(){ return waOK(curStation)?A:B; }        // élément actif (A = Web
 const FX_KEY='gvl_fx';
 const PRESETS=[['flat','Flat'],['bassboost','Bass boost'],['keepbass','Keep-bass'],['night','Nuit'],['clarity','Clarté'],['club','Club']];
 const VIZS=[['bars','Barres'],['radial','Radial'],['wave','Onde']];
+// Courbe de volume PERCEPTUELLE (loi carrée). L'oreille est logarithmique : un gain
+// linéaire tasse tout le ressenti dans le bas du curseur et rend le haut « mou ». v² donne
+// une progression naturelle (curseur 50% → ~-12 dB). Le curseur reste linéaire à l'écran
+// (o.vol 0..1), seule la SORTIE est courbée. Réglable : v*v (doux) → Math.pow(v,3) (marqué).
+function volGain(v){ return v*v; }
+
 const AFX={
   ctx:null,src:null,n:null,an:null,freq:null,tim:null,ready:false,
   o:Object.assign({vol:1,preset:'flat',bass:0,keepbass:false,loud:false,mono:false,viz:'bars'},
@@ -1160,8 +1166,8 @@ const AFX={
   },
   apply(){
     const o=this.o;
-    B.volume=o.vol;
-    if(!this.ready){ A.volume=o.vol; return; }
+    B.volume=volGain(o.vol);
+    if(!this.ready){ A.volume=volGain(o.vol); return; }
     const n=this.n; let bG=0,mG=0,tG=0,comp=false;
     if(o.preset==='bassboost') bG=9;
     else if(o.preset==='night'){ tG=-7; bG=2; }
@@ -1174,7 +1180,7 @@ const AFX={
     n.comp.threshold.value=uc?-22:0; n.comp.ratio.value=uc?4:1; n.comp.knee.value=uc?26:0;
     n.comp.attack.value=0.003; n.comp.release.value=0.25;
     n.mono.channelCount=o.mono?1:2; n.mono.channelCountMode=o.mono?'explicit':'max'; n.mono.channelInterpretation='speakers';
-    A.volume=1; n.master.gain.value=o.vol;
+    A.volume=1; n.master.gain.value=volGain(o.vol);
   },
   set(k,v){ this.o[k]=v; this.save(); this.apply(); },
   resume(){ if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume().catch(function(){}); }
@@ -1519,9 +1525,9 @@ function sleepClear(){
 function sleepFadeStop(){
   if(AFX.ready){
     try{ const g=AFX.n.master.gain, t=AFX.ctx.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value,t); g.linearRampToValueAtTime(0.0001,t+8); }catch(e){}
-    setTimeout(function(){ stopStream(); try{AFX.n.master.gain.value=AFX.o.vol;}catch(e){} }, 8300);
+    setTimeout(function(){ stopStream(); try{AFX.n.master.gain.value=volGain(AFX.o.vol);}catch(e){} }, 8300);
   }else{
-    const a=AA(); let v=a.volume||1; const iv=setInterval(function(){ v-=0.06; if(v<=0.02){clearInterval(iv); stopStream(); a.volume=AFX.o.vol;} else a.volume=v; }, 480);
+    const a=AA(); let v=a.volume||1; const iv=setInterval(function(){ v-=0.06; if(v<=0.02){clearInterval(iv); stopStream(); a.volume=volGain(AFX.o.vol);} else a.volume=v; }, 480);
   }
   sleepClear();
   document.querySelectorAll('[data-sleep]').forEach(el=>el.classList.toggle('active', el.dataset.sleep==='0'));
