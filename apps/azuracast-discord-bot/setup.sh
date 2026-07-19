@@ -88,12 +88,16 @@ AZURACAST_STATION_ID = os.environ.get("AZURACAST_STATION_ID", "radio")
 GCS_WEB_URL      = os.environ.get("GCS_WEB_URL", "http://gcs-web:8099").rstrip("/")
 LISTENERS_REPORT = os.environ.get("LISTENERS_REPORT", "true").lower() == "true"
 
-# Normalisation de la sonie côté bot : les titres n'ont pas tous le même niveau de mastering
-# (un fort, puis un faible) → dynaudnorm remonte les faibles et retient les forts EN CONTINU,
-# donc plus de saut de volume d'un morceau à l'autre. Filtre ffmpeg temps réel, configurable :
-# vider BOT_AUDIO_FILTER pour désactiver, ou ajuster les paramètres sans toucher au code.
-#   f=fenêtre(ms) g=lissage p=pic-cible m=gain max (limite le boost des passages quasi-silencieux)
-AUDIO_FILTER = os.environ.get("BOT_AUDIO_FILTER", "dynaudnorm=f=250:g=15:p=0.9:m=8").strip()
+# Traitement audio côté bot, en 2 étages :
+#  1) dynaudnorm = normalise la sonie EN CONTINU (les titres faibles remontent, les forts sont
+#     retenus) → plus de saut de volume d'un morceau à l'autre.
+#  2) volume=0.12 = atténuation de BASE. Elle recale l'échelle : à 100 % (`/radio volume 100`,
+#     défaut) le bot sort à un niveau CONFORTABLE pour discuter par-dessus, et on peut monter
+#     jusqu'à 200 % (= 2×) pour écouter à fond. Sans ça, le bot était trop fort même au minimum.
+# Configurable via env BOT_AUDIO_FILTER (vider = aucun traitement). Pour ajuster « à quel point
+# 100 % est fort », changer le 0.12 (plus bas = plus discret).
+AUDIO_FILTER = os.environ.get("BOT_AUDIO_FILTER",
+                              "dynaudnorm=f=250:g=15:p=0.9:m=8,volume=0.12").strip()
 
 # Liens mp3 publics par station — routes same-origin servies par le site Gaiverland.
 # (Le flux interne http://azuracast/... n'est PAS partageable : il n'existe que dans Docker.)
