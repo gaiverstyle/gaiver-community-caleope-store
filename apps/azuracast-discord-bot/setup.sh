@@ -88,6 +88,13 @@ AZURACAST_STATION_ID = os.environ.get("AZURACAST_STATION_ID", "radio")
 GCS_WEB_URL      = os.environ.get("GCS_WEB_URL", "http://gcs-web:8099").rstrip("/")
 LISTENERS_REPORT = os.environ.get("LISTENERS_REPORT", "true").lower() == "true"
 
+# Normalisation de la sonie côté bot : les titres n'ont pas tous le même niveau de mastering
+# (un fort, puis un faible) → dynaudnorm remonte les faibles et retient les forts EN CONTINU,
+# donc plus de saut de volume d'un morceau à l'autre. Filtre ffmpeg temps réel, configurable :
+# vider BOT_AUDIO_FILTER pour désactiver, ou ajuster les paramètres sans toucher au code.
+#   f=fenêtre(ms) g=lissage p=pic-cible m=gain max (limite le boost des passages quasi-silencieux)
+AUDIO_FILTER = os.environ.get("BOT_AUDIO_FILTER", "dynaudnorm=f=250:g=15:p=0.9:m=8").strip()
+
 # Liens mp3 publics par station — routes same-origin servies par le site Gaiverland.
 # (Le flux interne http://azuracast/... n'est PAS partageable : il n'existe que dans Docker.)
 PUBLIC_BASE = os.environ.get("GAIVERLAND_PUBLIC_URL", "https://gaiverland.gaiver-it.fr").rstrip("/")
@@ -175,13 +182,16 @@ class RadioPlayer:
         `/stop` + `/play` que le chef devait faire). En PCM, discord.py encode lui-même en
         Opus et `PCMVolumeTransformer.volume` est réglable À CHAUD, sans coupure.
         """
+        opts = "-vn"
+        if AUDIO_FILTER:
+            opts += " -af " + AUDIO_FILTER   # normalisation sonie temps réel (dynaudnorm)
         pcm = discord.FFmpegPCMAudio(
             url,
             before_options=(
                 "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
                 "-analyzeduration 0 -loglevel warning"
             ),
-            options="-vn",
+            options=opts,
         )
         return discord.PCMVolumeTransformer(pcm, volume=self.volume)
 
