@@ -100,6 +100,15 @@ def embed(path, img):
             os.remove(cover)
 
 
+def _set_cover(cur, conn, path, val):
+    """Maintient tracks.has_cover (signal de reconnaissance utilisé par le tri playlist)."""
+    try:
+        cur.execute("UPDATE tracks SET has_cover=%s WHERE file_path=%s", (val, path))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
 def main():
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else 150
     conn = psycopg2.connect(DB)
@@ -111,7 +120,11 @@ def main():
     for path, artist, title in rows:
         if done >= limit:
             break
-        if not os.path.isfile(path) or has_art(path):
+        if not os.path.isfile(path):
+            skip += 1
+            continue
+        if has_art(path):
+            _set_cover(cur, conn, path, True)      # déjà une pochette
             skip += 1
             continue
         q = clean_query(artist, title)
@@ -131,11 +144,13 @@ def main():
                     r = None
             if not r:
                 miss += 1
+                _set_cover(cur, conn, path, False)   # introuvable → obscur → relégué
                 print("MISS", title[:42], flush=True)
                 continue
             img = urllib.request.urlopen(artwork_url(r), timeout=15).read()
             if embed(path, img):
                 done += 1
+                _set_cover(cur, conn, path, True)
                 print(f"OK[{src}]", title[:32], "<-", r.get("artistName", "")[:16], "-", r.get("trackName", "")[:20], flush=True)
             else:
                 miss += 1

@@ -43,10 +43,14 @@ BOOST_NO_REPEAT_HOURS = float(os.environ.get("BOOST_NO_REPEAT_HOURS", "2"))
 VOCAL_BIAS            = float(os.environ.get("VOCAL_BIAS", "2.5"))
 INSTR_TECHNO_PENALTY  = float(os.environ.get("INSTR_TECHNO_PENALTY", "1.5"))
 INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
-# Fragment SQL de poids réutilisé dans les requêtes candidats (3 params : bias, pénalité, seuil).
+# Pénalité « obscur » : un titre SANS pochette (iTunes+Deezer l'ignorent) = bootleg/anonyme
+# → relégué (pas banni). Les hymnes reconnus ont une cover → remontent. has_cover NULL
+# (pas encore vérifié / scènes) = neutre. Cf demande chef « manque de pépites qui hype » (18/07).
+COVER_PENALTY = float(os.environ.get("COVER_PENALTY", "1.0"))
+# Fragment SQL de poids réutilisé dans les requêtes candidats (4 params : bias, pénalité, seuil, cover).
 _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
-                     "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' "
-                     "THEN 1 ELSE 0 END))")
+                     "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' THEN 1 ELSE 0 END) "
+                     "- %s * (CASE WHEN has_cover IS FALSE THEN 1 ELSE 0 END))")
 # Clé « chanson » normalisée = TITRE débarrassé des parenthèses/crochets, en alphanumérique.
 # Traite comme UNE seule chanson toutes ses VERSIONS (Remix, Visualizer, Extended, uploaders
 # différents…) : « David Guetta, Hypaton - Walked Away (Rocco Prince Remix) » et « … (Visualizer) »
@@ -684,7 +688,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC
                 LIMIT %s
             """, (SCENE_PATH_RE, like, like, list(denylisted) or [0],
-                  VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 3))
+                  VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, COVER_PENALTY, count * 3))
             cand = _dedupe_versions(list(cur.fetchall()))   # une seule version par chanson
         fresh = [c for c in cand if c["id"] not in set(recent_ids)]
         pool = fresh if len(fresh) >= count else cand  # assez de neuf ? sinon on autorise la répète
@@ -730,7 +734,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
               AND genre_top1 = ANY(%s)
               AND (NOT %s OR title !~* %s)
             ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 4))
+        """, (candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, exclude_ids, '%rebexis_%', SCENE_PATH_RE, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, COVER_PENALTY, count * 4))
         candidates = list(cur.fetchall())
 
     # ENCORE : les titres soutenus reviennent plus souvent — on les injecte dans le
@@ -773,7 +777,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   AND genre_top1 = ANY(%s)
                   AND (NOT %s OR title !~* %s)
                 ORDER BY POWER(RANDOM(), 1.0 / """ + _VOCAL_WEIGHT_SQL + """) DESC LIMIT %s
-            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, count * 2))
+            """, ('%rebexis_%', SCENE_PATH_RE, list(denylisted) or [0], candidate_moods, day_mode, FORZA_PROMOTE_ENERGY, FORZA_PROMOTE_GENRES, FORZA_PROMOTE_BPM, excluded_now or ['__none__'], GENRE_WHITELIST, day_mode, HARD_TITLE_RE, VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, COVER_PENALTY, count * 2))
             candidates = list(cur.fetchall())
 
     # Une seule version par chanson dans le lot (pas 2 remixes du même titre à la suite).
