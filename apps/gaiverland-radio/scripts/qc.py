@@ -18,7 +18,7 @@ AZ = os.environ.get("AZURACAST_URL", "http://azuracast")
 WEBHOOK = os.environ.get("QC_DISCORD_WEBHOOK", "").strip()
 DAY_MOODS = ("festival", "energique", "melodique")
 SCENE_RE = r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|phonk2)/|/gaiverland_[a-z0-9]+/media/)"
-CLIP_RE = r"(official music video|official video|music video|clip officiel|\[hd\]|\(hd\)|official mv|type beat|album teaser)"
+CLIP_RE = r"(official music video|official video|music video|clip officiel|\[hd\]|\(hd\)|official mv|type beat|album teaser|mash.?up|bootleg)"
 HARD_TITLE_RE = r"(hardstyle|rawstyle|frenchcore|uptempo|tekno|hardcore|gabber|sub ?zero)"
 SONG_KEY = "lower(regexp_replace(coalesce(artist,'')||' '||coalesce(title,''),'[^a-z0-9]','','g'))"
 
