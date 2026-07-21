@@ -47,6 +47,9 @@ INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
 # → relégué (pas banni). Les hymnes reconnus ont une cover → remontent. has_cover NULL
 # (pas encore vérifié / scènes) = neutre. Cf demande chef « manque de pépites qui hype » (18/07).
 COVER_PENALTY = float(os.environ.get("COVER_PENALTY", "1.0"))
+# Bootlegs/mashups exclus de la mainstage par titre (vide = désactivé). NE cible PAS
+# 'free download' seul (garde les NCS). Cf demande chef 18/07.
+BOOTLEG_TITLE_RE = os.environ.get("BOOTLEG_TITLE_RE", r"(mash.?up|bootleg)")
 # Fragment SQL de poids réutilisé dans les requêtes candidats (4 params : bias, pénalité, seuil, cover).
 _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
                      "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' THEN 1 ELSE 0 END) "
@@ -667,6 +670,16 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     except Exception as e:
         print(f"  ⚠ denylist ignorée: {e}")
         conn.rollback()
+    # Bootlegs / mashups : fan-edits off-brand exclus de la mainstage PAR TITRE (indépendant du
+    # song_id, contrairement à la denylist → attrape aussi les titres sans song_id). Cf « LUK -
+    # Meduza … Mash Up FREE DOWNLOAD » entendu le 18/07. Réglable/désactivable via BOOTLEG_TITLE_RE.
+    if BOOTLEG_TITLE_RE:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM tracks WHERE title ~* %s", (BOOTLEG_TITLE_RE,))
+                denylisted |= {r["id"] for r in cur.fetchall()}
+        except Exception:
+            conn.rollback()
     # SKIP : les titres rejetés sortent de la rotation jour (exclusion, comme l'anti-répétition)
     exclude_ids = list(set(recent_ids) | quarantined | denylisted) or [0]
 
