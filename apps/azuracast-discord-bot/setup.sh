@@ -96,8 +96,11 @@ LISTENERS_REPORT = os.environ.get("LISTENERS_REPORT", "true").lower() == "true"
 #     jusqu'à 200 % (= 2×) pour écouter à fond. Sans ça, le bot était trop fort même au minimum.
 # Configurable via env BOT_AUDIO_FILTER (vider = aucun traitement). Pour ajuster « à quel point
 # 100 % est fort », changer le 0.12 (plus bas = plus discret).
+# NB latence : dynaudnorm « regarde devant » pour lisser → latence ≈ ((g-1)/2)·f.
+# f=250:g=15 = ~1,9 s de retard → le bot jouait en décalé vs le site. f=150:g=5 = ~0,3 s
+# (lissage un peu moins fin mais efficace) → le bot se recale sur l'affichage web.
 AUDIO_FILTER = os.environ.get("BOT_AUDIO_FILTER",
-                              "dynaudnorm=f=250:g=15:p=0.9:m=8,volume=0.03").strip()
+                              "dynaudnorm=f=150:g=5:p=0.9:m=8,volume=0.03").strip()
 
 # Liens mp3 publics par station — routes same-origin servies par le site Gaiverland.
 # (Le flux interne http://azuracast/... n'est PAS partageable : il n'existe que dans Docker.)

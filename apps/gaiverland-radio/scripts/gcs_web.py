@@ -905,6 +905,11 @@ audio{width:100%;margin-top:18px;border-radius:30px}
   margin-top:8px;padding:2px 8px;border-radius:10px;display:inline-block;
   background:rgba(0,0,0,.28);opacity:.9}
 .stage.on .st{background:#ff3b5c}
+/* Badge « c'est la station que diffuse le bot Discord » — sur la Mainstage uniquement,
+   pour lever l'ambiguïté quand on écoute en vocal et qu'on regarde le site. */
+.botb{position:absolute;top:6px;left:6px;background:#5865F2;color:#fff;font-family:sans-serif;
+  font-size:9px;font-weight:bold;letter-spacing:.3px;padding:3px 6px;border-radius:8px;
+  line-height:1;box-shadow:0 2px 6px rgba(0,0,0,.35);pointer-events:none}
 .city{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .city .pin{font-size:44px}
 .city .cn{font-size:30px;font-weight:bold}
@@ -1121,7 +1126,7 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Les scènes</h2>
   <div class="stages">
-    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
+    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="botb" title="C'est cette station que le bot Discord diffuse en vocal">🤖 bot Discord</div><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
     <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
     <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
     <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
