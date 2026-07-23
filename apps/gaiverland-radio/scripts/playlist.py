@@ -70,6 +70,48 @@ def _base_key(title: str) -> str:
     return re.sub(r"[^a-z0-9]", "", _PAREN_RE.sub("", title or "").lower())
 
 
+# Dynamique énergétique : insérer des RESPIRATIONS (creux mélodiques dansants) à intervalles
+# réguliers → la mainstage fait des vagues au lieu d'un mur d'énergie ininterrompu (le
+# « on dirait la hard » du chef = pilonnage sans breakdown). BREATHER_EVERY=0 désactive.
+BREATHER_EVERY      = int(os.environ.get("BREATHER_EVERY", "5"))       # 1 respiration / N pics
+BREATHER_MAX_ENERGY = float(os.environ.get("BREATHER_MAX_ENERGY", "0.8"))  # plafond énergie d'une respiration
+BREATHER_MIN_ENERGY = float(os.environ.get("BREATHER_MIN_ENERGY", "0.5"))  # plancher (reste dansant, pas mou)
+
+
+def _insert_breathers(conn, selected, exclude_extra):
+    """Intercale des respirations (mélodique dansant <0.8) tous les BREATHER_EVERY titres.
+    Crée un profil en vagues (pics → creux → pics). Ne rejoue pas un titre déjà pris/récent."""
+    if BREATHER_EVERY <= 0 or len(selected) < BREATHER_EVERY:
+        return selected
+    n = len(selected) // BREATHER_EVERY
+    taken = {t["id"] for t in selected} | set(exclude_extra)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, title, artist, bpm, energy, danceability, mood, genre_top1, az_id,
+                   key_note, key_scale
+            FROM tracks
+            WHERE analyzed=TRUE AND az_id IS NOT NULL
+              AND energy >= %s AND energy < %s
+              AND mood = ANY(%s)
+              AND file_path !~ %s
+              AND id != ALL(%s)
+              AND (title !~* %s)
+              AND (title !~* %s)
+            ORDER BY (has_cover IS TRUE) DESC, POWER(RANDOM(), 1.0/GREATEST(0.1, COALESCE(vocalness,0.5))) DESC
+            LIMIT %s
+        """, (BREATHER_MIN_ENERGY, BREATHER_MAX_ENERGY, list(DAY_MOODS), SCENE_PATH_RE,
+              list(taken) or [0], HARD_TITLE_RE, BOOTLEG_TITLE_RE or 'x^', n))
+        breathers = list(cur.fetchall())
+    if not breathers:
+        return selected
+    out, bi = [], 0
+    for i, t in enumerate(selected):
+        out.append(t)
+        if (i + 1) % BREATHER_EVERY == 0 and bi < len(breathers):
+            out.append(breathers[bi]); bi += 1
+    return out
+
+
 def _dedupe_versions(rows):
     """Garde UNE version par chanson (clé titre de base) — l'ordre d'entrée décide laquelle
     (le tirage est déjà pondéré, donc la 1re rencontrée est la mieux classée). Évite 2 versions
@@ -799,6 +841,10 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     # Ordonner en chemin harmonique fluide (clé Camelot + BPM + énergie),
     # au lieu de garder l'ordre aléatoire du tirage SQL.
     selected = order_for_coherence(candidates, count, current_energy)
+
+    # Dynamique : intercaler des respirations le jour → vagues, pas un mur d'énergie.
+    if day_mode:
+        selected = _insert_breathers(conn, selected, exclude_ids)
 
     if selected:
         avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)
