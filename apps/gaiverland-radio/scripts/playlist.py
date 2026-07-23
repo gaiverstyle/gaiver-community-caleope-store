@@ -40,13 +40,13 @@ BOOST_NO_REPEAT_HOURS = float(os.environ.get("BOOST_NO_REPEAT_HOURS", "2"))
 # 'energique' = Techno/Tech House/Minimal) est reléguée aux moments creux (pas bannie).
 # Tri random pondéré (Efraimidis-Spirakis) : poids = 1 + VOCAL_BIAS·vocalness − pénalité.
 # vocalness NULL (pas encore backfillé) = neutre 0.5. Mettre VOCAL_BIAS=0 pour désactiver.
-VOCAL_BIAS            = float(os.environ.get("VOCAL_BIAS", "2.5"))
+VOCAL_BIAS            = float(os.environ.get("VOCAL_BIAS", "1.8"))
 INSTR_TECHNO_PENALTY  = float(os.environ.get("INSTR_TECHNO_PENALTY", "1.5"))
 INSTR_VOCAL_THRESHOLD = float(os.environ.get("INSTR_VOCAL_THRESHOLD", "0.4"))
 # Pénalité « obscur » : un titre SANS pochette (iTunes+Deezer l'ignorent) = bootleg/anonyme
 # → relégué (pas banni). Les hymnes reconnus ont une cover → remontent. has_cover NULL
 # (pas encore vérifié / scènes) = neutre. Cf demande chef « manque de pépites qui hype » (18/07).
-COVER_PENALTY = float(os.environ.get("COVER_PENALTY", "1.0"))
+COVER_PENALTY = float(os.environ.get("COVER_PENALTY", "0.55"))
 # Bootlegs/mashups exclus de la mainstage par titre (vide = désactivé). NE cible PAS
 # 'free download' seul (garde les NCS). Cf demande chef 18/07.
 BOOTLEG_TITLE_RE = os.environ.get("BOOTLEG_TITLE_RE", r"(mash.?up|bootleg)")
