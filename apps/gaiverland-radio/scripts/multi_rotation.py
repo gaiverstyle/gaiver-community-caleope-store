@@ -130,19 +130,21 @@ def az_set_order(sid: int, pid: int, file_ids: list) -> bool:
 # ─────────────────────────────────────────────
 def select_tracks(cur, st: dict) -> list:
     """Tracks analysées correspondant au filtre de la station.
-    filter.theme → sous-dossier média ; filter.genres → genre_top1 ; union si les deux."""
+    Le DOSSIER thème est AUTORITÉ : une scène = SES dossiers (music/<theme>/ +
+    gaiverland_<theme>/media/), JAMAIS par genre — Essentia mis-tague dans les deux sens
+    → sans ça, un titre mainstage genre 'Electro' (ex Rock That Body dans up1/) fuitait dans
+    la synthwave. Le genre ne sert qu'en dernier recours, pour une scène SANS dossier thème."""
     flt = st.get("filter", {}) or {}
     where, params = [], []
-    ors = []
-    if flt.get("theme"):
-        ors.append("file_path LIKE %s")
-        params.append(f"%{MEDIA_MARKER}music/{flt['theme']}/%")
-    if flt.get("genres"):
-        ors.append("genre_top1 = ANY(%s)")
+    theme = flt.get("theme")
+    if theme:
+        where.append("(file_path LIKE %s OR file_path LIKE %s)")
+        params += [f"%{MEDIA_MARKER}music/{theme}/%", f"%/gaiverland_{theme}/media/%"]
+    elif flt.get("genres"):
+        where.append("genre_top1 = ANY(%s)")
         params.append(flt["genres"])
-    if not ors:
+    else:
         return []  # station sans filtre exploitable
-    where.append("(" + " OR ".join(ors) + ")")
 
     bpm = st.get("bpm")
     if bpm and len(bpm) == 2:
