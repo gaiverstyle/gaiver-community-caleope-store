@@ -965,8 +965,16 @@ footer .c15{margin-top:6px;font-size:12px}
 .playbtn{flex:0 0 auto;width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:24px;color:var(--ink);
   background:linear-gradient(135deg,#ffd29a,#ffb56b);box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s}
 .playbtn:hover{transform:scale(1.06)}
-.reloadbtn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.22);background:transparent;cursor:pointer;font-size:18px;color:var(--ink);opacity:.7;transition:transform .3s,opacity .15s}
-.reloadbtn:hover{transform:rotate(180deg);opacity:1}
+/* Retour au direct : pastille lisible « ⟳ Direct » (l'ancien glyphe seul, transparent
+   et à 70% d'opacité, était quasi invisible — signalé par le chef). */
+.reloadbtn{flex:0 0 auto;height:44px;padding:0 15px;border-radius:22px;
+  border:1px solid rgba(255,244,230,.55);background:rgba(255,244,230,.15);cursor:pointer;
+  font-size:15px;font-family:sans-serif;font-weight:bold;letter-spacing:.3px;color:var(--cream);
+  display:inline-flex;align-items:center;gap:7px;transition:background .15s,transform .1s}
+.reloadbtn:hover{background:rgba(255,244,230,.28)}
+.reloadbtn:active{transform:scale(.95)}
+.reloadbtn .ic{display:inline-block;font-size:18px;line-height:1;transition:transform .4s}
+.reloadbtn:hover .ic{transform:rotate(180deg)}
 #player{display:none}
 /* Scènes cliquables (stations Live) vs à venir (Bientôt) */
 .stage.live{cursor:pointer;border-style:solid;border-color:rgba(255,244,230,.4);transition:all .15s}
@@ -1063,7 +1071,7 @@ footer .c15{margin-top:6px;font-size:12px}
       <div class="bar"><i id="prog"></i></div>
     </div>
     <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
-    <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)">⟳</button>
+    <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)"><span class="ic">⟳</span><span>Direct</span></button>
   </div>
   <audio id="player" preload="none"></audio>
   <audio id="player-b" preload="none"></audio>
@@ -1695,7 +1703,10 @@ function initFxUI(){
     el.addEventListener('error',reconnectSoon);
     el.addEventListener('ended',reconnectSoon);                    // un live ne "finit" jamais → décrochage
   });
-  document.addEventListener('visibilitychange',function(){ if(!document.hidden) reconnectSoon(); });
+  // Retour d'arrière-plan (déverrouillage tél, retour d'onglet) : mobile gèle les timers,
+  // donc l'affichage restait figé jusqu'à 10 s. On resynchronise TOUT de suite l'affichage
+  // (refresh) ET on relance le flux s'il a décroché (reconnectSoon).
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden){ refresh(); reconnectSoon(); } });
   ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
   if('mediaSession' in navigator){ navigator.mediaSession.setActionHandler('play',togglePlay); navigator.mediaSession.setActionHandler('pause',stopStream); }
   initFxUI();
