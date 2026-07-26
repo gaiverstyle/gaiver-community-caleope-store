@@ -1323,7 +1323,12 @@ function playLive(){
   if(a===A){ AFX.setup(); AFX.resume(); }
   a.play().catch(function(){});
 }
-function stopStream(){ wantPlaying=false; const a=AA(); a.pause(); a.removeAttribute('src'); a.load(); }
+// Pause : on met SEULEMENT en pause, on garde le src en place. Retirer le src (ce qu'on
+// faisait avant) faisait disparaître le morceau de l'écran verrouillé iOS (iOS = « plus de
+// média »). En gardant le src, iOS conserve l'info + les boutons natifs (comme Apple Music
+// en pause). La reprise passe par playLive() qui repose un src FRAIS → on repart au DIRECT,
+// jamais sur du buffer périmé. On garde aussi la métadonnée MediaSession affichée.
+function stopStream(){ wantPlaying=false; AA().pause(); }
 function togglePlay(){ const a=AA(); if(a.paused){ playLive(); } else { stopStream(); } }
 // Clip in-page : composition fixe par morceau — fond Toulon + cover devant + titre dessous.
 async function loadVisuals(){
