@@ -1397,6 +1397,7 @@ footer .c15{margin-top:6px;font-size:12px}
     <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
     <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
     <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🌆</div><div class="nm">Synthwave</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
+    <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
   </div>
 </div>
 
@@ -1468,7 +1469,7 @@ let curStation='main';
 // B direct (scènes cross-origin — Web Audio les muterait sans header CORS).
 const A=document.getElementById('player'), B=document.getElementById('player-b');
 // Kade a posé un lien mp3 same-origin par station → Web Audio lisible PARTOUT.
-const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3'};
+const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3',classics:'/classics.mp3'};
 function waOK(st){ return !!ROUTE[st]; }             // toutes les stations = same-origin
 
 // ── Copier le lien mp3 d'une station (VLC, tel, partage) ──

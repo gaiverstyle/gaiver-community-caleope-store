@@ -432,6 +432,24 @@
         "Perturbator - Sentient *[darksynth → soir/nuit]*",
         "Dance With the Dead - Riot *[darksynth/synth-metal, guitares → soir/nuit, le plus dur du lot]*"
       ]
+    },
+    {
+      "slug": "classics",
+      "az_station_id": 8,
+      "label": "Gaiverland Classics",
+      "theme": "classics",
+      "search_suffix": "",
+      "enabled": true,
+      "bpm": [
+        0,
+        250
+      ],
+      "energy": [
+        0.0,
+        1.0
+      ],
+      "filter": {},
+      "seeds": []
     }
   ]
 }
