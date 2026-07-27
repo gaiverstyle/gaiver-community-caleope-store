@@ -355,6 +355,21 @@ def apply_radio(mp3_bytes: bytes, label: str) -> pathlib.Path:
     raw_path.unlink(missing_ok=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg radio: {r.stderr.decode()[:200]}")
+    # 🔇 GARDE-FOU ANTI-SILENCE. ffmpeg peut renvoyer 0 tout en écrivant un fichier MUET :
+    # 39 jingles silencieux ont ainsi atterri à l'antenne (générés les 11/06 et 03/07,
+    # constatés le 27/07) — crédits ElevenLabs dépensés pour rien et blancs à l'antenne.
+    # On mesure le niveau réel : sous -60 dB c'est du silence numérique, on jette.
+    try:
+        _v = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(out_path),
+                             "-af", "volumedetect", "-f", "null", "-"],
+                            capture_output=True, timeout=60)
+        _m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB",
+                       _v.stderr.decode("utf-8", "replace"))
+        if _m and float(_m.group(1)) < -60:
+            out_path.unlink(missing_ok=True)
+            raise RuntimeError(f"audio silencieux ({_m.group(1)} dB) - jingle non publie")
+    except subprocess.TimeoutExpired:
+        pass          # contrôle impossible : on ne bloque pas la production pour autant
     return out_path
 
 
