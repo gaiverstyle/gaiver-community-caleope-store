@@ -136,7 +136,7 @@ def select_tracks(cur, st: dict) -> list:
     la synthwave. Le genre ne sert qu'en dernier recours, pour une scène SANS dossier thème."""
     flt = st.get("filter", {}) or {}
     where, params = [], []
-    theme = flt.get("theme")
+    theme = st.get("theme") or flt.get("theme")   # theme = champ RACINE de la station (pas dans filter)
     if theme:
         where.append("(file_path LIKE %s OR file_path LIKE %s)")
         params += [f"%{MEDIA_MARKER}music/{theme}/%", f"%/gaiverland_{theme}/media/%"]
