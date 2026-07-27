@@ -389,7 +389,14 @@ mkdir -p "${STORAGE_PATH}/tts-cache-pp"
 # ── gcs.env — configuration GCS Phase 1 ──────────────────────────────
 GCS_CITY="${CALEOPE_PARAM_GCS_CITY:-Toulon}"
 GCS_INJECT_ACTIVE="${CALEOPE_PARAM_GCS_INJECT_ACTIVE:-false}"
+# Jeton de la page de régie /regie/voix (écoute + validation des jingles Rebexis).
+# Idempotent : param > existant > généré. Sans ça, un install --force changerait le
+# jeton à chaque déploiement et le lien mis en favori ne marcherait plus.
+GCS_ADMIN_TOKEN="${CALEOPE_PARAM_GCS_ADMIN_TOKEN:-$(_existing "${CONFIG_DIR}/gcs.env" GCS_ADMIN_TOKEN)}"
+[ -n "${GCS_ADMIN_TOKEN}" ] || GCS_ADMIN_TOKEN=$(openssl rand -hex 16)
 cat > "${CONFIG_DIR}/gcs.env" <<EOF
+# Jeton d'accès à la page de régie (écoute/validation des jingles) — ne pas partager
+GCS_ADMIN_TOKEN=${GCS_ADMIN_TOKEN}
 # Ville de Gaiverland (change environ tous les 3 ans)
 GCS_CITY=${GCS_CITY}
 # URLs internes GCS (Docker network gaiverland-internal)
@@ -3020,6 +3027,12 @@ def init_db():
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS tts_review (
+                text_hash   VARCHAR(64) PRIMARY KEY,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                note        TEXT,
+                reviewed_at TIMESTAMPTZ DEFAULT NOW()
+            );
             CREATE TABLE IF NOT EXISTS tts_library (
                 id           SERIAL PRIMARY KEY,
                 text_hash    VARCHAR(64) UNIQUE NOT NULL,
@@ -3100,6 +3113,8 @@ def library_random_fallback(conn, category: str) -> dict | None:
         cur.execute("""
             SELECT * FROM tts_library
             WHERE category=%s AND audio_file IS NOT NULL
+              -- Jingle « retiré » par le chef en régie (/regie/voix) → jamais à l'antenne.
+              AND text_hash NOT IN (SELECT text_hash FROM tts_review WHERE status='ko')
             ORDER BY RANDOM() LIMIT 1
         """, (category,))
         return cur.fetchone()

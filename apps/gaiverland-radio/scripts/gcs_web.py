@@ -811,6 +811,245 @@ def loved(limit: int = 10):
         return {"loved": []}
 
 
+# ── RÉGIE VOIX : écoute + validation des jingles Rebexis ─────────────────────
+# Le chef veut valider la QUALITÉ (prononciation : « façons » lu « facons », etc.)
+# AVANT qu'un jingle passe à l'antenne. Cette page liste les jingles de tts_library,
+# les fait écouter, et enregistre un verdict. Le worker TTS n'utilisera que les
+# jingles non rejetés (cf. filtre côté tts_worker).
+TTS_CACHE_DIR = "/tts-cache"
+ADMIN_TOKEN = os.environ.get("GCS_ADMIN_TOKEN", "").strip()
+
+
+def _admin_ok(request: Request) -> bool:
+    """Accès régie : jeton via ?k= (posé ensuite en cookie) — jamais public."""
+    if not ADMIN_TOKEN:
+        return False
+    given = request.query_params.get("k", "") or request.cookies.get("gadm", "")
+    return hmac.compare_digest(given, ADMIN_TOKEN)
+
+
+def _ensure_review_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tts_review (
+            text_hash   VARCHAR(64) PRIMARY KEY,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            note        TEXT,
+            reviewed_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+
+@app.get("/api/regie/jingles")
+def regie_jingles(request: Request, status: str = "all"):
+    """Liste des jingles avec leur texte et leur verdict."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            _ensure_review_table(cur)
+            conn.commit()
+            cur.execute("""
+                SELECT l.text_hash, l.text, l.category, l.audio_file,
+                       COALESCE(r.status, 'pending') AS status, r.note
+                FROM tts_library l
+                LEFT JOIN tts_review r ON r.text_hash = l.text_hash
+                WHERE l.audio_file IS NOT NULL
+                ORDER BY (COALESCE(r.status,'pending') <> 'pending'), l.category, l.text
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        items = [{"h": r["text_hash"], "text": r["text"] or "", "cat": r["category"] or "",
+                  "status": r["status"], "note": r["note"] or ""} for r in rows]
+        if status in ("pending", "ok", "ko"):
+            items = [i for i in items if i["status"] == status]
+        counts = {}
+        for r in rows:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+        return {"items": items, "counts": counts, "total": len(rows)}
+    except Exception as e:
+        return {"items": [], "counts": {}, "total": 0, "error": str(e)[:200]}
+
+
+@app.get("/api/regie/audio/{h}")
+def regie_audio(h: str, request: Request):
+    """Sert le mp3 d'un jingle. Le nom vient de la base, jamais de l'URL (anti-traversée)."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if not re.fullmatch(r"[0-9a-f]{8,64}", h or ""):
+        raise HTTPException(status_code=400, detail="bad id")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT audio_file FROM tts_library WHERE text_hash=%s", (h,))
+            row = cur.fetchone()
+        conn.close()
+        if not row or not row["audio_file"]:
+            raise HTTPException(status_code=404, detail="inconnu")
+        name = os.path.basename(row["audio_file"])
+        path = os.path.join(TTS_CACHE_DIR, name)
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="audio absent")
+        with open(path, "rb") as f:
+            data = f.read()
+        return Response(content=data, media_type="audio/mpeg",
+                        headers={"Cache-Control": "private, max-age=3600"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="erreur")
+
+
+@app.post("/api/regie/review")
+def regie_review(request: Request, payload: dict = Body(...)):
+    """Enregistre le verdict : ok (garder) / ko (retirer de l'antenne) / pending."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    h = str(payload.get("h", ""))
+    st = str(payload.get("status", ""))
+    note = str(payload.get("note", ""))[:500]
+    if st not in ("ok", "ko", "pending") or not re.fullmatch(r"[0-9a-f]{8,64}", h):
+        raise HTTPException(status_code=400, detail="parametres invalides")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            _ensure_review_table(cur)
+            cur.execute("""
+                INSERT INTO tts_review (text_hash, status, note, reviewed_at)
+                VALUES (%s,%s,%s,NOW())
+                ON CONFLICT (text_hash) DO UPDATE
+                  SET status=EXCLUDED.status, note=EXCLUDED.note, reviewed_at=NOW()
+            """, (h, st, note))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "status": st}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/regie/voix", response_class=HTMLResponse)
+def regie_page(request: Request):
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    r = HTMLResponse(REGIE_PAGE)
+    if request.query_params.get("k"):   # mémorise le jeton → lien simple ensuite
+        r.set_cookie("gadm", ADMIN_TOKEN, max_age=7776000, httponly=True,
+                     secure=True, samesite="lax")
+    return r
+
+
+REGIE_PAGE = """<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Régie voix — Gaiverland</title>
+<style>
+:root{--ink:#1b1030;--cream:#fff4e6}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;color:var(--cream);
+  background:linear-gradient(175deg,#1b1030,#3d1d5c 45%,#6b2f6b)}
+header{position:sticky;top:0;z-index:5;padding:14px 16px;background:rgba(20,10,35,.94);
+  backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,244,230,.18)}
+h1{margin:0 0 4px;font-size:19px}
+.sub{font-size:13px;opacity:.75}
+.filters{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.filters button{border:1px solid rgba(255,244,230,.35);background:rgba(255,244,230,.08);
+  color:var(--cream);border-radius:20px;padding:7px 14px;font-size:13px;cursor:pointer}
+.filters button.on{background:var(--cream);color:var(--ink);font-weight:bold}
+main{padding:12px 16px 90px;max-width:900px;margin:0 auto}
+.j{border:1px solid rgba(255,244,230,.2);border-radius:14px;padding:12px;margin-bottom:10px;
+  background:rgba(255,244,230,.07)}
+.j.ok{border-color:rgba(46,204,113,.75);background:rgba(46,204,113,.12)}
+.j.ko{border-color:rgba(255,90,90,.75);background:rgba(255,90,90,.12);opacity:.75}
+.cat{display:inline-block;font-size:10px;letter-spacing:1px;text-transform:uppercase;
+  background:rgba(0,0,0,.3);padding:2px 8px;border-radius:10px;opacity:.85}
+.txt{margin:9px 0 11px;font-size:15px;line-height:1.45}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row button{border:none;border-radius:11px;padding:11px 15px;font-size:14px;cursor:pointer;
+  font-weight:bold;min-height:44px}
+.play{background:linear-gradient(135deg,#ffd29a,#ffb56b);color:var(--ink);min-width:104px}
+.play.on{background:linear-gradient(135deg,#c9b6ff,#9b8cff)}
+.good{background:#2ecc71;color:#08210f}
+.bad{background:#ff5a5a;color:#3d0a0a}
+.undo{background:rgba(255,244,230,.18);color:var(--cream)}
+.verdict{font-size:12px;opacity:.85;margin-left:auto}
+.empty{text-align:center;opacity:.7;padding:40px 10px}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:11px 16px;background:rgba(20,10,35,.96);
+  border-top:1px solid rgba(255,244,230,.18);font-size:13px;display:flex;gap:14px;
+  justify-content:center;flex-wrap:wrap}
+</style></head><body>
+<header>
+  <h1>🎙 Régie voix — jingles de Rebexis</h1>
+  <div class="sub">Écoute, puis <b>Garder</b> ou <b>Retirer</b>. Un jingle retiré ne repassera plus à l'antenne.</div>
+  <div class="filters">
+    <button data-f="pending" class="on">À écouter</button>
+    <button data-f="ko">Retirés</button>
+    <button data-f="ok">Gardés</button>
+    <button data-f="all">Tout</button>
+  </div>
+</header>
+<main id="list"><div class="empty">Chargement…</div></main>
+<div class="bar" id="stats"></div>
+<audio id="pl"></audio>
+<script>
+let ITEMS=[], FILTER='pending', playing=null;
+const pl=document.getElementById('pl');
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function load(){
+  const r=await fetch('/api/regie/jingles?status=all');
+  const d=await r.json();
+  ITEMS=d.items||[];
+  render();
+}
+function render(){
+  const list=document.getElementById('list');
+  const sel=FILTER==='all'?ITEMS:ITEMS.filter(i=>i.status===FILTER);
+  const c={pending:0,ok:0,ko:0};
+  ITEMS.forEach(i=>c[i.status]=(c[i.status]||0)+1);
+  document.getElementById('stats').innerHTML=
+    `<span>🎧 à écouter : <b>${c.pending||0}</b></span><span>✅ gardés : <b>${c.ok||0}</b></span>`+
+    `<span>🗑 retirés : <b>${c.ko||0}</b></span><span>total : <b>${ITEMS.length}</b></span>`;
+  if(!sel.length){ list.innerHTML='<div class="empty">Rien ici. 🎉</div>'; return; }
+  list.innerHTML=sel.map(i=>`
+    <div class="j ${i.status==='pending'?'':i.status}" id="j-${i.h}">
+      <span class="cat">${esc(i.cat)}</span>
+      <div class="txt">${esc(i.text)||'<i>(texte inconnu)</i>'}</div>
+      <div class="row">
+        <button class="play" onclick="play('${i.h}',this)">▶ Écouter</button>
+        ${i.status!=='ok'?`<button class="good" onclick="mark('${i.h}','ok')">✅ Garder</button>`:''}
+        ${i.status!=='ko'?`<button class="bad" onclick="mark('${i.h}','ko')">🗑 Retirer</button>`:''}
+        ${i.status!=='pending'?`<button class="undo" onclick="mark('${i.h}','pending')">↩︎</button>`:''}
+        <span class="verdict">${i.status==='ok'?'gardé':i.status==='ko'?'retiré':''}</span>
+      </div>
+    </div>`).join('');
+}
+function play(h,btn){
+  document.querySelectorAll('.play.on').forEach(b=>{b.classList.remove('on');b.textContent='▶ Écouter';});
+  if(playing===h && !pl.paused){ pl.pause(); playing=null; return; }
+  pl.src='/api/regie/audio/'+h; pl.play().catch(()=>{});
+  playing=h; btn.classList.add('on'); btn.textContent='⏸ En cours';
+}
+pl.addEventListener('ended',()=>{
+  document.querySelectorAll('.play.on').forEach(b=>{b.classList.remove('on');b.textContent='▶ Écouter';});
+  playing=null;
+});
+async function mark(h,status){
+  const it=ITEMS.find(x=>x.h===h); if(it) it.status=status;   // retour visuel immédiat
+  render();
+  try{
+    await fetch('/api/regie/review',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({h:h,status:status})});
+  }catch(e){ alert('Erreur d\'enregistrement — réessaie'); load(); }
+}
+document.querySelectorAll('.filters button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.filters button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); FILTER=b.dataset.f; render();
+});
+load();
+</script></body></html>"""
+
+
 PAGE = """<!doctype html>
 <html lang="fr"><head>
 <meta charset="utf-8">

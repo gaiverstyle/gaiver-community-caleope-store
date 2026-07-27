@@ -159,6 +159,12 @@ def init_db():
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS tts_review (
+                text_hash   VARCHAR(64) PRIMARY KEY,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                note        TEXT,
+                reviewed_at TIMESTAMPTZ DEFAULT NOW()
+            );
             CREATE TABLE IF NOT EXISTS tts_library (
                 id           SERIAL PRIMARY KEY,
                 text_hash    VARCHAR(64) UNIQUE NOT NULL,
@@ -279,6 +285,7 @@ def library_random_fallback(conn, category: str) -> dict | None:
             cur.execute("""
                 SELECT * FROM tts_library
                 WHERE category=%s AND audio_file IS NOT NULL
+                  AND text_hash NOT IN (SELECT text_hash FROM tts_review WHERE status='ko')
                 ORDER BY RANDOM() LIMIT 1
             """, (cat,))
             row = cur.fetchone()
