@@ -63,6 +63,7 @@ STATIONS = {
     "phonk": int(os.environ.get("GCS_PHONK_STATION", "5")),
     "lofi":  int(os.environ.get("GCS_LOFI_STATION",  "6")),
     "synthwave": int(os.environ.get("GCS_SYNTHWAVE_STATION", "7")),
+    "classics": int(os.environ.get("GCS_CLASSICS_STATION", "8")),
 }
 STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel Mainstage si besoin
 # Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
@@ -890,10 +891,27 @@ def regie_audio(h: str, request: Request):
         path = os.path.join(TTS_CACHE_DIR, name)
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="audio absent")
+        size = os.path.getsize(path)
+        head = {"Cache-Control": "private, max-age=3600", "Accept-Ranges": "bytes"}
+        # Safari (iPhone surtout) REFUSE de lire un <audio> dont la source ne gère pas
+        # les requêtes Range : il envoie « Range: bytes=0- » et attend un 206. Sans ça,
+        # aucun son ne sort (constaté par le chef le 27/07). On répond donc en 206.
+        rng = request.headers.get("range", "")
+        m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip()) if rng else None
+        if m:
+            start = int(m.group(1)) if m.group(1) else 0
+            end = int(m.group(2)) if m.group(2) else size - 1
+            start = max(0, min(start, size - 1))
+            end = max(start, min(end, size - 1))
+            with open(path, "rb") as f:
+                f.seek(start)
+                chunk = f.read(end - start + 1)
+            head["Content-Range"] = f"bytes {start}-{end}/{size}"
+            return Response(content=chunk, status_code=206,
+                            media_type="audio/mpeg", headers=head)
         with open(path, "rb") as f:
             data = f.read()
-        return Response(content=data, media_type="audio/mpeg",
-                        headers={"Cache-Control": "private, max-age=3600"})
+        return Response(content=data, media_type="audio/mpeg", headers=head)
     except HTTPException:
         raise
     except Exception:
