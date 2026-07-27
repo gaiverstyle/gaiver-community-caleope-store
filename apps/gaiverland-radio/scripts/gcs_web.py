@@ -1408,12 +1408,20 @@ function paintTrack(live, art){
   document.getElementById('artist').textContent=t.artist||'';
   if(cover) document.getElementById('hero-cover').src=cover;
   if(t.title && t.title!==lastTitle){ lastTitle=t.title; bgIdx++; setBg(); }  // nouveau fond par morceau
+  // MediaSession : NE PAS reconstruire la métadonnée à chaque repeinture (cette fonction
+  // tourne 1×/seconde). Réassigner metadata en boucle fait recharger la pochette et peut
+  // faire sauter l'entrée « En cours » de l'écran verrouillé iOS. On ne la pose QUE si le
+  // morceau (ou la pochette) a réellement changé.
   if('mediaSession' in navigator && (t.title||t.artist)){
-    navigator.mediaSession.metadata=new MediaMetadata({
-      title:t.title||'Gaiverland Radio', artist:t.artist||'Gaiverland Radio',
-      album:'Gaiverland — le festival permanent',
-      artwork:cover?[{src:cover,sizes:'512x512',type:'image/jpeg'}]:[]
-    });
+    const sig=(t.title||'')+'|'+(t.artist||'')+'|'+cover;
+    if(sig!==lastMediaSig){
+      lastMediaSig=sig;
+      navigator.mediaSession.metadata=new MediaMetadata({
+        title:t.title||'Gaiverland Radio', artist:t.artist||'Gaiverland Radio',
+        album:'Gaiverland — le festival permanent',
+        artwork:cover?[{src:cover,sizes:'512x512',type:'image/jpeg'}]:[]
+      });
+    }
   }
   // Progression calculée sur l'instant ENTENDU (played_at est fiable, elapsed est caché).
   if(t.duration>0 && t.played_at){
@@ -1424,7 +1432,7 @@ function paintTrack(live, art){
   }
 }
 
-let lastLive={}, lastArt='';
+let lastLive={}, lastArt='', lastMediaSig='';
 async function refresh(){
   try{
     const d=await (await fetch('/api/live?station='+curStation)).json();
@@ -1713,7 +1721,17 @@ function initFxUI(){
   // (refresh) ET on relance le flux s'il a décroché (reconnectSoon).
   document.addEventListener('visibilitychange',function(){ if(!document.hidden){ refresh(); reconnectSoon(); } });
   ['opt-wordmark','opt-bg','opt-bar','opt-viz'].forEach(id=>{const e=gid(id); if(e)e.addEventListener('change',fsSaveOpts);});
-  if('mediaSession' in navigator){ navigator.mediaSession.setActionHandler('play',togglePlay); navigator.mediaSession.setActionHandler('pause',stopStream); }
+  // Contrôles de l'écran verrouillé / centre de contrôle. iOS garde d'autant mieux l'entrée
+  // « En cours » que les actions attendues sont déclarées. On neutralise explicitement
+  // avance/recul (un direct ne se navigue pas) plutôt que de laisser iOS les proposer.
+  if('mediaSession' in navigator){
+    const MS=navigator.mediaSession;
+    const setH=function(a,fn){ try{ MS.setActionHandler(a,fn); }catch(e){} };
+    setH('play',  function(){ playLive(); });
+    setH('pause', function(){ stopStream(); });
+    setH('stop',  function(){ stopStream(); });
+    ['seekbackward','seekforward','seekto','previoustrack','nexttrack'].forEach(function(a){ setH(a,null); });
+  }
   initFxUI();
 })();
 refresh();loadEvents();loadLoved();

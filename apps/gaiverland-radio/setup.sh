@@ -2747,6 +2747,13 @@ DJSET_END_TEMPLATES = [   # clôture GÉNÉRIQUE (pas de label) → texte fixe, 
 ]
 
 
+class _SafeFmt(dict):
+    """Formatage tolérant : un placeholder absent du template rend "" au lieu de lever
+    KeyError. Une annonce de Rebexis ne doit JAMAIS tomber à cause d'un template."""
+    def __missing__(self, key):
+        return ""
+
+
 def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> str:
     key = "hype" if mood in ("festival", "energique") else \
           "peak" if mood == "intense" else \
@@ -2771,7 +2778,12 @@ def gen_template(mood: str, next_track: str = "", new_track: bool = False) -> st
         # Préférer les templates avec prochain titre (2 chances sur 3)
         pool = mode_data["templates_with_next"] * 2 + mode_data.get("templates_no_next", mode_data.get("templates", []))
         tpl = random.choice(pool)
-        return tpl.format(next=next_artist, next_track=next_track)
+        # 44 templates utilisent {artist} alors que seuls next/next_track étaient fournis →
+        # KeyError: 'artist' → Rebexis restait MUETTE (34 plantages/jour constatés le 27/07).
+        # On fournit l'alias {artist} ET on rend le formatage increvable : un placeholder
+        # inconnu rend une chaîne vide au lieu de faire tomber l'annonce.
+        return tpl.format_map(_SafeFmt(next=next_artist, next_track=next_track,
+                                       artist=next_artist, track=next_track))
     else:
         t = mode_data.get("templates_no_next") or mode_data.get("templates", ["La radio continue."])
         return random.choice(t)
