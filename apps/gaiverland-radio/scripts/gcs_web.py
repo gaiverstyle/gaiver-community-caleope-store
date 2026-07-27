@@ -1045,8 +1045,15 @@ function render(){
 function play(h,btn){
   document.querySelectorAll('.play.on').forEach(b=>{b.classList.remove('on');b.textContent='▶ Écouter';});
   if(playing===h && !pl.paused){ pl.pause(); playing=null; return; }
-  pl.src='/api/regie/audio/'+h; pl.play().catch(()=>{});
+  pl.src='/api/regie/audio/'+h;
   playing=h; btn.classList.add('on'); btn.textContent='⏸ En cours';
+  // On REMONTE l'erreur au lieu de l'avaler : si un jour aucun son ne sort, le chef doit
+  // voir pourquoi (autoplay bloqué, format refusé, réseau) plutôt qu'un bouton inerte.
+  pl.play().catch(function(e){
+    btn.classList.remove('on'); btn.textContent='▶ Écouter'; playing=null;
+    var d=(pl.error?('code média '+pl.error.code+' — '):'')+((e&&e.name)?e.name:e);
+    alert("Lecture impossible : "+d);
+  });
 }
 pl.addEventListener('ended',()=>{
   document.querySelectorAll('.play.on').forEach(b=>{b.classList.remove('on');b.textContent='▶ Écouter';});
