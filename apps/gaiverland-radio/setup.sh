@@ -1823,6 +1823,13 @@ COVER_PENALTY = float(os.environ.get("COVER_PENALTY", "0.55"))
 # Bootlegs/mashups exclus de la mainstage par titre (vide = désactivé). NE cible PAS
 # 'free download' seul (garde les NCS). Cf demande chef 18/07.
 BOOTLEG_TITLE_RE = os.environ.get("BOOTLEG_TITLE_RE", r"(mash.?up|bootleg)")
+# Genres DURS exclus de la mainstage LE JOUR (mais autorisés le soir/la nuit → dayparting).
+# Signal fiable (un tag 'Hardstyle' = vraiment du hard, ≠ le BPM qui se plante sur Kygo/Guetta
+# en double-tempo). Cf remix DVLM de Heroine à 153 BPM Hardstyle entendu le jour (chef 21/07).
+# Big Room volontairement EXCLU de la liste (c'est du festival mainstage : Animals/Tremor…).
+HARD_GENRES = set(g.strip() for g in os.environ.get(
+    "HARD_GENRES_DAY",
+    "Hardstyle,Hardcore,Rawstyle,Uptempo,Hands Up,Hard Dance,Frenchcore,Gabber,Hard Techno").split(",") if g.strip())
 # Fragment SQL de poids réutilisé dans les requêtes candidats (4 params : bias, pénalité, seuil, cover).
 _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
                      "- %s * (CASE WHEN COALESCE(vocalness, 0.5) < %s AND mood = 'energique' THEN 1 ELSE 0 END) "
@@ -2545,6 +2552,9 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
     if not candidate_moods:
         candidate_moods = [current_mood]  # fallback si tout est pausé
     excluded_now = list(set(excluded_now) | paused_genre_names)
+    # Genres durs : reléguer au soir/nuit → exclus SEULEMENT le jour (dayparting).
+    if day_mode:
+        excluded_now = list(set(excluded_now) | HARD_GENRES)
 
     with conn.cursor() as cur:
         cur.execute("""
