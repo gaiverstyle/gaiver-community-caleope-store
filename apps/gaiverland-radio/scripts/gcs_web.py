@@ -1040,7 +1040,7 @@ async function mark(h,status){
   try{
     await fetch('/api/regie/review',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({h:h,status:status})});
-  }catch(e){ alert('Erreur d\'enregistrement — réessaie'); load(); }
+  }catch(e){ alert("Erreur d'enregistrement — réessaie"); load(); }
 }
 document.querySelectorAll('.filters button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.filters button').forEach(x=>x.classList.remove('on'));
