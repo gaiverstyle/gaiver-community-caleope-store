@@ -52,6 +52,25 @@ def q1(cur, sql, params=None):
     return r[0] if r else None
 
 
+def _record(conn, cle, statut, detail):
+    """Dépose l'état dans system_health → lu par la page de supervision /regie/sante.
+    Permet au chef de tout voir depuis le site, sans SSH et sans IA."""
+    try:
+        with conn.cursor() as c2:
+            c2.execute("""CREATE TABLE IF NOT EXISTS system_health (
+                              cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
+                              detail TEXT, maj TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            c2.execute("""INSERT INTO system_health (cle, statut, detail, maj)
+                          VALUES (%s,%s,%s,NOW())
+                          ON CONFLICT (cle) DO UPDATE
+                            SET statut=EXCLUDED.statut, detail=EXCLUDED.detail, maj=NOW()""",
+                       (cle, statut, detail))
+        conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+
+
 def check_all():
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
@@ -228,6 +247,9 @@ def main():
     for name, st, detail in results:
         lines.append(f"  {icon[st]} {name}: {detail}")
     print("\n".join(lines), flush=True)
+
+    # Dépose le verdict complet en base → la page /regie/sante l'affiche au chef, sans SSH.
+    _record(conn, "qc", worst, "\n".join(f"{st}|{name}|{detail}" for name, st, detail in results))
 
     # Alerte Discord si anomalie/auto-fix ET webhook configuré, throttlée (changement d'état
     # ou 1×/h). Sépare « auto-corrigé » (info) de « à regarder » (demande une action humaine).

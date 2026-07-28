@@ -954,6 +954,121 @@ def regie_review(request: Request, payload: dict = Body(...)):
         return {"ok": False, "error": str(e)[:200]}
 
 
+@app.get("/api/regie/sante")
+def regie_sante(request: Request):
+    """Tout l'état du festival en un appel — pensé pour que le chef se passe d'agent :
+    scènes, services, voix, contenu, système. Aucune IA, que des faits mesurés."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    out = {"scenes": [], "services": [], "voix": {}, "contenu": {}, "systeme": {}, "alertes": []}
+
+    # ── Scènes (AzuraCast) ──────────────────────────────────────────────────
+    try:
+        r = httpx.get(f"{AZ_URL}/api/nowplaying", timeout=8)
+        for st in (r.json() if r.status_code == 200 else []):
+            song = (st.get("now_playing", {}) or {}).get("song", {}) or {}
+            en_ligne = bool(st.get("is_online"))
+            out["scenes"].append({
+                "nom": (st.get("station", {}) or {}).get("name", "?"),
+                "en_ligne": en_ligne,
+                "auditeurs": (st.get("listeners", {}) or {}).get("current", 0),
+                "titre": (song.get("title") or "")[:70],
+                "artiste": (song.get("artist") or "")[:40],
+            })
+            if not en_ligne:
+                out["alertes"].append("Scène hors ligne : " + (st.get("station", {}) or {}).get("name", "?"))
+    except Exception as e:
+        out["alertes"].append("AzuraCast injoignable : " + str(e)[:60])
+
+    # ── Services internes (health) ──────────────────────────────────────────
+    for nom, env in (("moteur d'état", "GCS_STATE_ENGINE_URL"), ("Rebexis", "GCS_REBEXIS_URL"),
+                     ("voix (TTS)", "GCS_TTS_URL"), ("titres", "GCS_TRACK_URL"),
+                     ("journal (lore)", "GCS_LORE_SERVICE_URL"), ("votes", "GCS_VOTE_URL"),
+                     ("météo", "GCS_WEATHER_URL")):
+        base = os.environ.get(env, "").rstrip("/")
+        if not base:
+            continue
+        try:
+            c = httpx.get(base + "/health", timeout=4).status_code
+            ok = (c == 200)
+        except Exception:
+            ok = False
+        out["services"].append({"nom": nom, "ok": ok})
+        if not ok:
+            out["alertes"].append("Service en panne : " + nom)
+
+    # ── Base : voix, contenu, état déposé par le QC et les sauvegardes ──────
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT COALESCE(r.status,'pending') s, count(*) n
+                           FROM tts_library l LEFT JOIN tts_review r ON r.text_hash=l.text_hash
+                           WHERE l.audio_file IS NOT NULL GROUP BY 1""")
+            out["voix"] = {row["s"]: row["n"] for row in cur.fetchall()}
+
+            cur.execute("""SELECT COALESCE(substring(file_path from '/music/([a-z0-9]+)/'),'mainstage') bac,
+                                  count(*) n FROM tracks GROUP BY 1 ORDER BY n DESC""")
+            out["contenu"]["bacs"] = [{"nom": r["bac"], "n": r["n"]} for r in cur.fetchall()]
+
+            for cle, sql in (("votes", "SELECT count(*) n FROM votes"),
+                             ("propositions", "SELECT count(*) n FROM title_proposals"),
+                             ("lore", "SELECT count(*) n FROM lore_events"),
+                             ("passages_24h", "SELECT count(*) n FROM play_history "
+                                              "WHERE played_at > now()-interval '24 hours'")):
+                try:
+                    cur.execute(sql)
+                    out["contenu"][cle] = cur.fetchone()["n"]
+                except Exception:
+                    conn.rollback()
+                    out["contenu"][cle] = None
+
+            try:
+                cur.execute("SELECT cle, statut, detail, "
+                            "round(extract(epoch FROM (now()-maj))/60) AS min FROM system_health")
+                for r in cur.fetchall():
+                    out["systeme"][r["cle"]] = {"statut": r["statut"], "detail": r["detail"],
+                                                "il_y_a_min": int(r["min"] or 0)}
+            except Exception:
+                conn.rollback()
+        conn.close()
+    except Exception as e:
+        out["alertes"].append("Base de données injoignable : " + str(e)[:60])
+
+    # ── Disque de l'hôte (vu à travers le bind-mount /app) ──────────────────
+    try:
+        v = os.statvfs("/app")
+        pris = (v.f_blocks - v.f_bfree) * v.f_frsize
+        tot = v.f_blocks * v.f_frsize
+        pct = round(100 * pris / tot)
+        out["systeme"]["disque"] = {"statut": "OK" if pct < 85 else "WARN",
+                                    "detail": f"{pris/2**30:.0f} Go utilisés sur {tot/2**30:.0f} Go ({pct} %)",
+                                    "il_y_a_min": 0}
+        if pct >= 85:
+            out["alertes"].append(f"Disque à {pct} %")
+    except Exception:
+        pass
+
+    # Sauvegarde trop vieille = alerte (le timer tourne à 04:30, >36 h = anormal)
+    sv = out["systeme"].get("sauvegarde")
+    if sv and sv["il_y_a_min"] > 36 * 60:
+        out["alertes"].append("Aucune sauvegarde depuis plus de 36 h")
+    qc = out["systeme"].get("qc")
+    if qc and qc["statut"] in ("WARN", "FAIL"):
+        out["alertes"].append("Contrôle qualité en " + qc["statut"])
+    return out
+
+
+@app.get("/regie/sante", response_class=HTMLResponse)
+def regie_sante_page(request: Request):
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    r = HTMLResponse(SANTE_PAGE)
+    if request.query_params.get("k"):
+        r.set_cookie("gadm", ADMIN_TOKEN, max_age=7776000, httponly=True,
+                     secure=True, samesite="lax")
+    return r
+
+
 @app.get("/regie/voix", response_class=HTMLResponse)
 def regie_page(request: Request):
     if not _admin_ok(request):
@@ -965,7 +1080,122 @@ def regie_page(request: Request):
     return r
 
 
-REGIE_PAGE = """<!doctype html>
+REGIE_SANTE_PAGE = """<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Santé du festival — Gaiverland</title>
+<style>
+:root{--cream:#fff4e6}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;color:var(--cream);
+  background:linear-gradient(175deg,#1b1030,#3d1d5c 45%,#6b2f6b);padding-bottom:40px}
+header{position:sticky;top:0;z-index:5;padding:14px 16px;background:rgba(20,10,35,.94);
+  backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,244,230,.18)}
+h1{margin:0;font-size:19px}
+.sub{font-size:12px;opacity:.7;margin-top:3px}
+main{padding:14px 16px;max-width:960px;margin:0 auto}
+h2{font-size:14px;letter-spacing:1px;text-transform:uppercase;opacity:.75;margin:22px 0 9px}
+.card{border:1px solid rgba(255,244,230,.18);border-radius:13px;padding:11px 13px;
+  background:rgba(255,244,230,.07);margin-bottom:8px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pill{font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold}
+.ok{background:#2ecc71;color:#08210f}
+.ko{background:#ff5a5a;color:#3d0a0a}
+.warn{background:#ffc44d;color:#3d2a00}
+.nom{font-weight:bold;font-size:15px}
+.det{font-size:13px;opacity:.82;margin-top:3px;white-space:pre-line}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.kpi{border:1px solid rgba(255,244,230,.18);border-radius:11px;padding:10px;text-align:center;
+  background:rgba(255,244,230,.07)}
+.kpi b{display:block;font-size:22px;margin-bottom:2px}
+.kpi span{font-size:11px;opacity:.75}
+.alerte{background:rgba(255,90,90,.18);border-color:rgba(255,90,90,.6)}
+.vide{opacity:.65;font-size:13px}
+footer{max-width:960px;margin:22px auto 0;padding:0 16px;font-size:12px;opacity:.6;line-height:1.6}
+a{color:#ffd29a}
+</style></head><body>
+<header>
+  <h1>🎪 Santé du festival</h1>
+  <div class="sub">Actualisé automatiquement toutes les 30 s · <span id="maj">…</span></div>
+</header>
+<main id="app"><p class="vide">Chargement…</p></main>
+<footer>
+  Page de supervision — aucune IA, que des mesures.
+  <a href="/regie/voix">→ Régie voix (valider les jingles)</a>
+</footer>
+<script>
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function pill(ok,txtOk,txtKo){return '<span class="pill '+(ok?"ok":"ko")+'">'+(ok?txtOk:txtKo)+"</span>";}
+
+async function charger(){
+  let d;
+  try{ d=await (await fetch("/api/regie/sante")).json(); }
+  catch(e){ document.getElementById("app").innerHTML='<div class="card alerte">Impossible de joindre le serveur.</div>'; return; }
+  const h=[];
+
+  if(d.alertes && d.alertes.length){
+    h.push("<h2>À regarder</h2>");
+    d.alertes.forEach(a=>h.push('<div class="card alerte"><div class="nom">⚠ '+esc(a)+"</div></div>"));
+  }else{
+    h.push('<h2>État général</h2><div class="card"><div class="nom">✅ Tout va bien</div>'+
+           '<div class="det">Aucune anomalie détectée.</div></div>');
+  }
+
+  h.push("<h2>Les scènes</h2>");
+  (d.scenes||[]).forEach(s=>{
+    h.push('<div class="card"><div class="row"><span class="nom">'+esc(s.nom)+"</span>"+
+      pill(s.en_ligne,"en ligne","hors ligne")+
+      '<span class="pill warn">'+s.auditeurs+" auditeur(s)</span></div>"+
+      '<div class="det">'+esc(s.artiste?s.artiste+" — ":"")+esc(s.titre||"—")+"</div></div>");
+  });
+
+  h.push("<h2>Services</h2><div class=\"grid\">");
+  (d.services||[]).forEach(s=>h.push('<div class="kpi"><b>'+(s.ok?"✅":"🔴")+"</b><span>"+esc(s.nom)+"</span></div>"));
+  h.push("</div>");
+
+  const v=d.voix||{};
+  h.push("<h2>Voix de Rebexis</h2><div class=\"grid\">"+
+    '<div class="kpi"><b>'+(v.ok||0)+"</b><span>validés</span></div>"+
+    '<div class="kpi"><b>'+(v.ko||0)+"</b><span>retirés</span></div>"+
+    '<div class="kpi"><b>'+(v.pending||0)+"</b><span>à écouter</span></div></div>");
+
+  const c=d.contenu||{};
+  h.push("<h2>Contenu</h2><div class=\"grid\">"+
+    '<div class="kpi"><b>'+(c.passages_24h==null?"?":c.passages_24h)+"</b><span>titres joués (24 h)</span></div>"+
+    '<div class="kpi"><b>'+(c.votes==null?"?":c.votes)+"</b><span>votes</span></div>"+
+    '<div class="kpi"><b>'+(c.propositions==null?"?":c.propositions)+"</b><span>titres proposés</span></div>"+
+    '<div class="kpi"><b>'+(c.lore==null?"?":c.lore)+"</b><span>événements de lore</span></div></div>");
+  if(c.bacs&&c.bacs.length){
+    h.push('<div class="card"><div class="det">'+
+      c.bacs.map(b=>esc(b.nom)+" : "+b.n).join("  ·  ")+"</div></div>");
+  }
+
+  h.push("<h2>Système</h2>");
+  const sy=d.systeme||{};
+  const libelle={qc:"Contrôle qualité",sauvegarde:"Sauvegarde",disque:"Disque"};
+  Object.keys(sy).forEach(k=>{
+    const e=sy[k], bon=(e.statut==="OK"||e.statut==="FIXÉ");
+    let det=esc(e.detail||"");
+    if(k==="qc"&&e.detail){
+      det=e.detail.split("\n").map(l=>{const p=l.split("|");
+        return (p[0]==="OK"?"✅":p[0]==="FIXÉ"?"🔧":p[0]==="WARN"?"⚠️":"🔴")+" "+esc(p[1]||"")+" : "+esc(p[2]||"");
+      }).join("\n");
+    }
+    h.push('<div class="card'+(bon?"":" alerte")+'"><div class="row"><span class="nom">'+
+      esc(libelle[k]||k)+"</span>"+pill(bon,e.statut,e.statut)+
+      '<span class="pill warn">il y a '+e.il_y_a_min+" min</span></div>"+
+      '<div class="det">'+det+"</div></div>");
+  });
+
+  document.getElementById("app").innerHTML=h.join("");
+  document.getElementById("maj").textContent="dernière lecture "+new Date().toLocaleTimeString("fr-FR");
+}
+charger(); setInterval(charger,30000);
+</script></body></html>"""
+
+
+PAGE = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
