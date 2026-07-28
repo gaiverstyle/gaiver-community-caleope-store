@@ -2954,16 +2954,21 @@ from az_utils import upload_file
 DB_URL          = os.environ["DATABASE_URL"]
 EL_API_KEY      = os.environ["ELEVENLABS_API_KEY"]
 EL_VOICE_ID     = os.environ["ELEVENLABS_VOICE_ID"]     # ID de la voix Rebexis sur EL
-EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
+EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")   # v2 = accent FR fiable ; eleven_v3 = plus expressif mais prononciation instable
 EL_CHARS_LIMIT  = int(os.environ.get("EL_CHARS_LIMIT", "10000"))   # par mois
 TTS_CACHE       = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
 # Paramètres voix ElevenLabs — validés : jeune, motivée, ton radio
 EL_VOICE_SETTINGS = {
-    "stability":         0.30,   # dynamique, moins contrôlé = plus naturel/jeune
-    "similarity_boost":  0.75,
-    "style":             0.75,   # expressivité radio affirmée
+    # Preset « animateur TV » (27/07, demande du chef) : on GARDE l'énergie — c'est ça
+    # Rebexis — mais la prononciation FR se règle par le MODÈLE, pas en tuant le style.
+    # L'ancien couple (eleven_v3 + style 0.75 + stability 0.30) donnait des ratés de
+    # prononciation (« façons » lu « facons ») ; eleven_multilingual_v2 les corrige.
+    # Tout est réglable sans redéployer, via les variables d'environnement.
+    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.40")),
+    "similarity_boost":  float(os.environ.get("ELEVENLABS_SIMILARITY", "0.80")),
+    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.55")),
     "use_speaker_boost": True,
 }
 
@@ -5304,8 +5309,9 @@ cat > "${SCRIPTS_DIR}/gcs_tts.py" <<'PYEOF'
 GCS TTS Service — Phase 3.
 Cache key: hash(text + emotion + voice_id).
 Emotion influence sur les voice settings ElevenLabs.
+Shadow-safe: l'upload AzuraCast est optionnel.
 """
-import os, sys, subprocess, hashlib, pathlib, time
+import os, sys, subprocess, hashlib, pathlib, json, time
 
 def _install():
     subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
@@ -5325,16 +5331,21 @@ DB_URL        = os.environ["DATABASE_URL"]
 EL_API_KEY    = os.environ.get("ELEVENLABS_API_KEY", "")
 EL_VOICE_ID   = os.environ.get("ELEVENLABS_VOICE_ID", "")
 EL_MODEL      = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")
+EL_SPEED      = float(os.environ.get("ELEVENLABS_SPEED", "0.96"))  # <1 = plus lent (clarté FR), tunable sans redeploy
 EL_CHARS_LIMIT= int(os.environ.get("EL_CHARS_LIMIT", "10000"))
 TTS_CACHE     = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
 
+# emotion → voice settings ElevenLabs
+# emotion → voice settings. TAMED 11/07 : l'ancien (style 0.7-0.95 / stability 0.15-0.35)
+# faisait dérailler la voix (accent, prononciation, débit). Stability HAUTE + style BAS
+# = prononciation FR fiable et débit stable, tout en gardant une nuance d'émotion.
 EMOTION_SETTINGS = {
-    "calm":      {"stability": 0.55, "similarity_boost": 0.75, "style": 0.35, "use_speaker_boost": True},
-    "playful":   {"stability": 0.30, "similarity_boost": 0.75, "style": 0.75, "use_speaker_boost": True},
-    "excited":   {"stability": 0.20, "similarity_boost": 0.80, "style": 0.90, "use_speaker_boost": True},
-    "energetic": {"stability": 0.15, "similarity_boost": 0.85, "style": 0.95, "use_speaker_boost": True},
-    "amused":    {"stability": 0.35, "similarity_boost": 0.75, "style": 0.70, "use_speaker_boost": True},
+    "calm":      {"stability": 0.62, "similarity_boost": 0.80, "style": 0.18, "use_speaker_boost": True},
+    "playful":   {"stability": 0.52, "similarity_boost": 0.80, "style": 0.38, "use_speaker_boost": True},
+    "excited":   {"stability": 0.46, "similarity_boost": 0.82, "style": 0.48, "use_speaker_boost": True},
+    "energetic": {"stability": 0.44, "similarity_boost": 0.82, "style": 0.55, "use_speaker_boost": True},
+    "amused":    {"stability": 0.52, "similarity_boost": 0.80, "style": 0.40, "use_speaker_boost": True},
 }
 
 FFMPEG_RADIO = ",".join([
@@ -5397,15 +5408,23 @@ def quota_add(conn, chars: int):
             INSERT INTO el_monthly_quota (month, chars_used, chars_limit)
             VALUES (%s,%s,%s)
             ON CONFLICT (month) DO UPDATE
-               SET chars_used = el_monthly_quota.chars_used + EXCLUDED.chars_used,
-                   updated_at = NOW()
+               SET chars_used  = el_monthly_quota.chars_used + EXCLUDED.chars_used,
+                   updated_at  = NOW()
         """, (month, chars, EL_CHARS_LIMIT))
     conn.commit()
 
 
 def synthesize_el(text: str, emotion: str) -> bytes:
-    settings = EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["playful"])
-    el_text  = f"[playful] {text}" if not text.startswith("[") else text
+    settings = dict(EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["playful"]))
+    if EL_SPEED and EL_SPEED != 1.0:
+        settings["speed"] = EL_SPEED  # ignoré silencieusement par les modèles qui ne le gèrent pas
+    # Les balises [emotion] ne sont interprétées QUE par eleven_v3 (audio tags). Sur
+    # multilingual_v2 & co, elles seraient LUES à voix haute → on les retire.
+    stripped = text.split("]", 1)[-1].strip() if text.startswith("[") else text
+    if "v3" in EL_MODEL:
+        el_text = text if text.startswith("[") else f"[{emotion}] {text}"
+    else:
+        el_text = stripped
     r = httpx.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}",
         headers={"xi-api-key": EL_API_KEY, "Content-Type": "application/json"},
@@ -5449,6 +5468,10 @@ def health():
 
 @app.post("/synthesize")
 def synthesize(body: dict):
+    """
+    Body: { text, emotion, voice_id? }
+    Returns: { audio_file, cache_hit, el_chars_used, quota_remaining }
+    """
     text     = body.get("text", "").strip()
     emotion  = body.get("emotion", "playful")
     voice_id = body.get("voice_id", EL_VOICE_ID)
@@ -5461,25 +5484,31 @@ def synthesize(body: dict):
     key  = cache_key(text, emotion, voice_id)
     conn = get_conn()
 
+    # Cache hit
     with conn.cursor() as cur:
         cur.execute("SELECT audio_file FROM gcs_tts_cache WHERE cache_key=%s", (key,))
         row = cur.fetchone()
     if row and row["audio_file"] and pathlib.Path(row["audio_file"]).exists():
         conn.close()
-        return {"audio_file": row["audio_file"], "cache_hit": True, "el_chars_used": 0}
+        print(f"  ✓ gcs-tts cache hit [{emotion}]")
+        return {"audio_file": row["audio_file"], "cache_hit": True,
+                "el_chars_used": 0, "quota_remaining": EL_CHARS_LIMIT - quota_used(get_conn())}
 
-    el_text   = f"[playful] {text}" if not text.startswith("[") else text
-    needed    = len(el_text)
+    # Quota check
+    el_text = f"[playful] {text}" if not text.startswith("[") else text
+    needed  = len(el_text)
     remaining = EL_CHARS_LIMIT - quota_used(conn)
     if remaining < needed:
         conn.close()
         raise HTTPException(429, f"EL quota insufficient ({remaining} chars remaining)")
 
+    # Synthesize
     t0       = time.time()
     mp3      = synthesize_el(text, emotion)
     out_path = apply_radio(mp3, key)
-    print(f"  ✓ gcs-tts [{emotion}] {needed}ch {time.time()-t0:.1f}s → {out_path.name}")
+    print(f"  ✓ gcs-tts [{emotion}] {len(el_text)}ch {time.time()-t0:.1f}s → {out_path.name}")
 
+    # Store cache + quota
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO gcs_tts_cache (cache_key, text, emotion, voice_id, audio_file, el_chars)
