@@ -52,10 +52,13 @@ def q1(cur, sql, params=None):
     return r[0] if r else None
 
 
-def _record(conn, cle, statut, detail):
+def _record(cle, statut, detail):
     """Dépose l'état dans system_health → lu par la page de supervision /regie/sante.
-    Permet au chef de tout voir depuis le site, sans SSH et sans IA."""
+    Permet au chef de tout voir depuis le site, sans SSH et sans IA.
+    Ouvre SA PROPRE connexion : appelé depuis main(), après que check_all() a fermé la
+    sienne (sinon échec silencieux — constaté le 28/07)."""
     try:
+        conn = psycopg2.connect(DB)
         with conn.cursor() as c2:
             c2.execute("""CREATE TABLE IF NOT EXISTS system_health (
                               cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
@@ -66,9 +69,9 @@ def _record(conn, cle, statut, detail):
                             SET statut=EXCLUDED.statut, detail=EXCLUDED.detail, maj=NOW()""",
                        (cle, statut, detail))
         conn.commit()
+        conn.close()
     except Exception:
-        try: conn.rollback()
-        except Exception: pass
+        pass
 
 
 def check_all():
@@ -249,7 +252,7 @@ def main():
     print("\n".join(lines), flush=True)
 
     # Dépose le verdict complet en base → la page /regie/sante l'affiche au chef, sans SSH.
-    _record(conn, "qc", worst, "\n".join(f"{st}|{name}|{detail}" for name, st, detail in results))
+    _record("qc", worst, "\n".join(f"{st}|{name}|{detail}" for name, st, detail in results))
 
     # Alerte Discord si anomalie/auto-fix ET webhook configuré, throttlée (changement d'état
     # ou 1×/h). Sépare « auto-corrigé » (info) de « à regarder » (demande une action humaine).
