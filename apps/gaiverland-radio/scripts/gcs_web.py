@@ -981,18 +981,28 @@ def regie_sante(request: Request):
         out["alertes"].append("AzuraCast injoignable : " + str(e)[:60])
 
     # ── Services internes (health) ──────────────────────────────────────────
-    for nom, env in (("moteur d'état", "GCS_STATE_ENGINE_URL"), ("Rebexis", "GCS_REBEXIS_URL"),
-                     ("voix (TTS)", "GCS_TTS_URL"), ("titres", "GCS_TRACK_URL"),
-                     ("journal (lore)", "GCS_LORE_SERVICE_URL"), ("votes", "GCS_VOTE_URL"),
-                     ("météo", "GCS_WEATHER_URL")):
-        base = os.environ.get(env, "").rstrip("/")
-        if not base:
-            continue
-        try:
-            c = httpx.get(base + "/health", timeout=4).status_code
-            ok = (c == 200)
-        except Exception:
-            ok = False
+    # On essaie PLUSIEURS adresses : certaines variables d'env sont périmées (ex.
+    # GCS_REBEXIS_URL pointait sur gcs-rebexis:8092 qui n'existe pas, le vrai est
+    # gw-rebexis:8081) → sans repli on affichait « en panne » à tort.
+    # NB : le worker TTS n'a AUCUN serveur HTTP, on ne le sonde donc pas ici.
+    SERVICES = (
+        ("moteur d'état", "GCS_STATE_ENGINE_URL", ("http://gcs-state-engine:8091",)),
+        ("Rebexis",       "GCS_REBEXIS_URL",      ("http://gw-rebexis:8081",)),
+        ("titres",        "GCS_TRACK_URL",        ("http://gcs-track-service:8090",)),
+        ("journal (lore)", "GCS_LORE_SERVICE_URL", ("http://gcs-lore-service:8096",)),
+        ("votes",         "GCS_VOTE_URL",         ("http://gcs-vote-service:8095",)),
+        ("météo",         "GCS_WEATHER_URL",      ("http://gcs-weather:8098",)),
+    )
+    for nom, env, replis in SERVICES:
+        candidats = [u for u in (os.environ.get(env, "").rstrip("/"),) if u] + list(replis)
+        ok = False
+        for base in candidats:
+            try:
+                if httpx.get(base + "/health", timeout=4).status_code == 200:
+                    ok = True
+                    break
+            except Exception:
+                continue
         out["services"].append({"nom": nom, "ok": ok})
         if not ok:
             out["alertes"].append("Service en panne : " + nom)
@@ -1080,7 +1090,7 @@ def regie_page(request: Request):
     return r
 
 
-REGIE_SANTE_PAGE = """<!doctype html>
+SANTE_PAGE = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
@@ -1195,7 +1205,7 @@ charger(); setInterval(charger,30000);
 </script></body></html>"""
 
 
-PAGE = """<!doctype html>
+REGIE_PAGE = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
