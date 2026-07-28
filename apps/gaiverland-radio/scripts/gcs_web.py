@@ -860,8 +860,17 @@ def regie_jingles(request: Request, status: str = "all"):
             """)
             rows = cur.fetchall()
         conn.close()
+        # "v" = date de modif du mp3. Elle entre dans l'URL de lecture → quand un jingle
+        # est REGÉNÉRÉ, l'URL change et le navigateur ne peut plus rejouer l'ancien son
+        # gardé en cache (piège vécu le 27/07 : le chef a revoté sur l'audio périmé).
+        def _ver(af):
+            try:
+                return int(os.path.getmtime(os.path.join(TTS_CACHE_DIR, os.path.basename(af or ""))))
+            except Exception:
+                return 0
         items = [{"h": r["text_hash"], "text": r["text"] or "", "cat": r["category"] or "",
-                  "status": r["status"], "note": r["note"] or ""} for r in rows]
+                  "status": r["status"], "note": r["note"] or "",
+                  "v": _ver(r["audio_file"])} for r in rows]
         if status in ("pending", "ok", "ko"):
             items = [i for i in items if i["status"] == status]
         counts = {}
@@ -1045,7 +1054,7 @@ function render(){
 function play(h,btn){
   document.querySelectorAll('.play.on').forEach(b=>{b.classList.remove('on');b.textContent='▶ Écouter';});
   if(playing===h && !pl.paused){ pl.pause(); playing=null; return; }
-  pl.src='/api/regie/audio/'+h;
+  pl.src='/api/regie/audio/'+h+'?v='+((ITEMS.find(x=>x.h===h)||{}).v||0);
   playing=h; btn.classList.add('on'); btn.textContent='⏸ En cours';
   // On REMONTE l'erreur au lieu de l'avaler : si un jour aucun son ne sort, le chef doit
   // voir pourquoi (autoplay bloqué, format refusé, réseau) plutôt qu'un bouton inerte.
