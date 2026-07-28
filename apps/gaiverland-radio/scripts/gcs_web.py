@@ -1160,18 +1160,18 @@ async function charger(){
       '<div class="det">'+esc(s.artiste?s.artiste+" — ":"")+esc(s.titre||"—")+"</div></div>");
   });
 
-  h.push("<h2>Services</h2><div class=\"grid\">");
+  h.push('<h2>Services</h2><div class="grid">');
   (d.services||[]).forEach(s=>h.push('<div class="kpi"><b>'+(s.ok?"✅":"🔴")+"</b><span>"+esc(s.nom)+"</span></div>"));
   h.push("</div>");
 
   const v=d.voix||{};
-  h.push("<h2>Voix de Rebexis</h2><div class=\"grid\">"+
+  h.push('<h2>Voix de Rebexis</h2><div class="grid">'+
     '<div class="kpi"><b>'+(v.ok||0)+"</b><span>validés</span></div>"+
     '<div class="kpi"><b>'+(v.ko||0)+"</b><span>retirés</span></div>"+
     '<div class="kpi"><b>'+(v.pending||0)+"</b><span>à écouter</span></div></div>");
 
   const c=d.contenu||{};
-  h.push("<h2>Contenu</h2><div class=\"grid\">"+
+  h.push('<h2>Contenu</h2><div class="grid">'+
     '<div class="kpi"><b>'+(c.passages_24h==null?"?":c.passages_24h)+"</b><span>titres joués (24 h)</span></div>"+
     '<div class="kpi"><b>'+(c.votes==null?"?":c.votes)+"</b><span>votes</span></div>"+
     '<div class="kpi"><b>'+(c.propositions==null?"?":c.propositions)+"</b><span>titres proposés</span></div>"+
@@ -1188,9 +1188,13 @@ async function charger(){
     const e=sy[k], bon=(e.statut==="OK"||e.statut==="FIXÉ");
     let det=esc(e.detail||"");
     if(k==="qc"&&e.detail){
-      det=e.detail.split("\n").map(l=>{const p=l.split("|");
+      // NL sans séquence d'échappement : cette page est une chaîne Python, toute
+      // barre oblique inverse y serait consommée au rendu (piège vécu deux fois).
+      const NL=String.fromCharCode(10);
+      det=e.detail.split(NL).map(l=>{
+        const p=l.split("|");
         return (p[0]==="OK"?"✅":p[0]==="FIXÉ"?"🔧":p[0]==="WARN"?"⚠️":"🔴")+" "+esc(p[1]||"")+" : "+esc(p[2]||"");
-      }).join("\n");
+      }).join(NL);
     }
     h.push('<div class="card'+(bon?"":" alerte")+'"><div class="row"><span class="nom">'+
       esc(libelle[k]||k)+"</span>"+pill(bon,e.statut,e.statut)+
