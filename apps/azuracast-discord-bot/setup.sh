@@ -234,9 +234,27 @@ class RadioPlayer:
 
         if self.voice_client.is_playing():
             self.voice_client.stop()
+            # stop() n'est PAS instantané : le thread lecteur doit rendre la main. Sans cette
+            # attente, play() lève ClientException(« Already playing audio ») et le ffmpeg
+            # qu'on vient de créer n'est jamais nettoyé → processus orphelin qui garde une
+            # connexion Icecast ouverte (8 ffmpeg vivants constatés le 28/07, compteur
+            # d'auditeurs faussé). Même garde que set_station().
+            for _ in range(20):
+                if not self.voice_client.is_playing():
+                    break
+                await asyncio.sleep(0.05)
 
         source = await self._make_source_async(stream_url)
-        self.voice_client.play(source, after=self._after)
+        try:
+            self.voice_client.play(source, after=self._after)
+        except Exception:
+            # La source n'a pas été prise en charge → on tue nous-mêmes son ffmpeg,
+            # sinon il survit indéfiniment.
+            try:
+                source.cleanup()
+            except Exception:
+                pass
+            raise
         return True, stream_url
 
     def _after(self, exc: Exception | None):
