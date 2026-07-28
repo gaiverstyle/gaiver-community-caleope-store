@@ -224,8 +224,13 @@ def main():
             if probs:
                 content += "\n__À regarder :__\n" + "\n".join(probs)
             try:
+                # ⚠ User-Agent OBLIGATOIRE : Discord renvoie 403 Forbidden sur l'agent par
+                # défaut de Python ("Python-urllib/3.x"). Sans cet en-tête, TOUTES les alertes
+                # QC échouaient silencieusement (constaté le 28/07 : le chef ne recevait plus
+                # rien depuis des jours, filet de sécurité HS).
                 req = urllib.request.Request(WEBHOOK, data=json.dumps({"content": content}).encode(),
-                                             headers={"Content-Type": "application/json"})
+                                             headers={"Content-Type": "application/json",
+                                                      "User-Agent": "Gaiverland-QC/1.0"})
                 urllib.request.urlopen(req, timeout=8).read()
                 prev = {"worst": worst, "alert_ts": now_ts}
             except Exception as e:
