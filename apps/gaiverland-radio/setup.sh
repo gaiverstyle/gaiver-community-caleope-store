@@ -3078,6 +3078,9 @@ def quota_used(conn) -> int:
     return row["chars_used"] if row else 0
 
 
+_el_remaining = {"n": None, "at": 0.0}
+
+
 def el_real_remaining():
     """Caractères réellement restants côté ElevenLabs (None si l'API est injoignable).
     Réutilise le cache 5 min de el_credits_pct via _el_remaining."""
