@@ -118,14 +118,37 @@ def check_all():
         conn.rollback()
         add("clips_dechet", WARN, f"erreur: {e}")
 
-    # 5. Doublons (copies en trop) dans le pool jour
+    # 5. Doublons (copies en trop) dans le pool jour → AUTO-QUARANTAINE des copies EN TROP
+    #    On GARDE toujours un exemplaire par titre (le plus ancien id) et on met les autres
+    #    en quarantaine — réversible (retirer de station_denylist les rétablit). Sans ça le
+    #    même morceau repassait 2 à 8 fois plus souvent que les autres (60 copies en trop
+    #    constatées le 28/07, dont un « type beat » en 8 exemplaires).
     try:
         n = q1(cur, f"WITH n AS (SELECT {SONG_KEY} k FROM tracks WHERE analyzed AND mood = ANY(%s)) "
                     "SELECT coalesce(sum(c-1),0) FROM (SELECT k,count(*) c FROM n GROUP BY k HAVING count(*)>1) d",
                (list(DAY_MOODS),))
         n = int(n or 0)
-        add("doublons", OK if n <= 25 else WARN, f"{n} copies en trop dans le pool jour")
+        if n == 0:
+            add("doublons", OK, "aucune copie en trop dans le pool jour")
+        else:
+            cur.execute(f"""
+                INSERT INTO station_denylist (station_id, song_id, artist, title, added_by, added_at)
+                SELECT 1, t.song_id, t.artist, t.title, 'qc-auto-doublon', NOW()
+                FROM (
+                    SELECT id, song_id, artist, title,
+                           row_number() OVER (PARTITION BY {SONG_KEY} ORDER BY id) AS rang
+                    FROM tracks WHERE analyzed AND mood = ANY(%s)
+                ) t
+                WHERE t.rang > 1 AND t.song_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM station_denylist d
+                                  WHERE d.station_id = 1 AND d.song_id = t.song_id)
+            """, (list(DAY_MOODS),))
+            qn = cur.rowcount
+            conn.commit()
+            add("doublons", FIXED if qn else WARN,
+                f"{n} copies en trop → {qn} mises en quarantaine (1 exemplaire conservé par titre)")
     except Exception as e:
+        conn.rollback()
         add("doublons", WARN, f"erreur: {e}")
 
     # 6. Titres tronqués (<90s) encore actifs dans le pool jour → AUTO-QUARANTAINE
