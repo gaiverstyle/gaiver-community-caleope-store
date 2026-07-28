@@ -2907,22 +2907,23 @@ EL_VOICE_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_VOICE_ID)"
 # Réglages de diction : idempotents (param > valeur déjà posée > défaut). Le chef ajuste
 # ces valeurs à la main dans elevenlabs.env ; un install --force ne doit PAS les écraser.
 EL_MODEL_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_MODEL)"
-[ -n "$EL_MODEL_VAL" ] || EL_MODEL_VAL="${CALEOPE_PARAM_ELEVENLABS_MODEL:-eleven_multilingual_v2}"
+[ -n "$EL_MODEL_VAL" ] || EL_MODEL_VAL="${CALEOPE_PARAM_ELEVENLABS_MODEL:-eleven_v3}"
 EL_STAB_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_STABILITY)"
-[ -n "$EL_STAB_VAL" ] || EL_STAB_VAL="0.32"
+[ -n "$EL_STAB_VAL" ] || EL_STAB_VAL="0.30"
 EL_STYLE_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_STYLE)"
-[ -n "$EL_STYLE_VAL" ] || EL_STYLE_VAL="0.70"
+[ -n "$EL_STYLE_VAL" ] || EL_STYLE_VAL="0.75"
 EL_SIM_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_SIMILARITY)"
-[ -n "$EL_SIM_VAL" ] || EL_SIM_VAL="0.80"
+[ -n "$EL_SIM_VAL" ] || EL_SIM_VAL="0.75"
 EL_SPEED_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_SPEED)"
-[ -n "$EL_SPEED_VAL" ] || EL_SPEED_VAL="1.05"
+[ -n "$EL_SPEED_VAL" ] || EL_SPEED_VAL="1.0"
 cat > "${CONFIG_DIR}/elevenlabs.env" <<ENVEOF
 # Clé API ElevenLabs (https://elevenlabs.io → Profile → API Keys)
 ELEVENLABS_API_KEY=${EL_KEY_VAL}
 # ID de la voix Rebexis (ElevenLabs → Voices → ta voix → ID)
 ELEVENLABS_VOICE_ID=${EL_VOICE_VAL}
-# Modèle. eleven_multilingual_v2 = accent FR fiable ; eleven_v3 = plus expressif mais
-# prononciation instable (« façons » lu « facons », constaté 27/07).
+# Modèle. eleven_v3 = celui de Rebexis (VALIDÉ À L'OREILLE le 27/07 : enjoué, prononce
+# « Gaiverland » correctement). eleven_multilingual_v2 a été TESTÉ ET REJETÉ : articule
+# trop, moins enjoué, accent anglais sur « Gaiverland » (4 jingles sur 4 recalés).
 ELEVENLABS_MODEL=${EL_MODEL_VAL}
 # Diction de Rebexis — réglable À CHAUD (éditer ce fichier + redémarrer gaiverland-tts),
 # sans redéployer. stability BAS = plus vivant/moins « présentateur du 20h » ;
@@ -2974,7 +2975,7 @@ from az_utils import upload_file
 DB_URL          = os.environ["DATABASE_URL"]
 EL_API_KEY      = os.environ["ELEVENLABS_API_KEY"]
 EL_VOICE_ID     = os.environ["ELEVENLABS_VOICE_ID"]     # ID de la voix Rebexis sur EL
-EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")   # v2 = accent FR fiable ; eleven_v3 = plus expressif mais prononciation instable
+EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")   # v2 = accent FR fiable ; eleven_v3 = plus expressif mais prononciation instable
 EL_CHARS_LIMIT  = int(os.environ.get("EL_CHARS_LIMIT", "10000"))   # par mois
 TTS_CACHE       = pathlib.Path(os.environ.get("TTS_CACHE_DIR", "/tts-cache"))
 TTS_CACHE.mkdir(parents=True, exist_ok=True)
@@ -2986,11 +2987,11 @@ EL_VOICE_SETTINGS = {
     # L'ancien couple (eleven_v3 + style 0.75 + stability 0.30) donnait des ratés de
     # prononciation (« façons » lu « facons ») ; eleven_multilingual_v2 les corrige.
     # Tout est réglable sans redéployer, via les variables d'environnement.
-    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.32")),
-    "similarity_boost":  float(os.environ.get("ELEVENLABS_SIMILARITY", "0.80")),
-    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.70")),
+    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.30")),
+    "similarity_boost":  float(os.environ.get("ELEVENLABS_SIMILARITY", "0.75")),
+    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.75")),
     "use_speaker_boost": True,
-    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "1.05")),
+    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "1.0")),
 }
 
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
