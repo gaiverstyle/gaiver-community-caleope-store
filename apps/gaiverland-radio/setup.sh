@@ -2904,13 +2904,33 @@ EL_KEY_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_API_KEY)"
 { [ -n "$EL_KEY_VAL" ] && [ "$EL_KEY_VAL" != "your_elevenlabs_api_key_here" ]; } || EL_KEY_VAL="${CALEOPE_PARAM_ELEVENLABS_API_KEY:-your_elevenlabs_api_key_here}"
 EL_VOICE_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_VOICE_ID)"
 { [ -n "$EL_VOICE_VAL" ] && [ "$EL_VOICE_VAL" != "your_voice_id_here" ]; } || EL_VOICE_VAL="${CALEOPE_PARAM_ELEVENLABS_VOICE_ID:-your_voice_id_here}"
+# Réglages de diction : idempotents (param > valeur déjà posée > défaut). Le chef ajuste
+# ces valeurs à la main dans elevenlabs.env ; un install --force ne doit PAS les écraser.
+EL_MODEL_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_MODEL)"
+[ -n "$EL_MODEL_VAL" ] || EL_MODEL_VAL="${CALEOPE_PARAM_ELEVENLABS_MODEL:-eleven_multilingual_v2}"
+EL_STAB_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_STABILITY)"
+[ -n "$EL_STAB_VAL" ] || EL_STAB_VAL="0.32"
+EL_STYLE_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_STYLE)"
+[ -n "$EL_STYLE_VAL" ] || EL_STYLE_VAL="0.70"
+EL_SIM_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_SIMILARITY)"
+[ -n "$EL_SIM_VAL" ] || EL_SIM_VAL="0.80"
+EL_SPEED_VAL="$(_existing "${CONFIG_DIR}/elevenlabs.env" ELEVENLABS_SPEED)"
+[ -n "$EL_SPEED_VAL" ] || EL_SPEED_VAL="1.05"
 cat > "${CONFIG_DIR}/elevenlabs.env" <<ENVEOF
 # Clé API ElevenLabs (https://elevenlabs.io → Profile → API Keys)
 ELEVENLABS_API_KEY=${EL_KEY_VAL}
 # ID de la voix Rebexis (ElevenLabs → Voices → ta voix → ID)
 ELEVENLABS_VOICE_ID=${EL_VOICE_VAL}
-# Modèle recommandé pour le français expressif
-ELEVENLABS_MODEL=eleven_v3
+# Modèle. eleven_multilingual_v2 = accent FR fiable ; eleven_v3 = plus expressif mais
+# prononciation instable (« façons » lu « facons », constaté 27/07).
+ELEVENLABS_MODEL=${EL_MODEL_VAL}
+# Diction de Rebexis — réglable À CHAUD (éditer ce fichier + redémarrer gaiverland-tts),
+# sans redéployer. stability BAS = plus vivant/moins « présentateur du 20h » ;
+# style HAUT = plus expressif ; speed > 1 = débit plus rapide.
+ELEVENLABS_STABILITY=${EL_STAB_VAL}
+ELEVENLABS_STYLE=${EL_STYLE_VAL}
+ELEVENLABS_SIMILARITY=${EL_SIM_VAL}
+ELEVENLABS_SPEED=${EL_SPEED_VAL}
 # Limite mensuelle en caractères (plan gratuit = 10000)
 EL_CHARS_LIMIT=10000
 ENVEOF
@@ -2966,10 +2986,11 @@ EL_VOICE_SETTINGS = {
     # L'ancien couple (eleven_v3 + style 0.75 + stability 0.30) donnait des ratés de
     # prononciation (« façons » lu « facons ») ; eleven_multilingual_v2 les corrige.
     # Tout est réglable sans redéployer, via les variables d'environnement.
-    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.40")),
+    "stability":         float(os.environ.get("ELEVENLABS_STABILITY", "0.32")),
     "similarity_boost":  float(os.environ.get("ELEVENLABS_SIMILARITY", "0.80")),
-    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.55")),
+    "style":             float(os.environ.get("ELEVENLABS_STYLE", "0.70")),
     "use_speaker_boost": True,
+    "speed":             float(os.environ.get("ELEVENLABS_SPEED", "1.05")),
 }
 
 # ── Phrases statiques pré-générées au démarrage (coût fixe une seule fois) ───
@@ -3177,7 +3198,14 @@ def library_save(conn, text: str, category: str, audio_file: str,
 
 # ── ElevenLabs API ────────────────────────────────────────────────────────────
 def el_add_playful(text: str) -> str:
-    """Ajoute [playful] si pas déjà présent."""
+    """Ajoute [playful] si pas déjà présent — UNIQUEMENT sur eleven_v3.
+
+    Les autres modèles (multilingual_v2...) n'interprètent pas les balises audio : ils les
+    LISENT À VOIX HAUTE. Sans ce garde-fou, Rebexis annoncerait « crochet playful » avant
+    chaque phrase dès qu'on change de modèle.
+    """
+    if not EL_MODEL.startswith("eleven_v3"):
+        return text
     if text.startswith("["):
         return text
     return f"[playful] {text}"
