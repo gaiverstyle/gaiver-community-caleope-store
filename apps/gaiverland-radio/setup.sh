@@ -3078,7 +3078,39 @@ def quota_used(conn) -> int:
     return row["chars_used"] if row else 0
 
 
+def el_real_remaining():
+    """Caractères réellement restants côté ElevenLabs (None si l'API est injoignable).
+    Réutilise le cache 5 min de el_credits_pct via _el_remaining."""
+    now = time.time()
+    if _el_remaining["at"] and now - _el_remaining["at"] < 300:
+        return _el_remaining["n"]
+    n = None
+    try:
+        r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+        if r.status_code == 200:
+            d = r.json()
+            limit = d.get("character_limit") or 0
+            used = d.get("character_count") or 0
+            n = max(0, limit - used)
+    except Exception:
+        pass
+    _el_remaining.update(n=n, at=now)
+    return n
+
+
 def quota_remaining(conn) -> int:
+    """SOURCE DE VÉRITÉ = ElevenLabs, pas le compteur local.
+
+    Le compteur local est calé sur le mois CALENDAIRE alors qu'EL se réinitialise sur son
+    propre cycle de facturation. Le 27/07 le local annonçait 9879/10000 (donc bloquant)
+    alors qu'EL avait 10000 caractères DISPONIBLES → Rebexis se serait tue pour rien,
+    en repli sur les archives. On interroge donc EL, et on ne retombe sur le compteur
+    local que si l'API est injoignable.
+    """
+    real = el_real_remaining()
+    if real is not None:
+        return real
     return max(0, EL_CHARS_LIMIT - quota_used(conn))
 
 
