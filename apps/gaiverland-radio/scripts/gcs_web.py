@@ -927,7 +927,25 @@ def regie_audio(h: str, request: Request):
         raise HTTPException(status_code=500, detail="erreur")
 
 
-TTS_URL = os.environ.get("GCS_TTS_URL", "http://gw-tts:8082").rstrip("/")
+# ⚠ GCS_TTS_URL est PÉRIMÉE en prod (pointe sur gcs-tts:8093, hôte inexistant ; le vrai
+# service est gw-tts:8082). On essaie donc plusieurs adresses et on garde celle qui répond.
+_TTS_CANDIDATS = [u for u in (os.environ.get("GCS_TTS_URL", "").rstrip("/"),
+                              "http://gw-tts:8082",
+                              "http://gaiverland-tts:8082") if u]
+_tts_ok = {"url": None}
+
+
+def _tts_base() -> str:
+    if _tts_ok["url"]:
+        return _tts_ok["url"]
+    for u in _TTS_CANDIDATS:
+        try:
+            if httpx.get(u + "/health", timeout=4).status_code == 200:
+                _tts_ok["url"] = u
+                return u
+        except Exception:
+            continue
+    return _TTS_CANDIDATS[0] if _TTS_CANDIDATS else ""
 REBEXIS_PL_ID = 3   # playlist « Rebexis » de la Mainstage (AzuraCast)
 
 
@@ -957,7 +975,10 @@ def regie_voix_creer(request: Request, payload: dict = Body(...)):
         pass
     try:
         # 90 s : la synthèse ElevenLabs + le rendu ffmpeg prennent quelques secondes
-        r = httpx.post(f"{TTS_URL}/creer", params={"text": texte, "category": cat}, timeout=90)
+        base = _tts_base()
+        if not base:
+            return {"ok": False, "message": "Moteur de voix introuvable sur le réseau."}
+        r = httpx.post(f"{base}/creer", params={"text": texte, "category": cat}, timeout=90)
         if r.status_code != 200:
             return {"ok": False, "message": f"Le moteur de voix a refusé : {r.text[:120]}"}
     except Exception as e:
