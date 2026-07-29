@@ -954,6 +954,165 @@ def regie_review(request: Request, payload: dict = Body(...)):
         return {"ok": False, "error": str(e)[:200]}
 
 
+COOKIES_PATH = "/cookies/youtube-cookies.txt"
+
+
+@app.get("/api/regie/musique")
+def regie_musique(request: Request):
+    """Demandes de titres + état des cookies YouTube du downloader."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    out = {"attente": [], "recentes": [], "cookies": {}, "stats": {}}
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT p.id, p.title, p.created_at
+                           FROM title_proposals p
+                           WHERE NOT EXISTS (SELECT 1 FROM proposal_decisions d WHERE d.title = p.title)
+                           ORDER BY p.created_at DESC LIMIT 60""")
+            out["attente"] = [{"id": r["id"], "titre": r["title"],
+                               "quand": r["created_at"].strftime("%d/%m %H:%M") if r["created_at"] else ""}
+                              for r in cur.fetchall()]
+            cur.execute("""SELECT title, verdict, artist, canon_title, download_status, downloaded_at
+                           FROM proposal_decisions ORDER BY decided_at DESC LIMIT 25""")
+            out["recentes"] = [{"titre": r["title"], "verdict": r["verdict"] or "?",
+                                "artiste": r["artist"] or "", "canon": r["canon_title"] or "",
+                                "telecharge": bool(r["downloaded_at"]),
+                                "etat": r["download_status"] or ""} for r in cur.fetchall()]
+            cur.execute("""SELECT count(*) FILTER (WHERE verdict='accept') acc,
+                                  count(*) FILTER (WHERE downloaded_at IS NOT NULL) dl,
+                                  count(*) tot FROM proposal_decisions""")
+            r = cur.fetchone()
+            out["stats"] = {"acceptes": r["acc"], "telecharges": r["dl"], "decisions": r["tot"]}
+        conn.close()
+    except Exception as e:
+        out["erreur"] = str(e)[:120]
+
+    try:
+        st = os.stat(COOKIES_PATH)
+        jours = (time.time() - st.st_mtime) / 86400
+        out["cookies"] = {"present": True, "taille": st.st_size,
+                          "depose_le": time.strftime("%d/%m/%Y %H:%M", time.localtime(st.st_mtime)),
+                          "age_jours": round(jours, 1),
+                          # Les cookies YouTube tiennent quelques semaines : au-delà on prévient.
+                          "statut": "OK" if (st.st_size > 500 and jours < 21) else "A RENOUVELER"}
+    except Exception:
+        out["cookies"] = {"present": False, "statut": "ABSENT"}
+    return out
+
+
+@app.get("/api/regie/recherche")
+def regie_recherche(request: Request, q: str = ""):
+    """Autocomplétion artiste/titre via le catalogue iTunes (public, sans clé).
+    Le serveur fait l'appel : pas de CORS, et le navigateur du chef n'expose rien."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"resultats": []}
+    try:
+        r = httpx.get("https://itunes.apple.com/search",
+                      params={"term": q, "media": "music", "entity": "song", "limit": 8},
+                      timeout=6)
+        res = []
+        for x in (r.json().get("results", []) if r.status_code == 200 else []):
+            res.append({"artiste": x.get("artistName", ""), "titre": x.get("trackName", ""),
+                        "genre": x.get("primaryGenreName", ""),
+                        "annee": (x.get("releaseDate") or "")[:4]})
+        return {"resultats": res}
+    except Exception:
+        return {"resultats": []}
+
+
+@app.post("/api/regie/musique/ajouter")
+def regie_ajouter(request: Request, payload: dict = Body(...)):
+    """Ajoute une demande DÉJÀ ACCEPTÉE (c'est le chef) → le downloader la prendra.
+    `libre` = texte tel quel, pour les remix que les catalogues ne connaissent pas."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    artiste = str(payload.get("artiste", "")).strip()[:200]
+    titre = str(payload.get("titre", "")).strip()[:200]
+    recherche = (artiste + " " + titre).strip() if not payload.get("libre") else titre
+    if len(recherche) < 3:
+        raise HTTPException(status_code=400, detail="demande trop courte")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM proposal_decisions WHERE title=%s", (recherche,))
+            if cur.fetchone():
+                conn.close()
+                return {"ok": False, "message": "Cette demande existe déjà."}
+            cur.execute("INSERT INTO title_proposals (user_id, title) VALUES ('regie-chef', %s)",
+                        (recherche,))
+            cur.execute("""INSERT INTO proposal_decisions (title, verdict, artist, canon_title, decided_at)
+                           VALUES (%s,'accept',%s,%s,NOW())""",
+                        (recherche, artiste or None, titre or None))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "message": "Ajouté — le downloader va le chercher."}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
+@app.post("/api/regie/musique/decision")
+def regie_decision(request: Request, payload: dict = Body(...)):
+    """Accepte ou refuse une demande en attente."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    titre = str(payload.get("titre", "")).strip()[:300]
+    verdict = str(payload.get("verdict", ""))
+    if verdict not in ("accept", "reject") or not titre:
+        raise HTTPException(status_code=400, detail="parametres invalides")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO proposal_decisions (title, verdict, decided_at)
+                           VALUES (%s,%s,NOW()) ON CONFLICT (title) DO UPDATE
+                             SET verdict=EXCLUDED.verdict, decided_at=NOW()""", (titre, verdict))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
+@app.post("/api/regie/cookies")
+def regie_cookies(request: Request, payload: dict = Body(...)):
+    """Dépose de nouveaux cookies YouTube (collés depuis le navigateur du chef).
+    Évite d'ouvrir un accès à son PC : il exporte, il colle, c'est fini."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    contenu = str(payload.get("contenu", ""))
+    if "\t" not in contenu or len(contenu) < 200:
+        return {"ok": False, "message": "Format inattendu : il faut le fichier cookies.txt "
+                                        "au format Netscape (colonnes séparées par des tabulations)."}
+    if ".youtube.com" not in contenu:
+        return {"ok": False, "message": "Aucun cookie youtube.com trouvé dans ce fichier."}
+    try:
+        with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+            f.write(contenu if contenu.endswith("\n") else contenu + "\n")
+        try:
+            os.chmod(COOKIES_PATH, 0o600)
+        except Exception:
+            pass
+        n = sum(1 for l in contenu.splitlines() if l and not l.startswith("#"))
+        return {"ok": True, "message": f"Cookies enregistrés ({n} lignes). "
+                                       "Le downloader les utilisera à sa prochaine passe."}
+    except Exception as e:
+        return {"ok": False, "message": "Écriture impossible : " + str(e)[:120]}
+
+
+@app.get("/regie/musique", response_class=HTMLResponse)
+def regie_musique_page(request: Request):
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    r = HTMLResponse(MUSIQUE_PAGE)
+    if request.query_params.get("k"):
+        r.set_cookie("gadm", ADMIN_TOKEN, max_age=7776000, httponly=True,
+                     secure=True, samesite="lax")
+    return r
+
+
 @app.get("/api/regie/sante")
 def regie_sante(request: Request):
     """Tout l'état du festival en un appel — pensé pour que le chef se passe d'agent :
@@ -1090,6 +1249,227 @@ def regie_page(request: Request):
     return r
 
 
+MUSIQUE_PAGE = """<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Musique et demandes — Gaiverland</title>
+<style>
+:root{--cream:#fff4e6}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;color:var(--cream);
+  background:linear-gradient(175deg,#1b1030,#3d1d5c 45%,#6b2f6b);padding-bottom:50px}
+header{position:sticky;top:0;z-index:9;padding:14px 16px;background:rgba(20,10,35,.95);
+  backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,244,230,.18)}
+h1{margin:0;font-size:19px}
+.sub{font-size:12px;opacity:.7;margin-top:3px}
+main{padding:14px 16px;max-width:900px;margin:0 auto}
+h2{font-size:14px;letter-spacing:1px;text-transform:uppercase;opacity:.75;margin:24px 0 9px}
+.card{border:1px solid rgba(255,244,230,.18);border-radius:13px;padding:12px;
+  background:rgba(255,244,230,.07);margin-bottom:9px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input,textarea{width:100%;padding:11px;border-radius:10px;border:1px solid rgba(255,244,230,.3);
+  background:rgba(0,0,0,.28);color:var(--cream);font-size:15px;font-family:inherit}
+textarea{min-height:120px;font-size:12px}
+button{border:none;border-radius:11px;padding:11px 15px;font-size:14px;font-weight:bold;
+  cursor:pointer;min-height:44px}
+.go{background:linear-gradient(135deg,#ffd29a,#ffb56b);color:#1b1030}
+.good{background:#2ecc71;color:#08210f}
+.bad{background:#ff5a5a;color:#3d0a0a}
+.sugg{border:1px solid rgba(255,244,230,.25);border-radius:10px;margin-top:6px;overflow:hidden}
+.sugg div{padding:10px 12px;cursor:pointer;font-size:14px;border-bottom:1px solid rgba(255,244,230,.12)}
+.sugg small{opacity:.65}
+.pill{font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold}
+.ok{background:#2ecc71;color:#08210f}
+.ko{background:#ff5a5a;color:#3d0a0a}
+.warn{background:#ffc44d;color:#3d2a00}
+.msg{margin-top:9px;font-size:13px;opacity:.9}
+.vide{opacity:.65;font-size:13px}
+.tabs{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.tabs button{padding:8px 14px;font-size:13px;border-radius:20px;background:rgba(255,244,230,.1);
+  color:var(--cream);border:1px solid rgba(255,244,230,.3);min-height:auto}
+.tabs button.on{background:var(--cream);color:#1b1030}
+footer{max-width:900px;margin:22px auto 0;padding:0 16px;font-size:12px;opacity:.6;line-height:1.7}
+a{color:#ffd29a}
+</style></head><body>
+<header>
+  <h1>&#127925; Musique et demandes</h1>
+  <div class="sub" id="stats">…</div>
+</header>
+<main>
+  <h2>Ajouter un titre</h2>
+  <div class="card">
+    <div class="tabs">
+      <button id="t-reche" class="on" onclick="mode(0)">Rechercher</button>
+      <button id="t-libre" onclick="mode(1)">Saisie libre (remix)</button>
+    </div>
+    <div id="bloc-reche" style="margin-top:11px">
+      <input id="q" placeholder="Artiste ou titre..." autocomplete="off" oninput="chercher()">
+      <div class="sugg" id="sugg" hidden></div>
+    </div>
+    <div id="bloc-libre" hidden style="margin-top:11px">
+      <input id="libre" placeholder="Ex : Artiste - Titre (Machin Remix)">
+      <div class="msg">Pour les remix que les catalogues ne connaissent pas : écris exactement
+        ce qu'il faut chercher.</div>
+      <div style="margin-top:9px"><button class="go" onclick="ajouterLibre()">Ajouter</button></div>
+    </div>
+    <div class="msg" id="msg-ajout"></div>
+  </div>
+
+  <h2>Demandes en attente</h2>
+  <div id="attente"><p class="vide">Chargement...</p></div>
+
+  <h2>Dernières décisions</h2>
+  <div id="recentes"><p class="vide">Chargement...</p></div>
+
+  <h2>Cookies YouTube</h2>
+  <div class="card" id="cookies-etat"><p class="vide">Chargement...</p></div>
+  <div class="card">
+    <div class="msg">Quand les téléchargements s'arrêtent, ce sont presque toujours les cookies
+      qui ont expiré. Exporte-les depuis ton navigateur (extension « Get cookies.txt »), puis
+      dépose le fichier ici. Aucun accès à ton PC, rien à installer sur le serveur.</div>
+    <textarea id="ck" placeholder="Ou colle ici le contenu de cookies.txt"></textarea>
+    <div style="margin-top:9px" class="row">
+      <input type="file" id="fic" accept=".txt" onchange="lireFichier()" style="flex:1;min-width:170px">
+      <button class="go" onclick="envoyerCookies()">Enregistrer</button>
+    </div>
+    <div class="msg" id="msg-ck"></div>
+  </div>
+</main>
+<footer>
+  <a href="/regie/sante">Santé du festival</a> · <a href="/regie/voix">Régie voix</a>
+</footer>
+<script>
+const AMP=String.fromCharCode(38), LT=String.fromCharCode(60), GT=String.fromCharCode(62), GUI=String.fromCharCode(34);
+function esc(s){ return String(s==null?"":s)
+  .split(AMP).join(AMP+"amp;").split(LT).join(AMP+"lt;")
+  .split(GT).join(AMP+"gt;").split(GUI).join(AMP+"quot;"); }
+let LIBRE=false, tmr=null;
+
+function mode(i){
+  LIBRE=!!i;
+  document.getElementById("t-reche").classList.toggle("on",!LIBRE);
+  document.getElementById("t-libre").classList.toggle("on",LIBRE);
+  document.getElementById("bloc-reche").hidden=LIBRE;
+  document.getElementById("bloc-libre").hidden=!LIBRE;
+}
+
+function chercher(){
+  clearTimeout(tmr);
+  tmr=setTimeout(async function(){
+    const q=document.getElementById("q").value.trim();
+    const box=document.getElementById("sugg");
+    if(q.length<2){ box.hidden=true; return; }
+    try{
+      const d=await (await fetch("/api/regie/recherche?q="+encodeURIComponent(q))).json();
+      if(!d.resultats.length){ box.hidden=true; return; }
+      box.innerHTML="";
+      d.resultats.forEach(function(r){
+        const el=document.createElement("div");
+        el.innerHTML=LT+"b"+GT+esc(r.artiste)+LT+"/b"+GT+" — "+esc(r.titre)+
+          LT+"br"+GT+LT+"small"+GT+esc(r.genre)+(r.annee?" · "+esc(r.annee):"")+LT+"/small"+GT;
+        el.onclick=function(){ box.hidden=true; envoyer({artiste:r.artiste, titre:r.titre}); };
+        box.appendChild(el);
+      });
+      box.hidden=false;
+    }catch(e){ box.hidden=true; }
+  },320);
+}
+
+function ajouterLibre(){
+  const t=document.getElementById("libre").value.trim();
+  if(t.length<3){ document.getElementById("msg-ajout").textContent="Trop court."; return; }
+  envoyer({titre:t, libre:true});
+}
+
+async function envoyer(corps){
+  const m=document.getElementById("msg-ajout");
+  m.textContent="Envoi...";
+  try{
+    const d=await (await fetch("/api/regie/musique/ajouter",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(corps)})).json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+d.message;
+    if(d.ok){ document.getElementById("q").value=""; document.getElementById("libre").value=""; charger(); }
+  }catch(e){ m.textContent="Erreur réseau."; }
+}
+
+async function decider(titre,verdict){
+  try{
+    await fetch("/api/regie/musique/decision",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({titre:titre,verdict:verdict})});
+    charger();
+  }catch(e){ alert("Erreur"); }
+}
+
+function lireFichier(){
+  const f=document.getElementById("fic").files[0];
+  if(!f) return;
+  const r=new FileReader();
+  r.onload=function(){ document.getElementById("ck").value=r.result;
+    document.getElementById("msg-ck").textContent="Fichier chargé, clique sur Enregistrer."; };
+  r.readAsText(f);
+}
+
+async function envoyerCookies(){
+  const c=document.getElementById("ck").value;
+  const m=document.getElementById("msg-ck");
+  if(c.trim().length<200){ m.textContent="Contenu trop court."; return; }
+  m.textContent="Envoi...";
+  try{
+    const d=await (await fetch("/api/regie/cookies",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({contenu:c})})).json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+d.message;
+    if(d.ok){ document.getElementById("ck").value=""; charger(); }
+  }catch(e){ m.textContent="Erreur réseau."; }
+}
+
+function carte(contenu){ const d=document.createElement("div"); d.className="card"; d.innerHTML=contenu; return d; }
+
+async function charger(){
+  let d;
+  try{ d=await (await fetch("/api/regie/musique")).json(); }catch(e){ return; }
+  document.getElementById("stats").textContent=
+    (d.stats.telecharges||0)+" titres téléchargés · "+(d.stats.acceptes||0)+" acceptés · "+
+    d.attente.length+" en attente";
+
+  const a=document.getElementById("attente");
+  a.innerHTML="";
+  if(!d.attente.length){ a.innerHTML=LT+'p class="vide"'+GT+"Aucune demande en attente."+LT+"/p"+GT; }
+  d.attente.forEach(function(x){
+    const c=carte(LT+'div class="row"'+GT+LT+'span style="flex:1;min-width:150px"'+GT+esc(x.titre)+
+      LT+"/span"+GT+LT+'span class="pill warn"'+GT+esc(x.quand)+LT+"/span"+GT+LT+"/div"+GT);
+    const r=document.createElement("div"); r.className="row"; r.style.marginTop="9px";
+    const b1=document.createElement("button"); b1.className="good"; b1.textContent="Accepter";
+    b1.onclick=function(){ decider(x.titre,"accept"); };
+    const b2=document.createElement("button"); b2.className="bad"; b2.textContent="Refuser";
+    b2.onclick=function(){ decider(x.titre,"reject"); };
+    r.appendChild(b1); r.appendChild(b2); c.appendChild(r); a.appendChild(c);
+  });
+
+  const rec=document.getElementById("recentes");
+  rec.innerHTML = d.recentes.length ? d.recentes.map(function(x){
+    return LT+'div class="card"'+GT+LT+'div class="row"'+GT+
+      LT+'span style="flex:1;min-width:150px"'+GT+esc(x.titre)+LT+"/span"+GT+
+      LT+'span class="pill '+(x.verdict==="accept"?"ok":"ko")+'"'+GT+esc(x.verdict)+LT+"/span"+GT+
+      (x.telecharge?LT+'span class="pill ok"'+GT+"téléchargé"+LT+"/span"+GT
+                   :LT+'span class="pill warn"'+GT+"en file"+LT+"/span"+GT)+
+      LT+"/div"+GT+LT+"/div"+GT;
+  }).join("") : LT+'p class="vide"'+GT+"Rien."+LT+"/p"+GT;
+
+  const ck=d.cookies||{}, bon=(ck.statut==="OK");
+  document.getElementById("cookies-etat").innerHTML=
+    LT+'div class="row"'+GT+LT+'span style="flex:1"'+GT+LT+"b"+GT+"Cookies du downloader"+LT+"/b"+GT+
+    LT+"/span"+GT+LT+'span class="pill '+(bon?"ok":"ko")+'"'+GT+esc(ck.statut)+LT+"/span"+GT+LT+"/div"+GT+
+    LT+'div class="msg"'+GT+(ck.present
+      ? "Déposés le "+esc(ck.depose_le)+" · il y a "+ck.age_jours+" jour(s) · "+
+        Math.round((ck.taille||0)/1024)+" ko"
+      : "Aucun fichier de cookies : le downloader reste en pause.")+LT+"/div"+GT;
+}
+charger();
+</script></body></html>"""
+
+
 SANTE_PAGE = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1132,7 +1512,7 @@ a{color:#ffd29a}
 <main id="app"><p class="vide">Chargement…</p></main>
 <footer>
   Page de supervision — aucune IA, que des mesures.
-  <a href="/regie/voix">→ Régie voix (valider les jingles)</a>
+  <a href="/regie/voix">Régie voix (valider les jingles)</a> · <a href="/regie/musique">Musique et demandes</a>
 </footer>
 <script>
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));

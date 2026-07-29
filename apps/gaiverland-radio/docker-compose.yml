@@ -527,6 +527,9 @@ services:
       # Lecture seule : la page de régie /regie/voix fait écouter les jingles Rebexis
       # au chef pour validation avant passage à l'antenne.
       - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache:ro
+      # Écriture : /regie/musique permet au chef de déposer des cookies YouTube frais
+      # depuis le navigateur (sans SSH), quand ceux du downloader expirent.
+      - {{.BaseDir}}/app-config/gaiverland-radio/youtube-cookies.txt:/cookies/youtube-cookies.txt:rw
     ports:
       - "8100:8099"
     depends_on:
