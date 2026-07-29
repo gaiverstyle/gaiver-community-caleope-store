@@ -1463,7 +1463,7 @@ textarea.field-input{min-height:110px;font-size:12px}
 .btn-vio{background:rgba(255,244,230,.16);color:var(--cream)}
 .btn-sm{padding:8px 13px;font-size:13px;min-height:38px}
 .onglets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
-.onglets .btn{border-radius:20px;min-height:auto;padding:8px 15px;font-size:13px;
+.onglets .btn{border-radius:20px;min-height:40px;padding:10px 16px;font-size:13px;
   background:rgba(255,244,230,.1);color:var(--cream);border:1px solid rgba(255,244,230,.28)}
 .onglets .btn.on{background:var(--cream);color:var(--nuit)}
 .sugg{border:1px solid rgba(255,244,230,.25);border-radius:11px;margin-top:7px;overflow:hidden}
