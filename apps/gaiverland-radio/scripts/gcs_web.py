@@ -1001,13 +1001,18 @@ def regie_musique(request: Request):
             try:
                 cur.execute("""SELECT cle, statut, detail,
                                       round(extract(epoch FROM (now()-maj))/60) min
-                               FROM system_health WHERE cle IN ('downloader','downloader_pause')""")
+                               FROM system_health WHERE cle IN ('downloader','downloader_pause','downloader_limite')""")
                 for r in cur.fetchall():
                     if r["cle"] == "downloader":
                         out["downloader"].update({"statut": r["statut"], "detail": r["detail"],
                                                   "vu_il_y_a_min": int(r["min"] or 0)})
-                    else:
+                    elif r["cle"] == "downloader_pause":
                         out["downloader"]["en_pause"] = (r["statut"] == "on")
+                    else:
+                        try:
+                            out["downloader"]["limite"] = int(r["statut"])
+                        except Exception:
+                            pass
             except Exception:
                 conn.rollback()
         conn.close()
@@ -1104,60 +1109,84 @@ def regie_decision(request: Request, payload: dict = Body(...)):
 
 @app.post("/api/regie/musique/artiste")
 def regie_artiste(request: Request, payload: dict = Body(...)):
-    """Demande d'un ARTISTE : l'algo choisit lui-même les titres.
-    On prend ses morceaux les plus connus (catalogue iTunes, trié par popularité),
-    on écarte ceux déjà en base ou déjà demandés, et on met le reste en file."""
+    """Demande d'un ARTISTE : on prend son CATALOGUE, pas juste quelques titres.
+
+    Deux passes : on résout d'abord son identifiant iTunes puis on liste ses morceaux
+    (jusqu'à 200), et on complète par une recherche classique — certains featurings
+    n'apparaissent pas dans le catalogue de l'artiste principal. On écarte ce qui est
+    déjà en bibliothèque ou déjà demandé, puis on met TOUT le reste en file.
+    """
     if not _admin_ok(request):
         raise HTTPException(status_code=404, detail="Not Found")
     artiste = str(payload.get("artiste", "")).strip()[:120]
-    combien = max(1, min(12, int(payload.get("combien", 5) or 5)))
+    # 0 ou absent = tout prendre. Plafond haut : c'est le quota quotidien du
+    # téléchargeur qui régule le rythme, pas cette page.
+    combien = int(payload.get("combien", 0) or 0)
+    if combien <= 0:
+        combien = 500
+    combien = min(combien, 500)
     if len(artiste) < 2:
         raise HTTPException(status_code=400, detail="nom d'artiste trop court")
 
     def _cle(a, t):
         return re.sub(r"[^a-z0-9]", "", ((a or "") + (t or "")).lower())
 
+    cible = _cle(artiste, "")
+    trouves, vus = [], set()
+
+    def _ajouter(x):
+        nom = (x.get("artistName") or "").strip()
+        titre = (x.get("trackName") or "").strip()
+        if not titre or not nom:
+            return
+        # on garde les featurings : il suffit que l'artiste demandé soit cité
+        if cible not in _cle(nom, "") and _cle(nom, "") not in cible:
+            return
+        k = _cle(nom, titre)
+        if k in vus:
+            return
+        vus.add(k)
+        trouves.append({"artiste": nom, "titre": titre})
+
     try:
+        # 1) catalogue de l'artiste (via son identifiant)
+        a = httpx.get("https://itunes.apple.com/search",
+                      params={"term": artiste, "media": "music", "entity": "musicArtist",
+                              "limit": 1, "country": "FR"}, timeout=10)
+        res = a.json().get("results", []) if a.status_code == 200 else []
+        if res and res[0].get("artistId"):
+            c = httpx.get("https://itunes.apple.com/lookup",
+                          params={"id": res[0]["artistId"], "entity": "song",
+                                  "limit": 200, "country": "FR"}, timeout=20)
+            for x in (c.json().get("results", []) if c.status_code == 200 else []):
+                if x.get("wrapperType") == "track":
+                    _ajouter(x)
+        # 2) complément : recherche classique (featurings, sorties hors catalogue)
         r = httpx.get("https://itunes.apple.com/search",
                       params={"term": artiste, "media": "music", "entity": "song",
-                              "limit": 60, "country": "FR"}, timeout=10)
-        brut = r.json().get("results", []) if r.status_code == 200 else []
+                              "limit": 200, "country": "FR"}, timeout=20)
+        for x in (r.json().get("results", []) if r.status_code == 200 else []):
+            _ajouter(x)
     except Exception as e:
         return {"ok": False, "message": "Catalogue injoignable : " + str(e)[:80]}
 
-    # On ne garde que les titres DE cet artiste (la recherche ramène large),
-    # et un seul exemplaire par titre (les rééditions polluent).
-    vise, vus = [], set()
-    for x in brut:
-        nom = x.get("artistName", "")
-        if _cle(nom, "") != _cle(artiste, "") and _cle(artiste, "") not in _cle(nom, ""):
-            continue
-        titre = (x.get("trackName") or "").strip()
-        if not titre:
-            continue
-        k = _cle(nom, titre)
-        if k in vus:
-            continue
-        vus.add(k)
-        vise.append({"artiste": nom, "titre": titre})
-
-    if not vise:
+    if not trouves:
         return {"ok": False, "message": "Aucun titre trouvé pour cet artiste."}
 
-    ajoutes, ignores = [], 0
+    ajoutes, deja_la = [], 0
     try:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute("SELECT artist, title FROM tracks")
-            deja = {_cle(x["artist"], x["title"]) for x in cur.fetchall()}
+            possede = {_cle(x["artist"], x["title"]) for x in cur.fetchall()}
             cur.execute("SELECT title FROM proposal_decisions")
-            demandes = {_cle("", x["title"]) for x in cur.fetchall()}
-            for v in vise:
+            demande = {_cle("", x["title"]) for x in cur.fetchall()}
+            for v in trouves:
                 if len(ajoutes) >= combien:
                     break
                 recherche = (v["artiste"] + " " + v["titre"]).strip()
-                if _cle(v["artiste"], v["titre"]) in deja or _cle("", recherche) in demandes:
-                    ignores += 1
+                if _cle(v["artiste"], v["titre"]) in possede or _cle("", recherche) in demande:
+                    deja_la += 1
                     continue
                 cur.execute("INSERT INTO title_proposals (user_id, title) VALUES ('regie-chef', %s)",
                             (recherche,))
@@ -1165,16 +1194,23 @@ def regie_artiste(request: Request, payload: dict = Body(...)):
                                VALUES (%s,'accept',%s,%s,NOW()) ON CONFLICT (title) DO NOTHING""",
                             (recherche, v["artiste"], v["titre"]))
                 ajoutes.append(recherche)
+            cur.execute("SELECT count(*) n FROM proposal_decisions "
+                        "WHERE verdict='accept' AND downloaded_at IS NULL")
+            en_file = cur.fetchone()["n"]
         conn.commit()
         conn.close()
     except Exception as e:
         return {"ok": False, "message": str(e)[:140]}
 
     if not ajoutes:
-        return {"ok": False, "message": f"Rien de neuf : les {ignores} titres trouvés sont déjà là."}
+        return {"ok": False,
+                "message": f"Rien de neuf : les {len(trouves)} titres trouvés sont déjà là."}
+    # Le téléchargeur a un quota quotidien : on annonce le délai réel.
+    jours = max(1, -(-en_file // 45))
     return {"ok": True, "ajoutes": ajoutes,
-            "message": f"{len(ajoutes)} titre(s) de {artiste} mis en file"
-                       + (f" ({ignores} déjà présents, ignorés)." if ignores else ".")}
+            "message": f"{len(ajoutes)} titre(s) de {artiste} mis en file "
+                       f"({len(trouves)} trouvés, {deja_la} déjà présents). "
+                       f"File totale : {en_file} → environ {jours} jour(s) au rythme actuel."}
 
 
 @app.post("/api/regie/downloader")
@@ -1202,6 +1238,36 @@ def regie_downloader(request: Request, payload: dict = Body(...)):
         conn.close()
         return {"ok": True, "message": "Downloader mis en pause." if action == "pause"
                                        else "Downloader relancé (effet à la prochaine passe)."}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
+@app.post("/api/regie/downloader/limite")
+def regie_limite(request: Request, payload: dict = Body(...)):
+    """Règle le quota quotidien du téléchargeur à chaud (1-500). Utile pour absorber
+    vite un gros import d'artiste puis revenir à un rythme tranquille."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    try:
+        v = int(payload.get("limite", 0))
+    except Exception:
+        v = 0
+    if not (1 <= v <= 500):
+        raise HTTPException(status_code=400, detail="valeur hors bornes (1-500)")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS system_health (
+                               cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
+                               detail TEXT, maj TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            cur.execute("""INSERT INTO system_health (cle, statut, detail, maj)
+                           VALUES ('downloader_limite',%s,'réglé depuis la page de régie',NOW())
+                           ON CONFLICT (cle) DO UPDATE
+                             SET statut=EXCLUDED.statut, detail=EXCLUDED.detail, maj=NOW()""",
+                        (str(v),))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "message": f"Quota réglé à {v} titres/jour (effet à la prochaine passe)."}
     except Exception as e:
         return {"ok": False, "message": str(e)[:140]}
 
@@ -1619,12 +1685,14 @@ function rendreMusique(){
         LT+'div class="field"'+GT+LT+'label class="field-label"'+GT+"Nom de l'artiste"+LT+"/label"+GT+
         LT+'input class="field-input" id="art" placeholder="Ex : Headhunterz"'+GT+LT+"/div"+GT+
         LT+'div class="row"'+GT+
-          LT+'span style="font-size:13px;opacity:.8"'+GT+"Combien de titres ?"+LT+"/span"+GT+
-          LT+'input class="field-input" id="nb" type="number" min="1" max="12" value="5" style="width:84px"'+GT+
+          LT+'span style="font-size:13px;opacity:.8"'+GT+"Combien ?"+LT+"/span"+GT+
+          LT+'input class="field-input" id="nb" type="number" min="0" max="500" value="0" style="width:92px"'+GT+
+          LT+'span style="font-size:12px;opacity:.7"'+GT+"0 = tout son catalogue"+LT+"/span"+GT+
           LT+'button class="btn btn-or" onclick="ajouterArtiste()"'+GT+"Demander"+LT+"/button"+GT+
         LT+"/div"+GT+
-        LT+'div class="msg"'+GT+"L'algorithme prend ses morceaux les plus connus, écarte ceux déjà "+
-          "en bibliothèque, et met le reste en file."+LT+"/div"+GT+
+        LT+'div class="msg"'+GT+"On récupère son catalogue complet (jusqu'à 200 titres, featurings "+
+          "compris), on écarte ce qui est déjà en bibliothèque, et on met tout le reste en file. "+
+          "Le quota quotidien du téléchargeur règle ensuite le rythme."+LT+"/div"+GT+
       LT+"/div"+GT+
       LT+'div class="msg" id="msg-ajout"'+GT+LT+"/div"+GT+
     LT+"/div"+GT+
@@ -1697,7 +1765,18 @@ function rendreDl(){
   const b=el("button","btn "+(pause?"btn-vert":"btn-rouge"),pause?"Relancer le téléchargeur":"Mettre en pause");
   b.onclick=function(){ pilote(pause?"reprise":"pause"); };
   z2.appendChild(b);
+  const lab=el("span",null,"Quota / jour :"); lab.style.cssText="font-size:13px;opacity:.8;margin-left:8px";
+  const inp=el("input","field-input"); inp.type="number"; inp.min="1"; inp.max="500";
+  inp.id="lim"; inp.value=(dl.limite||45); inp.style.width="92px";
+  const bl=el("button","btn btn-vio btn-sm","Régler");
+  bl.onclick=function(){ reglerLimite(); };
+  z2.appendChild(lab); z2.appendChild(inp); z2.appendChild(bl);
   document.getElementById("dlc").appendChild(z2);
+  if(dl.en_file>0){
+    const j=Math.max(1,Math.ceil(dl.en_file/(dl.limite||45)));
+    document.getElementById("dlc").appendChild(
+      el("div","msg","File de "+dl.en_file+" titre(s) — environ "+j+" jour(s) au rythme actuel."));
+  }
 }
 
 function rendreVoix(){
@@ -1824,6 +1903,16 @@ async function decider(titre,verdict){
     headers:{"Content-Type":"application/json"},body:JSON.stringify({titre:titre,verdict:verdict})});
     charger(); }catch(e){ alert("Erreur"); }
 }
+async function reglerLimite(){
+  const v=parseInt(document.getElementById("lim").value||"45",10);
+  try{
+    const d=await (await fetch("/api/regie/downloader/limite",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({limite:v})})).json();
+    document.getElementById("msg-ck").textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||"");
+    charger();
+  }catch(e){ alert("Erreur"); }
+}
+
 async function pilote(action){
   try{ const d=await (await fetch("/api/regie/downloader",{method:"POST",
     headers:{"Content-Type":"application/json"},body:JSON.stringify({action:action})})).json();

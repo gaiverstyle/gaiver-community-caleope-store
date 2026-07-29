@@ -217,6 +217,22 @@ def _sante(cur, statut: str, detail: str):
         pass
 
 
+def _limite_jour(cur) -> int:
+    """Quota quotidien : réglable À CHAUD depuis la page de régie (table system_health),
+    sinon la valeur d'environnement. Permet au chef d'accélérer un gros import d'artiste
+    sans redéployer ni toucher au serveur."""
+    try:
+        cur.execute("SELECT statut FROM system_health WHERE cle='downloader_limite'")
+        r = cur.fetchone()
+        if r:
+            v = int(r[0] if not isinstance(r, dict) else r.get("statut"))
+            if 1 <= v <= 500:
+                return v
+    except Exception:
+        pass
+    return DAILY_LIMIT
+
+
 def _en_pause(cur) -> bool:
     """Interrupteur posé par le chef depuis la page de régie (aucun SSH nécessaire)."""
     try:
@@ -253,13 +269,14 @@ def loop():
                         print("  ⏸ pas de cookies YouTube — downloader en pause "
                               "(cf procedure-cookies-downloader.md)", flush=True)
                         idle_logged = True
-                elif fait_auj >= DAILY_LIMIT:
+                elif fait_auj >= _limite_jour(cur):
+                    lim = _limite_jour(cur)
                     _sante(cur, "QUOTA ATTEINT",
-                           f"{fait_auj}/{DAILY_LIMIT} téléchargés aujourd'hui — reprise demain")
-                    print(f"  ⏸ limite quotidienne atteinte ({DAILY_LIMIT})", flush=True)
+                           f"{fait_auj}/{lim} téléchargés aujourd'hui — reprise demain")
+                    print(f"  ⏸ limite quotidienne atteinte ({lim})", flush=True)
                 else:
                     idle_logged = False
-                    _sante(cur, "ACTIF", f"{fait_auj}/{DAILY_LIMIT} téléchargés aujourd'hui")
+                    _sante(cur, "ACTIF", f"{fait_auj}/{_limite_jour(cur)} téléchargés aujourd'hui")
                     # ── 1) Propositions communauté (priorité — alimente la Mainstage) ──
                     cur.execute("""SELECT title, artist, canon_title,
                                           COALESCE(download_attempts,0) AS attempts
@@ -288,10 +305,10 @@ def loop():
                                            download_attempts=%s WHERE title=%s""", (att, p["title"]))
                         print(f"  {'✓' if ok else '✗'} {q}"
                               + ("" if ok else f" (essai {att}/{MAX_ATTEMPTS})"), flush=True)
-                        if _total_today(cur) >= DAILY_LIMIT:
+                        if _total_today(cur) >= _limite_jour(cur):
                             break
                     # ── 2) Seeds thématiques (bacs phonk/lofi/synthwave…) sur le budget restant ──
-                    remaining = DAILY_LIMIT - _total_today(cur)
+                    remaining = _limite_jour(cur) - _total_today(cur)
                     if remaining > 0:
                         t2, f2 = process_thematic_seeds(cur, cfg, min(BATCH, remaining))
                         tried += t2
