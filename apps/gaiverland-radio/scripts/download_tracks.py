@@ -201,6 +201,32 @@ def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
         return False
 
 
+def _sante(cur, statut: str, detail: str):
+    """Dépose l'état du downloader dans system_health → affiché sur /regie/musique.
+    Le chef voit s'il tourne, ce qu'il a fait aujourd'hui, et pourquoi il est en pause."""
+    try:
+        cur.execute("""CREATE TABLE IF NOT EXISTS system_health (
+                           cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
+                           detail TEXT, maj TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        cur.execute("""INSERT INTO system_health (cle, statut, detail, maj)
+                       VALUES ('downloader',%s,%s,NOW())
+                       ON CONFLICT (cle) DO UPDATE
+                         SET statut=EXCLUDED.statut, detail=EXCLUDED.detail, maj=NOW()""",
+                    (statut, detail))
+    except Exception:
+        pass
+
+
+def _en_pause(cur) -> bool:
+    """Interrupteur posé par le chef depuis la page de régie (aucun SSH nécessaire)."""
+    try:
+        cur.execute("SELECT statut FROM system_health WHERE cle='downloader_pause'")
+        r = cur.fetchone()
+        return bool(r) and (r[0] if not isinstance(r, dict) else r.get("statut")) == "on"
+    except Exception:
+        return False
+
+
 def loop():
     print("⬇  Auto-downloader Gaiverland démarré "
           f"(cookies={COOKIES}, limite/j={DAILY_LIMIT}, dir={DOWNLOAD_DIR})", flush=True)
@@ -214,15 +240,26 @@ def loop():
                 cfg = _load_stations()
                 _thematic_schema(cur)
                 _sync_seeds(cur, cfg)
-                if not _cookies_ok():
+                fait_auj = _total_today(cur)
+                if _en_pause(cur):
+                    _sante(cur, "PAUSE", "mis en pause depuis la page de régie")
+                    if not idle_logged:
+                        print("  ⏸ downloader en pause (demandé depuis /regie/musique)", flush=True)
+                        idle_logged = True
+                elif not _cookies_ok():
+                    _sante(cur, "SANS COOKIES",
+                           "cookies YouTube absents ou expirés — aucun téléchargement possible")
                     if not idle_logged:
                         print("  ⏸ pas de cookies YouTube — downloader en pause "
                               "(cf procedure-cookies-downloader.md)", flush=True)
                         idle_logged = True
-                elif _total_today(cur) >= DAILY_LIMIT:
+                elif fait_auj >= DAILY_LIMIT:
+                    _sante(cur, "QUOTA ATTEINT",
+                           f"{fait_auj}/{DAILY_LIMIT} téléchargés aujourd'hui — reprise demain")
                     print(f"  ⏸ limite quotidienne atteinte ({DAILY_LIMIT})", flush=True)
                 else:
                     idle_logged = False
+                    _sante(cur, "ACTIF", f"{fait_auj}/{DAILY_LIMIT} téléchargés aujourd'hui")
                     # ── 1) Propositions communauté (priorité — alimente la Mainstage) ──
                     cur.execute("""SELECT title, artist, canon_title,
                                           COALESCE(download_attempts,0) AS attempts

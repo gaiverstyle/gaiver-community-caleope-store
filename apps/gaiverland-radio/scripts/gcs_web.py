@@ -988,6 +988,32 @@ def regie_musique(request: Request):
     except Exception as e:
         out["erreur"] = str(e)[:120]
 
+    # ── État du downloader (battement de cœur + file + interrupteur) ────────
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT count(*) FILTER (WHERE verdict='accept' AND downloaded_at IS NULL) file,
+                                  count(*) FILTER (WHERE downloaded_at::date = current_date) auj,
+                                  max(downloaded_at) dernier FROM proposal_decisions""")
+            q = cur.fetchone()
+            out["downloader"] = {"en_file": q["file"], "aujourdhui": q["auj"],
+                                 "dernier": q["dernier"].strftime("%d/%m %H:%M") if q["dernier"] else "—"}
+            try:
+                cur.execute("""SELECT cle, statut, detail,
+                                      round(extract(epoch FROM (now()-maj))/60) min
+                               FROM system_health WHERE cle IN ('downloader','downloader_pause')""")
+                for r in cur.fetchall():
+                    if r["cle"] == "downloader":
+                        out["downloader"].update({"statut": r["statut"], "detail": r["detail"],
+                                                  "vu_il_y_a_min": int(r["min"] or 0)})
+                    else:
+                        out["downloader"]["en_pause"] = (r["statut"] == "on")
+            except Exception:
+                conn.rollback()
+        conn.close()
+    except Exception:
+        out["downloader"] = {}
+
     try:
         st = os.stat(COOKIES_PATH)
         jours = (time.time() - st.st_mtime) / 86400
@@ -1072,6 +1098,110 @@ def regie_decision(request: Request, payload: dict = Body(...)):
         conn.commit()
         conn.close()
         return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
+@app.post("/api/regie/musique/artiste")
+def regie_artiste(request: Request, payload: dict = Body(...)):
+    """Demande d'un ARTISTE : l'algo choisit lui-même les titres.
+    On prend ses morceaux les plus connus (catalogue iTunes, trié par popularité),
+    on écarte ceux déjà en base ou déjà demandés, et on met le reste en file."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    artiste = str(payload.get("artiste", "")).strip()[:120]
+    combien = max(1, min(12, int(payload.get("combien", 5) or 5)))
+    if len(artiste) < 2:
+        raise HTTPException(status_code=400, detail="nom d'artiste trop court")
+
+    def _cle(a, t):
+        return re.sub(r"[^a-z0-9]", "", ((a or "") + (t or "")).lower())
+
+    try:
+        r = httpx.get("https://itunes.apple.com/search",
+                      params={"term": artiste, "media": "music", "entity": "song",
+                              "limit": 60, "country": "FR"}, timeout=10)
+        brut = r.json().get("results", []) if r.status_code == 200 else []
+    except Exception as e:
+        return {"ok": False, "message": "Catalogue injoignable : " + str(e)[:80]}
+
+    # On ne garde que les titres DE cet artiste (la recherche ramène large),
+    # et un seul exemplaire par titre (les rééditions polluent).
+    vise, vus = [], set()
+    for x in brut:
+        nom = x.get("artistName", "")
+        if _cle(nom, "") != _cle(artiste, "") and _cle(artiste, "") not in _cle(nom, ""):
+            continue
+        titre = (x.get("trackName") or "").strip()
+        if not titre:
+            continue
+        k = _cle(nom, titre)
+        if k in vus:
+            continue
+        vus.add(k)
+        vise.append({"artiste": nom, "titre": titre})
+
+    if not vise:
+        return {"ok": False, "message": "Aucun titre trouvé pour cet artiste."}
+
+    ajoutes, ignores = [], 0
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT artist, title FROM tracks")
+            deja = {_cle(x["artist"], x["title"]) for x in cur.fetchall()}
+            cur.execute("SELECT title FROM proposal_decisions")
+            demandes = {_cle("", x["title"]) for x in cur.fetchall()}
+            for v in vise:
+                if len(ajoutes) >= combien:
+                    break
+                recherche = (v["artiste"] + " " + v["titre"]).strip()
+                if _cle(v["artiste"], v["titre"]) in deja or _cle("", recherche) in demandes:
+                    ignores += 1
+                    continue
+                cur.execute("INSERT INTO title_proposals (user_id, title) VALUES ('regie-chef', %s)",
+                            (recherche,))
+                cur.execute("""INSERT INTO proposal_decisions (title, verdict, artist, canon_title, decided_at)
+                               VALUES (%s,'accept',%s,%s,NOW()) ON CONFLICT (title) DO NOTHING""",
+                            (recherche, v["artiste"], v["titre"]))
+                ajoutes.append(recherche)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+    if not ajoutes:
+        return {"ok": False, "message": f"Rien de neuf : les {ignores} titres trouvés sont déjà là."}
+    return {"ok": True, "ajoutes": ajoutes,
+            "message": f"{len(ajoutes)} titre(s) de {artiste} mis en file"
+                       + (f" ({ignores} déjà présents, ignorés)." if ignores else ".")}
+
+
+@app.post("/api/regie/downloader")
+def regie_downloader(request: Request, payload: dict = Body(...)):
+    """Met le downloader en pause / le relance. L'interrupteur vit en base : le
+    downloader le lit à chaque passe, aucun accès Docker nécessaire depuis le site."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    action = str(payload.get("action", ""))
+    if action not in ("pause", "reprise"):
+        raise HTTPException(status_code=400, detail="action invalide")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS system_health (
+                               cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
+                               detail TEXT, maj TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            cur.execute("""INSERT INTO system_health (cle, statut, detail, maj)
+                           VALUES ('downloader_pause',%s,%s,NOW())
+                           ON CONFLICT (cle) DO UPDATE
+                             SET statut=EXCLUDED.statut, detail=EXCLUDED.detail, maj=NOW()""",
+                        ("on" if action == "pause" else "off",
+                         "demandé depuis la page de régie"))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "message": "Downloader mis en pause." if action == "pause"
+                                       else "Downloader relancé (effet à la prochaine passe)."}
     except Exception as e:
         return {"ok": False, "message": str(e)[:140]}
 
@@ -1302,6 +1432,7 @@ a{color:#ffd29a}
     <div class="tabs">
       <button id="t-reche" class="on" onclick="mode(0)">Rechercher</button>
       <button id="t-libre" onclick="mode(1)">Saisie libre (remix)</button>
+      <button id="t-art" onclick="mode(2)">Un artiste entier</button>
     </div>
     <div id="bloc-reche" style="margin-top:11px">
       <input id="q" placeholder="Artiste ou titre..." autocomplete="off" oninput="chercher()">
@@ -1313,8 +1444,21 @@ a{color:#ffd29a}
         ce qu'il faut chercher.</div>
       <div style="margin-top:9px"><button class="go" onclick="ajouterLibre()">Ajouter</button></div>
     </div>
+    <div id="bloc-art" hidden style="margin-top:11px">
+      <input id="art" placeholder="Ex : Sub Zero Project">
+      <div class="row" style="margin-top:9px">
+        <span style="font-size:13px;opacity:.85">Combien de titres&nbsp;?</span>
+        <input id="nb" type="number" min="1" max="12" value="5" style="width:80px">
+        <button class="go" onclick="ajouterArtiste()">Demander</button>
+      </div>
+      <div class="msg">L'algorithme prend ses morceaux les plus connus, écarte ceux
+        déjà dans la bibliothèque, et met le reste en file.</div>
+    </div>
     <div class="msg" id="msg-ajout"></div>
   </div>
+
+  <h2>Downloader</h2>
+  <div class="card" id="dl-etat"><p class="vide">Chargement...</p></div>
 
   <h2>Demandes en attente</h2>
   <div id="attente"><p class="vide">Chargement...</p></div>
@@ -1344,14 +1488,39 @@ const AMP=String.fromCharCode(38), LT=String.fromCharCode(60), GT=String.fromCha
 function esc(s){ return String(s==null?"":s)
   .split(AMP).join(AMP+"amp;").split(LT).join(AMP+"lt;")
   .split(GT).join(AMP+"gt;").split(GUI).join(AMP+"quot;"); }
-let LIBRE=false, tmr=null;
+let MODE=0, tmr=null;
 
 function mode(i){
-  LIBRE=!!i;
-  document.getElementById("t-reche").classList.toggle("on",!LIBRE);
-  document.getElementById("t-libre").classList.toggle("on",LIBRE);
-  document.getElementById("bloc-reche").hidden=LIBRE;
-  document.getElementById("bloc-libre").hidden=!LIBRE;
+  MODE=i;
+  document.getElementById("t-reche").classList.toggle("on",i===0);
+  document.getElementById("t-libre").classList.toggle("on",i===1);
+  document.getElementById("t-art").classList.toggle("on",i===2);
+  document.getElementById("bloc-reche").hidden=(i!==0);
+  document.getElementById("bloc-libre").hidden=(i!==1);
+  document.getElementById("bloc-art").hidden=(i!==2);
+}
+
+async function ajouterArtiste(){
+  const a=document.getElementById("art").value.trim();
+  const n=parseInt(document.getElementById("nb").value||"5",10);
+  const m=document.getElementById("msg-ajout");
+  if(a.length<2){ m.textContent="Nom d'artiste trop court."; return; }
+  m.textContent="Recherche des titres...";
+  try{
+    const d=await (await fetch("/api/regie/musique/artiste",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({artiste:a, combien:n})})).json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+d.message;
+    if(d.ok){ document.getElementById("art").value=""; charger(); }
+  }catch(e){ m.textContent="Erreur réseau."; }
+}
+
+async function pilote(action){
+  try{
+    const d=await (await fetch("/api/regie/downloader",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({action:action})})).json();
+    alert(d.message||"OK"); charger();
+  }catch(e){ alert("Erreur"); }
 }
 
 function chercher(){
@@ -1456,6 +1625,24 @@ async function charger(){
                    :LT+'span class="pill warn"'+GT+"en file"+LT+"/span"+GT)+
       LT+"/div"+GT+LT+"/div"+GT;
   }).join("") : LT+'p class="vide"'+GT+"Rien."+LT+"/p"+GT;
+
+  const dl=d.downloader||{};
+  const enPause=!!dl.en_pause, vivant=(dl.vu_il_y_a_min!=null && dl.vu_il_y_a_min<25);
+  document.getElementById("dl-etat").innerHTML=
+    LT+'div class="row"'+GT+LT+'span style="flex:1"'+GT+LT+"b"+GT+"Téléchargeur"+LT+"/b"+GT+LT+"/span"+GT+
+    LT+'span class="pill '+(enPause?"warn":(vivant?"ok":"ko"))+'"'+GT+
+      (enPause?"EN PAUSE":(dl.statut||(vivant?"ACTIF":"MUET")))+LT+"/span"+GT+LT+"/div"+GT+
+    LT+'div class="msg"'+GT+
+      (dl.detail?esc(dl.detail)+" · ":"")+
+      "en file : "+(dl.en_file==null?"?":dl.en_file)+" · aujourd'hui : "+(dl.aujourdhui==null?"?":dl.aujourdhui)+
+      " · dernier : "+esc(dl.dernier||"—")+
+      (dl.vu_il_y_a_min!=null?" · vu il y a "+dl.vu_il_y_a_min+" min":" · jamais vu (redémarrage requis)")+
+    LT+"/div"+GT;
+  const zone=document.createElement("div"); zone.className="row"; zone.style.marginTop="9px";
+  const b=document.createElement("button");
+  b.className=enPause?"good":"bad"; b.textContent=enPause?"Relancer":"Mettre en pause";
+  b.onclick=function(){ pilote(enPause?"reprise":"pause"); };
+  zone.appendChild(b); document.getElementById("dl-etat").appendChild(zone);
 
   const ck=d.cookies||{}, bon=(ck.statut==="OK");
   document.getElementById("cookies-etat").innerHTML=
