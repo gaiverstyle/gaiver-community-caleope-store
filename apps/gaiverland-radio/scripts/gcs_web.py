@@ -2359,8 +2359,10 @@ async function enregistrerVoix(){
     const rep=await fetch("/api/regie/voix/reglages",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify(corps)});
     const d=await rep.json();
+    // On ne relance PAS charger() ici : il redessine l onglet et effacerait
+    // la confirmation que le chef vient de demander.
+    if(d.ok) Object.keys(corps).forEach(function(n){ VOIX[n]=corps[n]; });
     m.textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||d.detail||"");
-    charger();
   }catch(e){ m.textContent="⚠️ réseau"; }
 }
 async function voixDefaut(){
