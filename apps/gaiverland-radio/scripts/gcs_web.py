@@ -1633,6 +1633,12 @@ def regie_sante(request: Request):
                 cur.execute("SELECT cle, statut, detail, "
                             "round(extract(epoch FROM (now()-maj))/60) AS min FROM system_health")
                 for r in cur.fetchall():
+                    # system_health sert aussi de boîte à réglages (voix_*, downloader_limite…).
+                    # Ces lignes-là ne sont PAS des indicateurs de santé : affichées telles quelles
+                    # elles s'allument en rouge parce que leur « statut » est une valeur, pas un OK.
+                    if r["cle"].startswith("voix_") or r["cle"] in ("downloader_limite",
+                                                                    "downloader_pause"):
+                        continue
                     out["systeme"][r["cle"]] = {"statut": r["statut"], "detail": r["detail"],
                                                 "il_y_a_min": int(r["min"] or 0)}
             except Exception:
@@ -2118,7 +2124,7 @@ function rendreSysteme(){
   h+=LT+"h2"+GT+"Maintenance"+LT+"/h2"+GT;
   const sy=d.systeme||{}, lib={qc:"Contrôle qualité",sauvegarde:"Sauvegarde",disque:"Disque"};
   Object.keys(sy).forEach(function(k){
-    const e=sy[k], bon=(e.statut==="OK"||e.statut==="FIXÉ");
+    const e=sy[k], bon=["OK","FIXÉ","ACTIF","QUOTA ATTEINT","EN PAUSE"].indexOf(e.statut)>=0;
     let det=esc(e.detail||"");
     if(k==="qc"&&e.detail){
       det=e.detail.split(NL).map(function(l){
@@ -2767,7 +2773,7 @@ async function charger(){
   const sy=d.systeme||{};
   const libelle={qc:"Contrôle qualité",sauvegarde:"Sauvegarde",disque:"Disque"};
   Object.keys(sy).forEach(k=>{
-    const e=sy[k], bon=(e.statut==="OK"||e.statut==="FIXÉ");
+    const e=sy[k], bon=["OK","FIXÉ","ACTIF","QUOTA ATTEINT","EN PAUSE"].indexOf(e.statut)>=0;
     let det=esc(e.detail||"");
     if(k==="qc"&&e.detail){
       // NL sans séquence d'échappement : cette page est une chaîne Python, toute
