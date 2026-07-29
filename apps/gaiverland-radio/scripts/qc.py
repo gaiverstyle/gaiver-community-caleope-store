@@ -146,8 +146,16 @@ def check_all():
     #    même morceau repassait 2 à 8 fois plus souvent que les autres (60 copies en trop
     #    constatées le 28/07, dont un « type beat » en 8 exemplaires).
     try:
-        n = q1(cur, f"WITH n AS (SELECT {SONG_KEY} k FROM tracks WHERE analyzed AND mood = ANY(%s)) "
-                    "SELECT coalesce(sum(c-1),0) FROM (SELECT k,count(*) c FROM n GROUP BY k HAVING count(*)>1) d",
+        # On IGNORE les copies déjà mises en quarantaine : sinon le compte ne baisse
+        # jamais et l'alerte reste allumée pour toujours (faux positif permanent —
+        # une alerte qui ne s'éteint pas est une alerte qu'on apprend à ignorer).
+        n = q1(cur, f"""WITH n AS (
+                            SELECT {SONG_KEY} k FROM tracks t
+                            WHERE t.analyzed AND t.mood = ANY(%s)
+                              AND NOT EXISTS (SELECT 1 FROM station_denylist d
+                                              WHERE d.station_id=1 AND d.song_id=t.song_id))
+                        SELECT coalesce(sum(c-1),0)
+                        FROM (SELECT k,count(*) c FROM n GROUP BY k HAVING count(*)>1) d""",
                (list(DAY_MOODS),))
         n = int(n or 0)
         if n == 0:
