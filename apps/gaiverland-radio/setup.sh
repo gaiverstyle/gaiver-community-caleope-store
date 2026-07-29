@@ -3550,16 +3550,40 @@ def get_library(category: str = "", limit: int = 50):
 
 @app.get("/quota")
 def get_quota():
-    """Quota ElevenLabs du mois en cours."""
+    """Quota ElevenLabs — SOURCE DE VÉRITÉ = ElevenLabs, pas le compteur local.
+
+    Le compteur local est calé sur le mois calendaire alors qu'EL se réinitialise sur son
+    propre cycle de facturation : il affichait 13202/10000 (132 %, « 0 restant ») alors
+    qu'il restait du crédit. On interroge EL et on ne retombe sur le local qu'en secours.
+    """
     conn = get_conn()
-    used = quota_used(conn)
+    local = quota_used(conn)
     conn.close()
+    restant = el_real_remaining()          # None si l'API EL est injoignable
+    limite, reset = EL_CHARS_LIMIT, None
+    try:
+        r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+        if r.status_code == 200:
+            d = r.json()
+            limite = d.get("character_limit") or EL_CHARS_LIMIT
+            reset = d.get("next_character_count_reset_unix")
+    except Exception:
+        pass
+    if restant is None:                     # repli : compteur local
+        restant = max(0, EL_CHARS_LIMIT - local)
+        source = "local"
+    else:
+        source = "elevenlabs"
+    utilise = max(0, limite - restant)
     return {
-        "month":     current_month(),
-        "used":      used,
-        "remaining": max(0, EL_CHARS_LIMIT - used),
-        "limit":     EL_CHARS_LIMIT,
-        "pct":       round(used / EL_CHARS_LIMIT * 100, 1),
+        "source":    source,
+        "used":      utilise,
+        "remaining": restant,
+        "limit":     limite,
+        "pct":       round(utilise / limite * 100, 1) if limite else 0,
+        "reset_unix": reset,
+        "compteur_local": local,
     }
 
 

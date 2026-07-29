@@ -876,7 +876,14 @@ def regie_jingles(request: Request, status: str = "all"):
         counts = {}
         for r in rows:
             counts[r["status"]] = counts.get(r["status"], 0) + 1
-        return {"items": items, "counts": counts, "total": len(rows)}
+        quota = {}
+        try:
+            base = _tts_base()
+            if base:
+                quota = httpx.get(base + "/quota", timeout=8).json()
+        except Exception:
+            quota = {}
+        return {"items": items, "counts": counts, "total": len(rows), "quota": quota}
     except Exception as e:
         return {"items": [], "counts": {}, "total": 0, "error": str(e)[:200]}
 
@@ -1874,18 +1881,32 @@ function rendreDl(){
 
 function rendreVoix(){
   const z=document.getElementById("s-voix");
-  const items=(JINGLES.items||[]);
+  const items=(JINGLES.items||[]), q=(JINGLES.quota||{});
   const att=items.filter(function(i){return i.status==="pending";});
   const c=JINGLES.counts||{};
   z.innerHTML=LT+"h2"+GT+"Jingles de Rebexis"+LT+"/h2"+GT+
     LT+'div class="grid"'+GT+kpi(c.ok||0,"validés")+kpi(c.ko||0,"retirés")+
       kpi(c.pending||0,"à écouter")+LT+"/div"+GT+
+    LT+"h2"+GT+"Crédits de voix"+LT+"/h2"+GT+
+    LT+'div class="card'+(q.remaining!=null && q.limit && q.remaining < q.limit*0.15 ? " alerte":"")+'"'+GT+
+      LT+'div class="row"'+GT+
+        LT+'span class="nom" style="flex:1"'+GT+"ElevenLabs"+LT+"/span"+GT+
+        LT+'span class="pill '+(q.remaining==null?"warn":(q.remaining>0?"ok":"ko"))+'"'+GT+
+          (q.remaining==null?"indisponible":(q.remaining+" caractères restants"))+LT+"/span"+GT+
+      LT+"/div"+GT+
+      LT+'div class="det"'+GT+
+        (q.limit? (q.used+" utilisés sur "+q.limit+" ("+q.pct+" %)") : "quota inconnu")+
+        (q.source==="local"?" · source : compteur local (ElevenLabs injoignable)":"")+
+        (q.reset_unix? " · remise à zéro le "+new Date(q.reset_unix*1000).toLocaleDateString("fr-FR"):"")+
+      LT+"/div"+GT+
+    LT+"/div"+GT+
     LT+"h2"+GT+"Écrire une phrase"+LT+"/h2"+GT+
     LT+'div class="card"'+GT+
       LT+'div class="field"'+GT+
         LT+'label class="field-label"'+GT+"Ta phrase (3 phrases maximum)"+LT+"/label"+GT+
-        LT+'textarea class="field-input" id="ph" style="min-height:80px" '+
+        LT+'textarea class="field-input" id="ph" style="min-height:80px" oninput="compter()" '+
           'placeholder="Le caisson de basses a demandé une pause. Refusée."'+GT+LT+"/textarea"+GT+
+        LT+'div class="msg" id="cout"'+GT+LT+"/div"+GT+
       LT+"/div"+GT+
       LT+'div class="row"'+GT+
         LT+'select class="field-input" id="cat" style="width:auto;min-width:190px"'+GT+
@@ -2072,6 +2093,21 @@ function ecouter(i,btn){
   pl.play().catch(function(e){ btn.textContent="▶ Écouter"; playing=null;
     alert("Lecture impossible : "+((e&&e.name)?e.name:e)); });
 }
+function compter(){
+  const t=document.getElementById("ph").value.trim();
+  const e=document.getElementById("cout");
+  if(!t){ e.textContent=""; return; }
+  // eleven_v3 ajoute la balise [playful] avant l'envoi : elle est facturée aussi.
+  const cout=t.length+10;
+  const reste=(JINGLES.quota||{}).remaining;
+  let s=cout+" caractères seront consommés";
+  if(reste!=null){
+    s+=" · il en restera "+Math.max(0,reste-cout);
+    if(cout>reste) s="⚠️ "+cout+" caractères nécessaires, il n'en reste que "+reste;
+  }
+  e.textContent=s;
+}
+
 async function creerPhrase(){
   const t=document.getElementById("ph").value.trim();
   const c=document.getElementById("cat").value;
