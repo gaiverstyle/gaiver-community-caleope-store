@@ -3212,7 +3212,45 @@ def el_add_playful(text: str) -> str:
     return f"[playful] {text}"
 
 
+def _reglages_voix(cur) -> dict:
+    """Réglages de voix pilotés depuis la page de régie (table system_health, clés voix_*),
+    avec repli sur les valeurs d'environnement. Lus À CHAQUE génération : le chef ajuste et
+    entend le résultat sur la phrase suivante, sans redéployer.
+    ⚠️ On passe par la base parce qu'un `docker restart` NE relit PAS env_file."""
+    vs = dict(EL_VOICE_SETTINGS)
+    modele = EL_MODEL
+    try:
+        cur.execute("SELECT cle, statut FROM system_health WHERE cle LIKE 'voix_%'")
+        for r in cur.fetchall():
+            cle = r["cle"] if isinstance(r, dict) else r[0]
+            val = r["statut"] if isinstance(r, dict) else r[1]
+            nom = cle.replace("voix_", "")
+            if nom == "modele":
+                modele = val
+            elif nom in ("stability", "style", "similarity_boost", "speed"):
+                try:
+                    v = float(val)
+                    if 0.0 <= v <= 2.0:
+                        vs[nom] = v
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return {"modele": modele, "settings": vs}
+
+
 def el_synthesize(text: str) -> bytes:
+    # Réglages à chaud : relus juste avant l'appel (une requête par phrase, négligeable)
+    # pour que les ajustements du chef prennent effet immédiatement.
+    global EL_VOICE_SETTINGS, EL_MODEL
+    try:
+        _c = get_conn()
+        with _c.cursor() as _cur:
+            _r = _reglages_voix(_cur)
+        _c.close()
+        EL_VOICE_SETTINGS, EL_MODEL = _r["settings"], _r["modele"]
+    except Exception:
+        pass
     """Appelle l'API ElevenLabs et retourne les bytes MP3."""
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}"
     resp = httpx.post(

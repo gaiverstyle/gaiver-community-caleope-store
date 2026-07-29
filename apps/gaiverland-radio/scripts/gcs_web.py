@@ -1423,6 +1423,134 @@ def regie_musique_page(request: Request):
     return r
 
 
+# Actions que la régie a le droit de demander. La page ne touche JAMAIS à Docker :
+# elle dépose une ligne en base, et l'exécuteur de l'hôte (cron root, /1 min) applique
+# uniquement ce qui figure dans SA propre liste blanche. Double barrière.
+ACTIONS_OK = ("relancer", "journal", "sauvegarde", "controle_qualite")
+SERVICES_OK = ("gaiverland-playlist", "gaiverland-scheduler", "gaiverland-rebexis",
+               "gaiverland-tts", "gaiverland-downloader", "gaiverland-analyzer",
+               "gaiverland-gcs-web", "gaiverland-gcs-vote", "gaiverland-gcs-track",
+               "gaiverland-gcs-lore", "gaiverland-gcs-state", "gaiverland-gcs-weather",
+               "azuracast", "azuracast-discord-bot")
+
+
+@app.post("/api/regie/commande")
+def regie_commande(request: Request, payload: dict = Body(...)):
+    """Dépose une demande de maintenance. Elle sera exécutée dans la minute."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    action = str(payload.get("action", ""))
+    cible = str(payload.get("cible", "")).strip() or None
+    if action not in ACTIONS_OK:
+        raise HTTPException(status_code=400, detail="action non autorisée")
+    if action in ("relancer", "journal") and cible not in SERVICES_OK:
+        raise HTTPException(status_code=400, detail="service non autorisé")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS system_commandes (
+                             id SERIAL PRIMARY KEY, action TEXT NOT NULL, cible TEXT,
+                             etat TEXT NOT NULL DEFAULT 'en attente', resultat TEXT,
+                             cree_le TIMESTAMPTZ DEFAULT NOW(), traite_le TIMESTAMPTZ)""")
+            cur.execute("SELECT count(*) n FROM system_commandes WHERE etat='en attente'")
+            if cur.fetchone()["n"] >= 10:
+                conn.close()
+                return {"ok": False, "message": "Trop de demandes en attente, patiente un peu."}
+            cur.execute("INSERT INTO system_commandes (action, cible) VALUES (%s,%s) RETURNING id",
+                        (action, cible))
+            nid = cur.fetchone()["id"]
+        conn.commit()
+        conn.close()
+        return {"ok": True, "id": nid,
+                "message": "Demande enregistrée — elle s'exécute dans la minute."}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
+@app.get("/api/regie/commandes")
+def regie_commandes(request: Request):
+    """Historique récent des demandes de maintenance, avec leur résultat."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, action, cible, etat, resultat,
+                                  to_char(cree_le,'DD/MM HH24:MI') quand
+                           FROM system_commandes ORDER BY id DESC LIMIT 12""")
+            out = [{"id": r["id"], "action": r["action"], "cible": r["cible"] or "",
+                    "etat": r["etat"], "resultat": (r["resultat"] or "")[:5000],
+                    "quand": r["quand"]} for r in cur.fetchall()]
+        conn.close()
+        return {"commandes": out, "services": list(SERVICES_OK)}
+    except Exception as e:
+        return {"commandes": [], "services": list(SERVICES_OK), "erreur": str(e)[:120]}
+
+
+@app.get("/api/regie/voix/reglages")
+def regie_voix_reglages_lire(request: Request):
+    """Réglages de voix actuellement appliqués (base, sinon défauts du moteur)."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    defauts = {"modele": "eleven_v3", "stability": 0.30, "style": 0.75,
+               "similarity_boost": 0.75, "speed": 1.0}
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT cle, statut FROM system_health WHERE cle LIKE 'voix_%'")
+            for r in cur.fetchall():
+                nom = r["cle"].replace("voix_", "")
+                if nom in defauts:
+                    defauts[nom] = r["statut"] if nom == "modele" else float(r["statut"])
+        conn.close()
+    except Exception:
+        pass
+    return {"reglages": defauts}
+
+
+@app.post("/api/regie/voix/reglages")
+def regie_voix_reglages_ecrire(request: Request, payload: dict = Body(...)):
+    """Modifie la voix à chaud. Le moteur relit ces valeurs à chaque phrase générée."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    bornes = {"stability": (0.0, 1.0), "style": (0.0, 1.0),
+              "similarity_boost": (0.0, 1.0), "speed": (0.7, 1.3)}
+    a_ecrire = []
+    for nom, (mini, maxi) in bornes.items():
+        if nom in payload:
+            try:
+                v = float(payload[nom])
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"{nom} : valeur invalide")
+            if not (mini <= v <= maxi):
+                raise HTTPException(status_code=400,
+                                    detail=f"{nom} doit être entre {mini} et {maxi}")
+            a_ecrire.append(("voix_" + nom, str(v)))
+    if "modele" in payload:
+        mod = str(payload["modele"])
+        if mod not in ("eleven_v3", "eleven_multilingual_v2"):
+            raise HTTPException(status_code=400, detail="modèle inconnu")
+        a_ecrire.append(("voix_modele", mod))
+    if not a_ecrire:
+        raise HTTPException(status_code=400, detail="rien à modifier")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS system_health (
+                             cle TEXT PRIMARY KEY, statut TEXT NOT NULL,
+                             detail TEXT, maj TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            for cle, val in a_ecrire:
+                cur.execute("""INSERT INTO system_health (cle, statut, detail, maj)
+                               VALUES (%s,%s,'réglé depuis la régie',NOW())
+                               ON CONFLICT (cle) DO UPDATE
+                                 SET statut=EXCLUDED.statut, maj=NOW()""", (cle, val))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "message": "Voix ajustée — effet dès la prochaine phrase fabriquée."}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:140]}
+
+
 @app.get("/api/regie/sante")
 def regie_sante(request: Request):
     """Tout l'état du festival en un appel — pensé pour que le chef se passe d'agent :
@@ -1676,6 +1804,7 @@ textarea.field-input{min-height:110px;font-size:12px}
 <script>
 const LT=String.fromCharCode(60), GT=String.fromCharCode(62), NL=String.fromCharCode(10);
 const AMP=String.fromCharCode(38), GUI=String.fromCharCode(34);
+let CMD={commandes:[],services:[]}, VOIX={};
 function esc(s){ return String(s==null?"":s)
   .split(AMP).join(AMP+"amp;").split(LT).join(AMP+"lt;")
   .split(GT).join(AMP+"gt;").split(GUI).join(AMP+"quot;"); }
@@ -1900,6 +2029,22 @@ function rendreVoix(){
         (q.reset_unix? " · remise à zéro le "+new Date(q.reset_unix*1000).toLocaleDateString("fr-FR"):"")+
       LT+"/div"+GT+
     LT+"/div"+GT+
+    LT+"h2"+GT+"Réglages de la voix"+LT+"/h2"+GT+
+    LT+'div class="card"'+GT+
+      LT+'div class="det" style="margin-bottom:8px"'+GT+
+        "Effet immédiat sur la prochaine phrase fabriquée. Les jingles déjà validés "+
+        "ne changent pas. Réglage de référence : stabilité 0.30, style 0.75."+LT+"/div"+GT+
+      curseur("stability","Stabilité","monotone ↔ variée",0,1)+
+      curseur("style","Style","sobre ↔ expressive",0,1)+
+      curseur("similarity_boost","Fidélité","libre ↔ collée à la voix d-origine",0,1)+
+      curseur("speed","Débit","lent ↔ rapide",0.7,1.3)+
+      LT+'div class="row" style="margin-top:8px"'+GT+
+        LT+'button class="btn" onclick="enregistrerVoix()"'+GT+"Appliquer"+LT+"/button"+GT+
+        LT+'button class="btn ghost" onclick="voixDefaut()"'+GT+
+          "Revenir au réglage de référence"+LT+"/button"+GT+
+      LT+"/div"+GT+
+      LT+'div class="msg" id="msg-voix"'+GT+LT+"/div"+GT+
+    LT+"/div"+GT+
     LT+"h2"+GT+"Écrire une phrase"+LT+"/h2"+GT+
     LT+'div class="card"'+GT+
       LT+'div class="field"'+GT+
@@ -1987,6 +2132,43 @@ function rendreSysteme(){
        LT+'span class="pill warn"'+GT+"il y a "+e.il_y_a_min+" min"+LT+"/span"+GT+LT+"/div"+GT+
        LT+'div class="det"'+GT+det+LT+"/div"+GT+LT+"/div"+GT;
   });
+
+  h+=LT+"h2"+GT+"Agir"+LT+"/h2"+GT+
+     LT+'div class="card"'+GT+
+       LT+'div class="det" style="margin-bottom:8px"'+GT+
+         "Ces boutons déposent une demande. Une machine de l-hôte l-exécute dans la minute "+
+         "et te renvoie le résultat ci-dessous."+LT+"/div"+GT+
+       LT+'div class="row"'+GT+
+         LT+'select class="field-input" id="svc" style="flex:1;min-width:180px"'+GT+
+           (CMD.services||[]).map(function(x){
+             return LT+"option"+GT+esc(x)+LT+"/option"+GT;}).join("")+
+         LT+"/select"+GT+
+         LT+'button class="btn" onclick="relancerService()"'+GT+"Relancer"+LT+"/button"+GT+
+         LT+'button class="btn ghost" onclick="voirJournal()"'+GT+"Journal"+LT+"/button"+GT+
+       LT+"/div"+GT+
+       LT+'div class="row" style="margin-top:8px"'+GT+
+         LT+'button class="btn ghost" onclick="forcerSauvegarde()"'+GT+
+           "Sauvegarder maintenant"+LT+"/button"+GT+
+         LT+'button class="btn ghost" onclick="lancerControle()"'+GT+
+           "Contrôle qualité"+LT+"/button"+GT+
+       LT+"/div"+GT+
+       LT+'div class="msg" id="msg-cmd"'+GT+LT+"/div"+GT+
+     LT+"/div"+GT;
+
+  (CMD.commandes||[]).forEach(function(c){
+    const fini=(c.etat==="fait"), rate=(c.etat==="refusé"||c.etat==="échec");
+    h+=LT+'div class="card'+(rate?" alerte":"")+'"'+GT+
+       LT+'div class="row"'+GT+
+         LT+'span class="nom" style="flex:1"'+GT+
+           esc(c.action)+(c.cible?" — "+esc(c.cible):"")+LT+"/span"+GT+
+         LT+'span class="pill '+(fini?"ok":(rate?"ko":"warn"))+'"'+GT+esc(c.etat)+LT+"/span"+GT+
+         LT+'span class="pill warn"'+GT+esc(c.quand)+LT+"/span"+GT+
+       LT+"/div"+GT+
+       (c.resultat? LT+'div class="det" style="white-space:pre-wrap;max-height:220px;overflow:auto"'+GT+
+                    esc(c.resultat)+LT+"/div"+GT : "")+
+       LT+"/div"+GT;
+  });
+
   z.innerHTML=h;
 }
 
@@ -2135,9 +2317,11 @@ async function charger(force){
     const r=await Promise.all([
       fetch("/api/regie/sante").then(function(x){return x.json();}),
       fetch("/api/regie/musique").then(function(x){return x.json();}),
-      fetch("/api/regie/jingles?status=all").then(function(x){return x.json();})
+      fetch("/api/regie/jingles?status=all").then(function(x){return x.json();}),
+      fetch("/api/regie/commandes").then(function(x){return x.json();}),
+      fetch("/api/regie/voix/reglages").then(function(x){return x.json();})
     ]);
-    SANTE=r[0]; MUSIQUE=r[1]; JINGLES=r[2];
+    SANTE=r[0]; MUSIQUE=r[1]; JINGLES=r[2]; CMD=r[3]; VOIX=(r[4]||{}).reglages||{};
   }catch(e){ return; }
   rendreVue(); rendreScenes(); rendreMusique(); rendreDl(); rendreVoix(); rendreSysteme();
   const nAl=(SANTE.alertes||[]).length, nJ=(JINGLES.counts||{}).pending||0,
@@ -2145,6 +2329,63 @@ async function charger(force){
   badge("vue",nAl); badge("voix",nJ); badge("musique",nD);
   document.getElementById("maj").textContent="lu à "+new Date().toLocaleTimeString("fr-FR");
 }
+function curseur(nom,titre,aide,mini,maxi){
+  const v=(VOIX[nom]!=null?VOIX[nom]:0.5);
+  return LT+'div class="field"'+GT+
+    LT+'label class="field-label"'+GT+esc(titre)+" — "+esc(aide)+
+      LT+'span class="pill warn" id="v-'+nom+'" style="margin-left:8px"'+GT+v+LT+"/span"+GT+
+    LT+"/label"+GT+
+    LT+'input type="range" class="field-input" id="r-'+nom+'" min="'+mini+'" max="'+maxi+
+      '" step="0.05" value="'+v+'" oninput="majCurseur(this)"'+GT+
+  LT+"/div"+GT;
+}
+function majCurseur(e){
+  document.getElementById("v-"+e.id.slice(2)).textContent=e.value;
+}
+async function enregistrerVoix(){
+  const corps={};
+  ["stability","style","similarity_boost","speed"].forEach(function(n){
+    const e=document.getElementById("r-"+n); if(e) corps[n]=parseFloat(e.value);
+  });
+  const m=document.getElementById("msg-voix");
+  m.textContent="…";
+  try{
+    const rep=await fetch("/api/regie/voix/reglages",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(corps)});
+    const d=await rep.json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||d.detail||"");
+    charger();
+  }catch(e){ m.textContent="⚠️ réseau"; }
+}
+async function voixDefaut(){
+  VOIX={stability:0.30,style:0.75,similarity_boost:0.75,speed:1.0};
+  rendreVoix(); enregistrerVoix();
+}
+
+async function demander(action,cible){
+  const m=document.getElementById("msg-cmd");
+  if(m) m.textContent="…";
+  try{
+    const rep=await fetch("/api/regie/commande",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:action,cible:cible})});
+    const d=await rep.json();
+    if(m) m.textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||d.detail||"");
+    setTimeout(charger,4000); setTimeout(charger,20000);
+  }catch(e){ if(m) m.textContent="⚠️ réseau"; }
+}
+function serviceChoisi(){
+  const e=document.getElementById("svc"); return e?e.value:"";
+}
+function relancerService(){
+  const s=serviceChoisi();
+  if(!confirm("Relancer "+s+" ? La coupure dure quelques secondes.")) return;
+  demander("relancer",s);
+}
+function voirJournal(){ demander("journal",serviceChoisi()); }
+function forcerSauvegarde(){ demander("sauvegarde",null); }
+function lancerControle(){ demander("controle_qualite",null); }
+
 function badge(id,n){
   const e=document.getElementById("bdg-"+id); if(!e) return;
   e.innerHTML = n>0 ? LT+'span class="badge"'+GT+n+LT+"/span"+GT : "";
