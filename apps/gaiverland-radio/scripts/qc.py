@@ -175,8 +175,22 @@ def check_all():
             """, (list(DAY_MOODS),))
             qn = cur.rowcount
             conn.commit()
-            add("doublons", FIXED if qn else WARN,
-                f"{n} copies en trop → {qn} mises en quarantaine (1 exemplaire conservé par titre)")
+            # Reste-t-il des copies TRAITABLES (avec song_id) ? Si non, il n'y a rien à
+            # faire : on informe sans alerter, sinon le WARN reste allumé indéfiniment.
+            restant = q1(cur, f"""SELECT count(*) FROM (
+                    SELECT song_id, row_number() OVER (PARTITION BY {SONG_KEY} ORDER BY id) rang
+                    FROM tracks t WHERE t.analyzed AND t.mood = ANY(%s)
+                      AND NOT EXISTS (SELECT 1 FROM station_denylist d
+                                      WHERE d.station_id=1 AND d.song_id=t.song_id)) x
+                WHERE rang > 1 AND song_id IS NOT NULL""", (list(DAY_MOODS),)) or 0
+            if qn:
+                add("doublons", FIXED,
+                    f"{n} copies en trop → {qn} mises en quarantaine (1 exemplaire conservé par titre)")
+            elif restant:
+                add("doublons", WARN, f"{restant} copies en trop non traitées")
+            else:
+                add("doublons", OK,
+                    f"{n} copie(s) en trop sans song_id — non quarantainables, sans effet sur l'antenne")
     except Exception as e:
         conn.rollback()
         add("doublons", WARN, f"erreur: {e}")
