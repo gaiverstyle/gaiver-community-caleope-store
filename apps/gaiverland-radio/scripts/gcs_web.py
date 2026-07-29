@@ -927,6 +927,69 @@ def regie_audio(h: str, request: Request):
         raise HTTPException(status_code=500, detail="erreur")
 
 
+TTS_URL = os.environ.get("GCS_TTS_URL", "http://gw-tts:8082").rstrip("/")
+REBEXIS_PL_ID = 3   # playlist « Rebexis » de la Mainstage (AzuraCast)
+
+
+@app.post("/api/regie/voix/creer")
+def regie_voix_creer(request: Request, payload: dict = Body(...)):
+    """Le chef écrit une phrase → on la fabrique avec la voix validée, SANS la mettre
+    à l'antenne. Elle arrive dans « à écouter » ; c'est « Garder » qui la diffusera."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    texte = str(payload.get("texte", "")).strip()
+    cat = str(payload.get("categorie", "rebexis"))
+    if cat not in ("rebexis", "cat3_bloc", "cat4_nouveaute", "custom"):
+        cat = "rebexis"
+    if len(texte) < 4:
+        raise HTTPException(status_code=400, detail="phrase trop courte")
+    if len(texte) > 300:
+        raise HTTPException(status_code=400, detail="phrase trop longue (300 max)")
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM tts_library WHERE text=%s", (texte,))
+            if cur.fetchone():
+                conn.close()
+                return {"ok": False, "message": "Cette phrase existe déjà."}
+        conn.close()
+    except Exception:
+        pass
+    try:
+        # 90 s : la synthèse ElevenLabs + le rendu ffmpeg prennent quelques secondes
+        r = httpx.post(f"{TTS_URL}/creer", params={"text": texte, "category": cat}, timeout=90)
+        if r.status_code != 200:
+            return {"ok": False, "message": f"Le moteur de voix a refusé : {r.text[:120]}"}
+    except Exception as e:
+        return {"ok": False, "message": "Moteur de voix injoignable : " + str(e)[:90]}
+    return {"ok": True, "message": "Phrase créée. Elle t'attend dans « à écouter » — "
+                                   "elle n'ira à l'antenne qu'après ton Garder."}
+
+
+def _mettre_a_l_antenne(chemin: str) -> bool:
+    """Assigne le fichier à la playlist Rebexis d'AzuraCast (appelé quand le chef GARDE).
+    Sans ça, un jingle validé resterait dans la bibliothèque sans jamais passer."""
+    cle = os.environ.get("AZURACAST_API_KEY", "")
+    if not cle or not chemin:
+        return False
+    try:
+        h = {"X-API-Key": cle, "Accept": "application/json", "Content-Type": "application/json"}
+        r = httpx.get(f"{AZ_URL}/api/station/{AZ_STATION}/files", headers=h,
+                      params={"rowsPerPage": 2000}, timeout=45)
+        rows = r.json()
+        rows = rows.get("rows", rows) if isinstance(rows, dict) else rows
+        base = os.path.basename(chemin)
+        cible = [f["path"] for f in rows if os.path.basename(f.get("path", "")) == base]
+        if not cible:
+            return False
+        r2 = httpx.put(f"{AZ_URL}/api/station/{AZ_STATION}/files/batch", headers=h,
+                       json={"do": "playlist", "files": cible,
+                             "playlists": [str(REBEXIS_PL_ID)]}, timeout=60)
+        return r2.status_code == 200
+    except Exception:
+        return False
+
+
 @app.post("/api/regie/review")
 def regie_review(request: Request, payload: dict = Body(...)):
     """Enregistre le verdict : ok (garder) / ko (retirer de l'antenne) / pending."""
@@ -948,8 +1011,17 @@ def regie_review(request: Request, payload: dict = Body(...)):
                   SET status=EXCLUDED.status, note=EXCLUDED.note, reviewed_at=NOW()
             """, (h, st, note))
         conn.commit()
+        # Valider = mettre à l'antenne. Tant que le chef n'a pas gardé le jingle, il
+        # n'est pas dans la playlist AzuraCast, donc il ne peut pas passer.
+        diffuse = None
+        if st == "ok":
+            with conn.cursor() as cur:
+                cur.execute("SELECT audio_file FROM tts_library WHERE text_hash=%s", (h,))
+                row = cur.fetchone()
+            if row and row["audio_file"]:
+                diffuse = _mettre_a_l_antenne(row["audio_file"])
         conn.close()
-        return {"ok": True, "status": st}
+        return {"ok": True, "status": st, "diffuse": diffuse}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
@@ -1787,6 +1859,38 @@ function rendreVoix(){
   z.innerHTML=LT+"h2"+GT+"Jingles de Rebexis"+LT+"/h2"+GT+
     LT+'div class="grid"'+GT+kpi(c.ok||0,"validés")+kpi(c.ko||0,"retirés")+
       kpi(c.pending||0,"à écouter")+LT+"/div"+GT+
+    LT+"h2"+GT+"Écrire une phrase"+LT+"/h2"+GT+
+    LT+'div class="card"'+GT+
+      LT+'div class="field"'+GT+
+        LT+'label class="field-label"'+GT+"Ta phrase (3 phrases maximum)"+LT+"/label"+GT+
+        LT+'textarea class="field-input" id="ph" style="min-height:80px" '+
+          'placeholder="Le caisson de basses a demandé une pause. Refusée."'+GT+LT+"/textarea"+GT+
+      LT+"/div"+GT+
+      LT+'div class="row"'+GT+
+        LT+'select class="field-input" id="cat" style="width:auto;min-width:190px"'+GT+
+          LT+'option value="rebexis"'+GT+"Intervention libre"+LT+"/option"+GT+
+          LT+'option value="cat3_bloc"'+GT+"Transition (la plus jouée)"+LT+"/option"+GT+
+          LT+'option value="cat4_nouveaute"'+GT+"Annonce de nouveauté"+LT+"/option"+GT+
+        LT+"/select"+GT+
+        LT+'button class="btn btn-or" onclick="creerPhrase()"'+GT+"Fabriquer"+LT+"/button"+GT+
+      LT+"/div"+GT+
+      LT+'div class="msg" id="msg-ph"'+GT+LT+"/div"+GT+
+    LT+"/div"+GT+
+    LT+'div class="card"'+GT+
+      LT+'div class="det"'+GT+
+        LT+"b"+GT+"Ce qui marche"+LT+"/b"+GT+" — des objets qui ont une volonté "+
+        "(« les enceintes viennent de demander une augmentation »), de l'auto-dérision "+
+        "(« j'appuie sur un bouton et je prends le mérite »), de l'understatement "+
+        "(« il n'est clairement pas venu pour être discret »), une autorité feinte "+
+        "(« on m'a demandé de baisser, j'ai fait semblant de ne pas entendre »)."+
+      LT+"/div"+GT+
+      LT+'div class="det" style="margin-top:8px"'+GT+
+        LT+"b"+GT+"À éviter"+LT+"/b"+GT+" — les phrases neutres de remplissage "+
+        "(« retour à la musique »), les blagues longues, le descriptif technique "+
+        "(BPM, genre). Les transitions passent très souvent : elles doivent tenir "+
+        "à la répétition, donc courtes et sèches."+
+      LT+"/div"+GT+
+    LT+"/div"+GT+
     LT+"h2"+GT+"À écouter"+LT+"/h2"+GT+LT+'div id="jl"'+GT+LT+"/div"+GT;
   const jl=document.getElementById("jl"); jl.innerHTML="";
   if(!att.length){ jl.innerHTML=LT+'p class="vide"'+GT+
@@ -1947,6 +2051,21 @@ function ecouter(i,btn){
   pl.play().catch(function(e){ btn.textContent="▶ Écouter"; playing=null;
     alert("Lecture impossible : "+((e&&e.name)?e.name:e)); });
 }
+async function creerPhrase(){
+  const t=document.getElementById("ph").value.trim();
+  const c=document.getElementById("cat").value;
+  const m=document.getElementById("msg-ph");
+  if(t.length<4){ m.textContent="Phrase trop courte."; return; }
+  m.textContent="Fabrication en cours (quelques secondes)...";
+  try{
+    const d=await (await fetch("/api/regie/voix/creer",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({texte:t, categorie:c})})).json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+d.message;
+    if(d.ok){ document.getElementById("ph").value=""; charger(); }
+  }catch(e){ m.textContent="Erreur réseau (la fabrication peut prendre du temps)."; }
+}
+
 async function voter(h,statut){
   try{ await fetch("/api/regie/review",{method:"POST",
     headers:{"Content-Type":"application/json"},body:JSON.stringify({h:h,status:statut})});

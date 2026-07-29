@@ -3485,6 +3485,27 @@ def synthesize_endpoint(session_id: int, text: str,
     }
 
 
+@app.post("/creer")
+def creer_endpoint(text: str, category: str = "custom"):
+    """Crée un jingle SANS le mettre à l'antenne.
+
+    Utilisé par la page de régie quand le chef écrit lui-même une phrase : le fichier est
+    généré et rangé dans la bibliothèque, mais il n'est PAS assigné à la playlist AzuraCast.
+    Il n'ira à l'antenne que lorsque le chef aura cliqué « Garder » après écoute — c'est sa
+    règle : aucune phrase ne passe sans validation. Synchrone (quelques secondes).
+    """
+    texte = (text or "").strip()
+    if len(texte) < 4:
+        raise HTTPException(400, "texte trop court")
+    if len(texte) > 300:
+        raise HTTPException(400, "texte trop long (300 caracteres max)")
+    try:
+        chemin = generate_phrase(texte, category)
+    except Exception as e:
+        raise HTTPException(500, f"generation impossible : {str(e)[:160]}")
+    return {"ok": True, "fichier": chemin.name, "text": texte, "category": category}
+
+
 @app.post("/synthesize_template")
 def synthesize_template(session_id: int, template_key: str,
                         artist: str = "", title: str = ""):
