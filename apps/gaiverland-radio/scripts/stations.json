@@ -1,5 +1,5 @@
 {
-  "_doc": "Config des stations thématiques Gaiverland — lue par le downloader (remplissage des bacs) ET le moteur de rotation multi-station. Curation musicale (seeds + genres) = Régis (cf carnet-regis). Yann = mécanique. theme = sous-dossier média (tag déterministe, indépendant de la classif Discogs). filter.genres (optionnel) = filtrage par genre_top1 de l'analyzer pour les stations dont le genre est fiable (chill/hard). search_suffix = mot-clé accolé à la recherche YT pour fiabiliser le genre. Filet de sécurité : le filtre bpm/énergie de la rotation exclut les mauvais matchs. extra_genres (optionnel, OPT-IN par station) = genres autorisés EN RENFORT du dossier, pour une scène dont le bac local est trop maigre ; la règle « dossier = autorité » reste le défaut partout ailleurs. N'y mettre QUE des genres où Essentia est fiable. 2026-07-30 : la station 7 (ex-Synthwave) devient BOOST — gros son qui se chante (refrain connu + drop de basse). Le nom court AzuraCast reste gaiverland_synthwave pour ne pas casser le renvoi NPM /synthwave.mp3 ; seul le nom affiché change. Les fichiers music/synthwave/ sont CONSERVÉS, simplement plus sélectionnés.",
+  "_doc": "Config des stations thématiques Gaiverland — lue par le downloader (remplissage des bacs) ET le moteur de rotation multi-station. Curation musicale (seeds + genres) = Régis (cf carnet-regis). Yann = mécanique. theme = sous-dossier média (tag déterministe, indépendant de la classif Discogs). filter.genres (optionnel) = filtrage par genre_top1 de l'analyzer pour les stations dont le genre est fiable (chill/hard). search_suffix = mot-clé accolé à la recherche YT pour fiabiliser le genre. Filet de sécurité : le filtre bpm/énergie de la rotation exclut les mauvais matchs. extra_genres (optionnel, OPT-IN par station) = genres autorisés EN RENFORT du dossier, pour une scène dont le bac local est trop maigre ; la règle « dossier = autorité » reste le défaut partout ailleurs. N'y mettre QUE des genres où Essentia est fiable. 2026-07-30 : la station 7 (ex-Synthwave) devient BOOST — gros son qui se chante (refrain connu + drop de basse). Le nom court AzuraCast reste gaiverland_synthwave pour ne pas casser le renvoi NPM /synthwave.mp3 ; seul le nom affiché change. Les fichiers music/synthwave/ sont CONSERVÉS, simplement plus sélectionnés. exclude_paths (optionnel) = motif de chemins ecartes, indispensable pour une station SANS dossier qui selectionne par genre : sinon un titre de scene mal etiquete (un lofi tague House) remonterait sur elle.",
   "media_root": "/var/azuracast/stations/gaiverlandradio/media/music",
   "stations": [
     {
@@ -435,6 +435,40 @@
         1.0
       ],
       "filter": {},
+      "seeds": []
+    },
+    {
+      "slug": "club",
+      "az_station_id": 9,
+      "label": "Gaiverland Club",
+      "enabled": true,
+      "bpm": [
+        118,
+        142
+      ],
+      "energy": [
+        0.0,
+        1.0
+      ],
+      "filter": {
+        "genres": [
+          "House",
+          "Electro House",
+          "Techno",
+          "Progressive House",
+          "Bassline",
+          "Electro",
+          "Euro House",
+          "Tech House",
+          "Speed Garage",
+          "Minimal Techno",
+          "Italo House",
+          "Progressive Breaks",
+          "Big Room",
+          "Future House"
+        ]
+      },
+      "exclude_paths": "/music/(chill|lofi|phonk|synthwave|hard|boost)/|/gaiverland_[a-z0-9]+/media/",
       "seeds": []
     }
   ]

@@ -156,6 +156,12 @@ def select_tracks(cur, st: dict) -> list:
     elif flt.get("genres"):
         where.append("genre_top1 = ANY(%s)")
         params.append(flt["genres"])
+        # Une station sans dossier n'a aucune barriere naturelle : sans ce filtre, un titre
+        # de scene mal etiquete par Essentia (un lofi tague « House ») lui remonterait dessus.
+        excl = st.get("exclude_paths")
+        if excl:
+            where.append("file_path !~ %s")
+            params.append(excl)
     else:
         return []  # station sans filtre exploitable
 
