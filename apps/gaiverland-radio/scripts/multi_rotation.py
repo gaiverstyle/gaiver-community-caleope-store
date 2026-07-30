@@ -28,6 +28,10 @@ AZ_KEY          = os.environ.get("AZURACAST_API_KEY", "")
 STATIONS_CONFIG = os.environ.get("STATIONS_CONFIG", "/app/stations.json")
 PL_NAME         = os.environ.get("ROTATION_PLAYLIST_NAME", "Gaiverland Rotation")
 MAX_TRACKS      = int(os.environ.get("ROTATION_MAX_TRACKS", "250"))
+# Plancher : une scène dont le bac est en cours de remplissage ne doit PAS partir à l'antenne
+# avec une poignée de titres — 5 titres = une boucle de 18 min, c'est pire que de garder
+# l'ancien contenu. En dessous de ce seuil, on laisse la rotation en place et on le dit.
+MIN_TRACKS      = int(os.environ.get("ROTATION_MIN_TRACKS", "25"))
 MEDIA_MARKER    = "/media/"   # tracks.file_path = …/stations/<st>/media/music/<theme>/x.mp3
 _TIMEOUT        = 30
 
@@ -288,6 +292,11 @@ def rotate_station(cur, st: dict) -> None:
         if kept:                      # garde-fou : ne JAMAIS vider une scène sur les seuls votes
             rows = kept
     ordered = order_coherent(rows, MAX_TRACKS)
+    if len(ordered) < MIN_TRACKS:
+        print(f"  ⏳ {label}: bac en remplissage ({len(ordered)}/{MIN_TRACKS} titres) — "
+              f"rotation actuelle CONSERVÉE, bascule au prochain passage une fois le seuil atteint",
+              flush=True)
+        return
     encored = {tid for tid, s in vs.items() if s >= VOTE_ENCORE_THRESHOLD}
     if encored:
         ordered.sort(key=lambda t: 0 if t["id"] in encored else 1)  # tri STABLE → ENCORE en tête, ordre cohérent préservé
