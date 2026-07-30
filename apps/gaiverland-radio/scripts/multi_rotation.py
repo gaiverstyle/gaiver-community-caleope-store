@@ -15,7 +15,7 @@ moteur, on la re-synchronise à chaque passe. Les stations sans az_station_id (p
 provisionnées) sont loggées et sautées — dès qu'on renseigne leur id dans stations.json,
 elles entrent automatiquement dans la rotation.
 """
-import os
+import os, re
 import sys
 import json
 import httpx
@@ -137,9 +137,18 @@ def select_tracks(cur, st: dict) -> list:
     flt = st.get("filter", {}) or {}
     where, params = [], []
     theme = st.get("theme") or flt.get("theme")   # theme = champ RACINE de la station (pas dans filter)
+    extra = st.get("extra_genres") or []
     if theme:
-        where.append("(file_path LIKE %s OR file_path LIKE %s)")
+        # Renfort par genre, UNIQUEMENT si la station le demande explicitement (extra_genres).
+        # C'est l'exception assumée à « dossier = autorité » : le chef veut que la Hard vienne
+        # piocher les hardstyle qui vivent dans le dossier mainstage, SANS les en retirer.
+        # N'ouvrir qu'à des genres où Essentia ne se trompe pas (Hardstyle oui, Hardcore NON).
+        cond = "(file_path LIKE %s OR file_path LIKE %s"
         params += [f"%{MEDIA_MARKER}music/{theme}/%", f"%/gaiverland_{theme}/media/%"]
+        if extra:
+            cond += " OR genre_top1 = ANY(%s)"
+            params.append(extra)
+        where.append(cond + ")")
     elif flt.get("genres"):
         where.append("genre_top1 = ANY(%s)")
         params.append(flt["genres"])
@@ -162,7 +171,22 @@ def select_tracks(cur, st: dict) -> list:
                 AND {' AND '.join(where)}
               LIMIT 2000"""
     cur.execute(sql, params)
-    return cur.fetchall()
+    rows = cur.fetchall()
+
+    # Dédoublonnage PAR CHANSON (même logique que playlist.py) : la bibliothèque contient
+    # plusieurs copies du même titre sous des noms de fichier différents. Sans ça, élargir le
+    # bac fait remonter « Vielleicht Vielleicht » trois fois et « Katyusha » quatre fois.
+    vus, uniques = set(), []
+    for r in rows:
+        cle = re.sub(r"[^a-z0-9]+", "",
+                     ((r.get("artist") or "") + (r.get("title") or "")).lower())
+        if cle and cle in vus:
+            continue
+        vus.add(cle)
+        uniques.append(r)
+    if len(uniques) < len(rows):
+        print(f"  ↺ {len(rows) - len(uniques)} doublon(s) de chanson écarté(s)", flush=True)
+    return uniques
 
 
 def order_coherent(rows: list, limit: int) -> list:
