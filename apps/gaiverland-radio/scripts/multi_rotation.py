@@ -94,7 +94,13 @@ def az_station_files(sid: int) -> list:
 
 
 def az_batch_assign(sid: int, paths: list, pid: int) -> bool:
-    """Ajoute (idempotent) des fichiers à une playlist via le batch endpoint (chemins)."""
+    """Ajoute des fichiers à une playlist via le batch endpoint (chemins).
+    ⚠️ CE POINT D'ENTRÉE N'EST **PAS** IDEMPOTENT : il ajoute une ligne
+    station_playlist_media à CHAQUE appel, même si le fichier est déjà dans la playlist.
+    Renvoyer toute la sélection à chaque rotation (toutes les 30 min) faisait donc enfler
+    les playlists — mesuré le 31/07 : la Club avait 1178 entrées pour 250 titres, certains
+    présents 30 fois, donc tirés 30 fois plus souvent. C'est audible.
+    → L'APPELANT DOIT filtrer les fichiers déjà assignés avant d'appeler."""
     if not paths:
         return False
     try:
@@ -333,8 +339,12 @@ def rotate_station(cur, st: dict) -> None:
         print(f"  ⚠ {label}: playlist '{PL_NAME}' introuvable/incréable", flush=True)
         return
 
-    # Assigner les voulus + retirer les périmés (fichiers encore dans la playlist mais plus voulus).
-    az_batch_assign(sid, desired_paths, pid)
+    # Assigner UNIQUEMENT ce qui n'y est pas déjà (le batch n'est pas idempotent, cf ci-dessus),
+    # puis retirer les périmés (encore dans la playlist mais plus voulus).
+    deja = {f["id"] for f in files if pid in [p["id"] for p in f.get("playlists", [])]}
+    a_ajouter = [p for p, i in zip(desired_paths, desired_ids) if i not in deja]
+    if a_ajouter:
+        az_batch_assign(sid, a_ajouter, pid)
     desired_set = set(desired_ids)
     removed = 0
     for f in files:
@@ -345,6 +355,7 @@ def rotate_station(cur, st: dict) -> None:
                 removed += 1
     az_set_order(sid, pid, desired_ids)
     print(f"  ✓ {label} (station {sid}): {len(desired_ids)} titres en rotation"
+          + (f", +{len(a_ajouter)} ajoutés" if a_ajouter else "")
           + (f", {removed} périmés retirés" if removed else "")
           + (f" | votes: -{n_q} quarantaine, {n_e} boostés" if (n_q or n_e) else ""), flush=True)
 
