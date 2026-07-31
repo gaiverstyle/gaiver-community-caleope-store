@@ -317,11 +317,23 @@ def rotate_station(cur, st: dict) -> None:
 
     # Map chemin absolu DB → fichier AzuraCast de CETTE station (média partagé, matché par basename).
     files = az_station_files(sid)
+    pid_actuel = az_get_or_create_playlist(sid, PL_NAME)
+    # ⚠️ AMBIGUÏTÉ DES HOMONYMES : le même titre existe sous le même nom de fichier dans
+    # plusieurs dossiers (ex. « Hello » en community ET en classics). Si on associe le nom
+    # à un exemplaire différent de celui déjà présent dans la playlist, on croit devoir
+    # l'ajouter alors qu'il y est → une ligne en double à chaque rotation.
+    # → À nom égal, on PRÉFÈRE l'exemplaire déjà rattaché à la playlist de rotation.
     base_to_file = {}
     for f in files:
         p = f.get("path")
-        if p:
-            base_to_file.setdefault(os.path.basename(p), f)
+        if not p:
+            continue
+        b = os.path.basename(p)
+        dedans = pid_actuel in [x["id"] for x in (f.get("playlists") or [])]
+        garde = base_to_file.get(b)
+        if garde is None or (dedans and not garde[1]):
+            base_to_file[b] = (f, dedans)
+    base_to_file = {k: v[0] for k, v in base_to_file.items()}
 
     desired_paths, desired_ids = [], []
     for t in ordered:
@@ -334,7 +346,7 @@ def rotate_station(cur, st: dict) -> None:
               f"(média pas encore scanné/partagé sur station {sid})", flush=True)
         return
 
-    pid = az_get_or_create_playlist(sid, PL_NAME)
+    pid = pid_actuel
     if not pid:
         print(f"  ⚠ {label}: playlist '{PL_NAME}' introuvable/incréable", flush=True)
         return
