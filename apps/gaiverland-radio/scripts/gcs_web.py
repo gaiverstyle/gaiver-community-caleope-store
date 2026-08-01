@@ -3009,6 +3009,8 @@ audio{width:100%;margin-top:18px;border-radius:30px}
 @media(hover:none){.cp{opacity:.75}}
 .stage .ico{font-size:30px}
 .stage .nm{margin-top:8px;font-size:16px}
+.stage .desc{margin-top:5px;font-size:11.5px;line-height:1.35;font-style:italic;opacity:.72;
+  min-height:2.6em;display:flex;align-items:center;justify-content:center;padding:0 2px}
 .stage .st{font-family:sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;
   margin-top:8px;padding:2px 8px;border-radius:10px;display:inline-block;
   background:rgba(0,0,0,.28);opacity:.9}
@@ -3242,14 +3244,14 @@ footer .c15{margin-top:6px;font-size:12px}
 <div class="card">
   <h2>Les scènes</h2>
   <div class="stages">
-    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="botb" title="C'est cette station que le bot Discord diffuse en vocal">🤖 bot Discord</div><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
-    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
-    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
-    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
-    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
-    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🔊</div><div class="nm">Boost</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
-    <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
-    <div class="stage live" data-st="club" onclick="selectStation('club')"><div class="ico">🪩</div><div class="nm">Club</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'club')">🔗</button></div>
+    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="botb" title="C'est cette station que le bot Discord diffuse en vocal">🤖 bot Discord</div><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="desc">Le cœur du festival — les hymnes, la foule, les bras en l'air.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
+    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="desc">L'après-midi qui plane — on respire, on se pose.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
+    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="desc">La zone rouge — ça cogne, sans compromis.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
+    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="desc">Les bas-fonds néon — basses sales, la nuit qui gronde.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
+    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="desc">Le coin studieux — vinyle qui craque, le temps ralentit.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
+    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🔊</div><div class="nm">Boost</div><div class="desc">Le grand frisson — les drops qui retournent, la hype jusqu'aux larmes.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
+    <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><div class="desc">La salle des souvenirs — l'âge d'or qu'on connaît par cœur.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
+    <div class="stage live" data-st="club" onclick="selectStation('club')"><div class="ico">🪩</div><div class="nm">Club</div><div class="desc">La warehouse à 3h — quand la nuit refuse de finir.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'club')">🔗</button></div>
   </div>
 </div>
 
