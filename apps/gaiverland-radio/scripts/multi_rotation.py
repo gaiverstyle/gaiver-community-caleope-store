@@ -168,6 +168,14 @@ def select_tracks(cur, st: dict) -> list:
         if excl:
             where.append("file_path !~ %s")
             params.append(excl)
+        # Filet fin pour une station-genre : Essentia tague « House » des anthems festival/pop
+        # (Avicii, Swedish House Mafia, Guetta, Afrojack…) qui n'ont rien d'une warehouse à 3h.
+        # On les écarte par NOM (artiste+titre, insensible casse), tunable dans stations.json.
+        # Sans dossier thème, c'est la seule barrière possible contre la mésétiquette de genre.
+        excl_t = st.get("exclude_titles")
+        if excl_t:
+            where.append("lower(coalesce(artist,'') || ' ' || coalesce(title,'')) !~ %s")
+            params.append(excl_t)
     else:
         return []  # station sans filtre exploitable
 
