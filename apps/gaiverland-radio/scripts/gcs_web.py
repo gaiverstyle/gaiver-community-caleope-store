@@ -3171,10 +3171,20 @@ footer .c15{margin-top:6px;font-size:12px}
 .playbar .fxbar{margin:0;flex:0 1 auto}
 @media(min-width:880px){
   .wrap{max-width:1200px}
-  header{padding:26px 0 12px}
-  .console-grid{grid-template-columns:188px minmax(0,1fr) 188px;align-items:stretch}
-  .stages.col{grid-template-columns:1fr}
-  .console-center .hero{aspect-ratio:auto;height:min(42vh,380px)}
+  header{padding:16px 0 6px}
+  header h1{font-size:clamp(36px,5vw,56px)}
+  header .fete{font-size:12px;letter-spacing:5px}
+  header .tagline{font-size:15px;margin-top:5px}
+  .pennant{display:none}
+  .card{padding:16px 20px;margin-top:16px}
+  .console-grid{grid-template-columns:188px minmax(0,1fr) 188px;align-items:stretch;gap:12px}
+  .stages.col{grid-template-columns:1fr;gap:8px}
+  .console-center .hero{aspect-ratio:auto;height:min(34vh,290px)}
+  .console-center .hero-fg{justify-content:center;gap:8px;padding:14px}
+  .console-center .hero-cover{width:auto;height:44%}
+  .console-center .hero-t{font-size:17px;line-height:1.15;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .console-center .hero-a{font-size:13px}
+  .stationDesc{min-height:2.6em}
 }
 @media(max-width:879px){
   .console-center{order:-1}
