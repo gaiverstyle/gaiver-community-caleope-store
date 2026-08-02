@@ -2992,6 +2992,7 @@ PAGE = """<!doctype html>
   --cream:#fff4e6; --ink:#2a1a33;
 }
 *{margin:0;padding:0;box-sizing:border-box}
+html{background:var(--nightblue)}
 body{
   font-family:Georgia,'Times New Roman',serif;
   background:linear-gradient(175deg,var(--nightblue) 0%,#3d1d5c 30%,var(--sun3) 55%,var(--sun2) 78%,var(--sun1) 100%);
