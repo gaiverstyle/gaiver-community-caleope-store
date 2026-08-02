@@ -3155,6 +3155,30 @@ footer .c15{margin-top:6px;font-size:12px}
 .fs-vol{display:flex;align-items:center;gap:9px}
 .main-viz{width:100%;height:56px;display:block;margin:14px 0 2px;border-radius:10px;background:rgba(25,16,54,.25)}
 @media (max-width:600px){#fs-center{gap:1.6vh}#fs-cover{width:min(30vh,55vw)}}
+/* ===== Refonte lecteur : console (boutons autour du visualizer, desc sous les boutons, player en bas séparé) ===== */
+.console-grid{display:grid;grid-template-columns:1fr;gap:14px;align-items:center}
+.console-center{display:flex;flex-direction:column;gap:10px;min-width:0}
+.stages.col{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;align-content:start}
+.stages.col .stage{padding:12px 8px;margin:0}
+.stages.col .stage .ico{font-size:26px}
+.stages.col .stage .nm{margin-top:4px;font-size:15px}
+.stage .desc,.stage .st{display:none}
+.stationDesc{font-size:13.5px;line-height:1.55;font-style:italic;opacity:.85;text-align:center;
+  min-height:3.4em;padding:4px 6px 0;transition:opacity .2s}
+.playbar{display:flex;align-items:center;gap:14px 22px;flex-wrap:wrap;margin-top:18px;
+  padding-top:15px;border-top:1px solid rgba(255,244,230,.18)}
+.playbar .np{flex:1 1 240px;margin:0}
+.playbar .fxbar{margin:0;flex:0 1 auto}
+@media(min-width:880px){
+  .wrap{max-width:1200px}
+  header{padding:26px 0 12px}
+  .console-grid{grid-template-columns:188px minmax(0,1fr) 188px;align-items:stretch}
+  .stages.col{grid-template-columns:1fr}
+  .console-center .hero{aspect-ratio:auto;height:min(42vh,380px)}
+}
+@media(max-width:879px){
+  .console-center{order:-1}
+}
 </style></head><body><div class="wrap">
 
 <header>
@@ -3166,30 +3190,49 @@ footer .c15{margin-top:6px;font-size:12px}
 
 <div class="card">
   <h2>En direct <span class="live-badge">EN DIRECT</span></h2>
-  <div class="hero">
-    <button class="hero-fs" onclick="openFs()" aria-label="Plein écran" title="Plein écran">⛶</button>
-    <div class="hero-bg" id="hero-bg"></div>
-    <div class="hero-fg">
-      <img class="hero-cover" id="hero-cover" alt="" onerror="this.style.visibility='hidden'">
-      <div class="hero-t" id="title">…</div>
-      <div class="hero-a" id="artist"></div>
+  <div class="console-grid">
+    <div class="stages col">
+      <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="botb" title="C'est cette station que le bot Discord diffuse en vocal">🤖 bot</div><div class="ico">🎪</div><div class="nm">Mainstage</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
+      <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
+      <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
+      <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
+    </div>
+    <div class="console-center">
+      <div class="hero">
+        <button class="hero-fs" onclick="openFs()" aria-label="Plein écran" title="Plein écran">⛶</button>
+        <div class="hero-bg" id="hero-bg"></div>
+        <div class="hero-fg">
+          <img class="hero-cover" id="hero-cover" alt="" onerror="this.style.visibility='hidden'">
+          <div class="hero-t" id="title">…</div>
+          <div class="hero-a" id="artist"></div>
+        </div>
+      </div>
+      <canvas id="main-viz" class="main-viz"></canvas>
+    </div>
+    <div class="stages col">
+      <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
+      <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🔊</div><div class="nm">Boost</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
+      <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
+      <div class="stage live" data-st="club" onclick="selectStation('club')"><div class="ico">🪩</div><div class="nm">Club</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'club')">🔗</button></div>
     </div>
   </div>
-  <div class="np">
-    <div style="flex:1;min-width:200px">
-      <div class="meta" id="meta"></div>
-      <div class="bar"><i id="prog"></i></div>
-    </div>
-    <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
-    <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)"><span class="ic">⟳</span><span>Direct</span></button>
-  </div>
+  <div class="stationDesc" id="stationDesc">La grande scène, celle où tout Gaiverland converge quand la nuit tombe et que les basses font trembler le sol. On n'y joue que les hymnes — ceux qui lèvent cent mille bras d'un coup, ceux qu'on reprend en chœur sans connaître les paroles. Si tu ne sais pas où aller, viens là : c'est le cœur qui bat.</div>
   <audio id="player" preload="none"></audio>
   <audio id="player-b" preload="none"></audio>
-  <canvas id="main-viz" class="main-viz"></canvas>
-  <div class="fxbar">
-    <span class="fx-ico" aria-hidden="true">🔊</span>
-    <input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume">
-    <button class="fx-toggle" onclick="toggleFxPanel()" aria-label="Effets audio">⚙ effets</button>
+  <div class="playbar">
+    <div class="np">
+      <div style="flex:1;min-width:160px">
+        <div class="meta" id="meta"></div>
+        <div class="bar"><i id="prog"></i></div>
+      </div>
+      <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
+      <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)"><span class="ic">⟳</span><span>Direct</span></button>
+    </div>
+    <div class="fxbar">
+      <span class="fx-ico" aria-hidden="true">🔊</span>
+      <input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume">
+      <button class="fx-toggle" onclick="toggleFxPanel()" aria-label="Effets audio">⚙ effets</button>
+    </div>
   </div>
   <div id="fx-panel" class="fx-panel fx-hidden">
     <div class="fx-lab">Ambiance</div>
@@ -3238,20 +3281,6 @@ footer .c15{margin-top:6px;font-size:12px}
       <div class="wx" id="wx"></div>
     </div>
     <div class="next" id="tour-next">prochaine ville :<br>le convoi décidera. 🚐</div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Les scènes</h2>
-  <div class="stages">
-    <div class="stage live on" data-st="main" onclick="selectStation('main')"><div class="botb" title="C'est cette station que le bot Discord diffuse en vocal">🤖 bot Discord</div><div class="ico">🎪</div><div class="nm">Mainstage</div><div class="desc">La grande scène, celle où tout Gaiverland converge quand la nuit tombe et que les basses font trembler le sol. Ici on ne joue que les hymnes — ceux qui lèvent cent mille bras d'un seul coup, ceux qu'on reprend en chœur sans même connaître les paroles. Si tu ne sais pas où aller, viens là : c'est le cœur qui bat.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'main')">🔗</button></div>
-    <div class="stage live" data-st="chill" onclick="selectStation('chill')"><div class="ico">🌙</div><div class="nm">Chill</div><div class="desc">Le jardin suspendu, à l'écart du chaos. Ici le soleil décline sur Gaiverland, les nappes s'étirent et le temps ralentit. Deep house feutrée, ambient, mélodies qui planent — de quoi respirer entre deux tempêtes. La scène pour se poser sans jamais s'endormir.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'chill')">🔗</button></div>
-    <div class="stage live" data-st="hard" onclick="selectStation('hard')"><div class="ico">🔥</div><div class="nm">Hard</div><div class="desc">La zone rouge, tout au fond du site, là où le sol ne s'arrête jamais de cogner. Hardstyle, hardcore, kicks qui te rentrent dans la poitrine — ici, aucun compromis. Pour ceux qui veulent que ça tape, que ça brûle, que ça défonce jusqu'au bout de la nuit. Entre à tes risques.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'hard')">🔗</button></div>
-    <div class="stage live" data-st="phonk" onclick="selectStation('phonk')"><div class="ico">🏎️</div><div class="nm">Phonk</div><div class="desc">Les bas-fonds de Gaiverland, sous les néons roses et la brume. Basses sales, cowbells, ambiance drift et poursuite nocturne — le bitume défile, l'adrénaline est froide. C'est la scène de la nuit qui gronde, des phares dans le noir. Monte le son et roule.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'phonk')">🔗</button></div>
-    <div class="stage live" data-st="lofi" onclick="selectStation('lofi')"><div class="ico">🎧</div><div class="nm">Lofi</div><div class="desc">Le refuge studieux, la petite pièce à l'écart du festival où la pluie tombe derrière la vitre. Vinyle qui craque, beats feutrés, jazz endormi — le temps s'y suspend. La scène pour bosser, lire, rêver, ou juste laisser l'esprit divaguer une heure.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'lofi')">🔗</button></div>
-    <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🔊</div><div class="nm">Boost</div><div class="desc">La scène qui pousse. Hyper techno, kicks qui rebondissent, leads euphoriques lancés à pleine vitesse — le tempo te prend les jambes et refuse de les lâcher. C'est la station des montées d'adrénaline, celle qu'on colle quand le corps veut avancer plus vite que la tête. Roule, cours, vole : elle est faite pour ça.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
-    <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><div class="desc">La salle des souvenirs, la scène où le temps s'arrête. Ici tournent les hymnes de l'âge d'or — ceux qu'on connaît par cœur, qui sentent les festivals d'avant et les étés qui ne finissaient jamais. De l'EDM doré aux tubes intemporels, c'est la scène de la nostalgie qui rassemble tout le monde. Ferme les yeux, t'y es déjà.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
-    <div class="stage live" data-st="club" onclick="selectStation('club')"><div class="ico">🪩</div><div class="nm">Club</div><div class="desc">La warehouse cachée de Gaiverland, celle qui n'ouvre que quand tout le reste ferme. Il est 3h du matin, la boule à facettes tourne encore, l'électro de soirée refuse de laisser partir la nuit. House, techno, basslines hypnotiques — c'est la scène de ceux qui ne veulent pas rentrer. La nuit n'est pas finie tant qu'elle joue.</div><div class="st">Live</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'club')">🔗</button></div>
   </div>
 </div>
 
@@ -3460,6 +3489,18 @@ function setBg(){
     if(fsOpen) document.getElementById('fs-bg').style.backgroundImage=u; };
   img.src=url;
 }
+// Descriptions lore par station, affichées SOUS les boutons (mises à jour au clic).
+const STATION_DESC={
+  main:"La grande scène, celle où tout Gaiverland converge quand la nuit tombe et que les basses font trembler le sol. On n'y joue que les hymnes — ceux qui lèvent cent mille bras d'un coup, ceux qu'on reprend en chœur sans connaître les paroles. Si tu ne sais pas où aller, viens là : c'est le cœur qui bat.",
+  chill:"Le jardin suspendu, à l'écart du chaos. Ici pas de kick, juste des nappes qui s'étirent et le temps qui ralentit — ambient et planant pur, à la Tycho, Bonobo ou Jon Hopkins. La scène pour respirer, fermer les yeux et laisser l'esprit dériver.",
+  hard:"La zone rouge, tout au fond du site, là où le sol ne s'arrête jamais de cogner. Hardstyle euphorique — les kicks claquent mais les mélodies soulèvent, le genre qui te fait sauter les bras en l'air. Ça tape fort, mais ça reste une fête.",
+  phonk:"Les bas-fonds de Gaiverland, sous les néons roses et la brume. Drift et cowbells, basses sales, dark et brazilian phonk — la nuit qui gronde, le bitume qui défile, l'adrénaline froide. Monte le son et roule.",
+  lofi:"Le refuge tout doux, la petite pièce où la pluie tombe derrière la vitre. Vinyle qui craque, beats feutrés, rien qui monte — la scène la plus lente du festival. Pour s'endormir, décompresser, ou laisser la nuit passer en douceur.",
+  synthwave:"La scène qui pousse. Hyper techno, kicks qui rebondissent, leads euphoriques lancés à pleine vitesse — le tempo te prend les jambes et refuse de les lâcher. La station des montées d'adrénaline. Roule, cours, vole : elle est faite pour ça.",
+  classics:"La salle des souvenirs, la scène où le temps s'arrête. Les hymnes de l'âge d'or qu'on connaît par cœur, l'EDM doré et les tubes intemporels, plus les pépites récentes qui tiennent. La nostalgie qui rassemble tout le monde. Ferme les yeux, t'y es déjà.",
+  club:"La warehouse de Gaiverland, quand la nuit refuse de finir. House de club groovy et fédératrice — Dom Dolla, MK, Oliver Heldens, la house vocale qui fait bouger sans jamais tomber dans le dur. La scène de ceux qui ne veulent pas rentrer."
+};
+function showStationDesc(s){const el=document.getElementById('stationDesc');const t=STATION_DESC[s];if(el&&t)el.textContent=t;}
 function selectStation(s){
   if(s===curStation) return;
   const wasPlaying=!AA().paused;
@@ -3467,6 +3508,7 @@ function selectStation(s){
   B.pause(); B.removeAttribute('src'); B.load();
   curStation=s;
   document.querySelectorAll('.stage[data-st]').forEach(t=>t.classList.toggle('on', t.dataset.st===s));
+  showStationDesc(s);
   audioUrl=''; lastTitle=''; npHist=[];   // autre scène = autre timeline : on repart à zéro
   updateFxAvail();
   refresh().then(()=>{ if(wasPlaying) playLive(); });
