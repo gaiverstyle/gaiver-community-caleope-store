@@ -2972,11 +2972,14 @@ PAGE = """<!doctype html>
 <meta property="og:title" content="Gaiverland — Le festival permanent">
 <meta property="og:description" content="La radio-festival qui ne s'arrête jamais. 9 scènes — du chill à la hyper techno. Écoute en direct.">
 <meta property="og:url" content="https://gaiverland.gaiver-it.fr/">
-<meta property="og:image" content="https://gaiverland.gaiver-it.fr/icon.svg">
+<meta property="og:image" content="https://gaiverland.gaiver-it.fr/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Gaiverland — le festival permanent">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Gaiverland — Le festival permanent">
 <meta name="twitter:description" content="La radio-festival qui ne s'arrête jamais. 9 scènes — du chill à la hyper techno.">
-<meta name="twitter:image" content="https://gaiverland.gaiver-it.fr/icon.svg">
+<meta name="twitter:image" content="https://gaiverland.gaiver-it.fr/assets/og.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Gaiverland">
@@ -3300,6 +3303,20 @@ body{padding-bottom:96px}
 .don-wallet{text-decoration:none;display:inline-block;background:linear-gradient(135deg,#f7931a,#ffb56b)!important}
 .don-note{font-size:12px;opacity:.65;margin-top:10px}
 .don-breakdown{margin-top:18px;font-size:13.5px;line-height:1.6;opacity:.85;padding-top:14px;border-top:1px solid rgba(255,244,230,.14)}
+/* ===== Partager + inviter le bot ===== */
+.spread{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:18px;position:relative}
+.spreadbtn{padding:12px 18px;border:none;border-radius:26px;cursor:pointer;font-family:Georgia,serif;
+  font-size:15px;color:var(--ink);text-decoration:none;display:inline-block;transition:transform .15s}
+.spreadbtn:hover{transform:translateY(-2px)}
+.spreadbtn.share{background:linear-gradient(135deg,#ffd29a,#ff8fa3)}
+.spreadbtn.discord{background:#5865F2;color:#fff;font-weight:700}
+.sharemenu{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);z-index:30;
+  display:flex;flex-direction:column;min-width:190px;background:rgba(20,12,40,.96);
+  border:1px solid rgba(255,244,230,.2);border-radius:14px;overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,.45)}
+.sharemenu a,.sharemenu button{padding:12px 16px;text-align:left;color:var(--cream);text-decoration:none;
+  background:none;border:0;border-bottom:1px solid rgba(255,244,230,.08);font:inherit;font-size:15px;cursor:pointer}
+.sharemenu a:last-child,.sharemenu button:last-child{border-bottom:0}
+.sharemenu a:hover,.sharemenu button:hover{background:rgba(255,244,230,.12)}
 </style></head><body><div class="wrap">
 
 <header>
@@ -3357,6 +3374,18 @@ body{padding-bottom:96px}
     <button class="v-blacklist" id="btnBlacklist" style="display:none" onclick="blacklistTrack()">🚫 blacklist</button>
   </div>
   <div class="votemsg" id="votemsg"></div>
+  <div class="spread">
+    <button class="spreadbtn share" onclick="shareGaiverland()">🔗 Partager la radio</button>
+    <a class="spreadbtn discord" href="https://discord.com/oauth2/authorize?client_id=1515364248602284283&permissions=3148800&scope=bot%20applications.commands" target="_blank" rel="noopener">🤖 Ajouter le bot à ton Discord</a>
+    <div id="sharemenu" class="sharemenu" hidden>
+      <a target="_blank" rel="noopener" id="sh-wa">WhatsApp</a>
+      <a target="_blank" rel="noopener" id="sh-tg">Telegram</a>
+      <a target="_blank" rel="noopener" id="sh-tw">X / Twitter</a>
+      <a target="_blank" rel="noopener" id="sh-fb">Facebook</a>
+      <a target="_blank" rel="noopener" id="sh-rd">Reddit</a>
+      <button id="sh-copy" onclick="copyShareLink()">Copier le lien</button>
+    </div>
+  </div>
 </div>
 </section>
 
@@ -3732,6 +3761,26 @@ function copyBtc(){
   var done=function(){ var b=document.getElementById('don-copybtn'); if(b){ var t=b.textContent; b.textContent='Copié ✓'; setTimeout(function(){ b.textContent=t; },1500); } };
   if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(a).then(done,done); }
   else { try{ var i=document.getElementById('don-addr'),rng=document.createRange(); rng.selectNode(i); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(rng); document.execCommand('copy'); }catch(e){} done(); }
+}
+
+// ── Partage réseaux (Web Share natif sur mobile, menu en repli sur PC) + invit bot Discord ──
+var SHARE_URL='https://gaiverland.gaiver-it.fr', SHARE_TXT="Gaiverland — la radio-festival qui ne s'arrête jamais 🎪 9 scènes en direct, tu votes, tu proposes tes sons.";
+function initShare(){
+  var u=encodeURIComponent(SHARE_URL), t=encodeURIComponent(SHARE_TXT), tu=encodeURIComponent(SHARE_TXT+' '+SHARE_URL);
+  var set=function(id,h){ var e=document.getElementById(id); if(e)e.href=h; };
+  set('sh-wa','https://wa.me/?text='+tu);
+  set('sh-tg','https://t.me/share/url?url='+u+'&text='+t);
+  set('sh-tw','https://twitter.com/intent/tweet?text='+t+'&url='+u);
+  set('sh-fb','https://www.facebook.com/sharer/sharer.php?u='+u);
+  set('sh-rd','https://www.reddit.com/submit?url='+u+'&title='+t);
+}
+async function shareGaiverland(){
+  if(navigator.share){ try{ await navigator.share({title:'Gaiverland',text:SHARE_TXT,url:SHARE_URL}); return; }catch(e){ if(e&&e.name==='AbortError') return; } }
+  var m=document.getElementById('sharemenu'); if(m) m.hidden=!m.hidden;
+}
+function copyShareLink(){
+  var done=function(){ var b=document.getElementById('sh-copy'); if(b){ var t=b.textContent; b.textContent='Copié ✓'; setTimeout(function(){ b.textContent=t; },1500); } };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(SHARE_URL).then(done,done); } else done();
 }
 
 function selectStation(s){
@@ -4125,7 +4174,7 @@ function initFxUI(){
   initFxUI();
 })();
 refresh();loadEvents();loadLoved();
-loadVisuals();loadAuth();loadDon();
+loadVisuals();loadAuth();loadDon();initShare();
 setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);setInterval(loadLoved,60000);setInterval(loadDon,120000);
 // Repeint chaque seconde SANS requête réseau : le titre bascule à l'instant précis où
 // l'auditeur entend le changement (le sondage réseau, lui, reste à 10 s).
