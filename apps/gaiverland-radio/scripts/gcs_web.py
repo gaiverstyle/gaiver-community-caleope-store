@@ -4210,6 +4210,17 @@ function closeGal(){
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeGal();});
 
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=__VER__').catch(function(){});}
+// Auto-guérison du cache : si le proxy/navigateur a servi une vieille page, on le détecte
+// (version serveur ≠ version embarquée) et on recharge FRAIS une seule fois (garde sessionStorage
+// anti-boucle + ?v= qui casse tout cache). Fini « je vois encore l'ancienne version ».
+(function(){try{fetch('/api/version?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+  if(d&&d.ver&&d.ver!=='__VER__'&&!sessionStorage.getItem('gv_upd')){
+    sessionStorage.setItem('gv_upd','1');
+    try{if('serviceWorker' in navigator)navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(x){x.unregister();});});}catch(e){}
+    try{if(window.caches)caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k);});});}catch(e){}
+    setTimeout(function(){location.replace('/?v='+d.ver+(location.hash||''));},250);
+  }
+}).catch(function(){});}catch(e){}})();
 </script></body></html>"""
 
 
@@ -4218,6 +4229,15 @@ def index():
     html = PAGE.replace("<!--GALERIE-->", _GALLERY_HTML).replace("__VER__", _ASSET_VER)
     return HTMLResponse(html,
                         headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/api/version")
+def api_version():
+    """Empreinte du frontend actuel. La page la compare à la sienne au chargement : si le
+    proxy/navigateur a servi une vieille version en cache, elle se recharge fraîche (1×).
+    Toujours no-store + la page l'appelle avec un ?_=<random> → jamais mis en cache."""
+    return Response('{"ver":"' + _ASSET_VER + '"}', media_type="application/json",
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/equipe", response_class=HTMLResponse)
