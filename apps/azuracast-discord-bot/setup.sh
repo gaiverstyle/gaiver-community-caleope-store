@@ -334,7 +334,20 @@ intents.voice_states = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-player = RadioPlayer()
+# Un player PAR SERVEUR : chaque serveur écoute sa propre station, met play/stop et
+# change de scène chez lui sans toucher aux autres (multi-serveurs simultané).
+players: dict[int, RadioPlayer] = {}
+
+def get_player(guild_id: int) -> RadioPlayer:
+    p = players.get(guild_id)
+    if p is None:
+        p = RadioPlayer()
+        players[guild_id] = p
+    return p
+
+# Instance dédiée aux appels API SANS vocal (présence globale, message « En ce moment »,
+# liste des stations, autocomplétion) : suit la station par défaut, ne joue jamais.
+api = RadioPlayer()
 
 
 # ── Helpers embed ─────────────────────────────────────────────────────────────
@@ -492,7 +505,7 @@ async def on_ready():
     if AUTO_CHANNEL_ID:
         channel = bot.get_channel(AUTO_CHANNEL_ID)
         if isinstance(channel, discord.VoiceChannel):
-            ok, info = await player.play(channel)
+            ok, info = await get_player(channel.guild.id).play(channel)
             if ok:
                 log.info("Auto-join #%s → lecture lancée", channel.name)
             else:
@@ -501,7 +514,7 @@ async def on_ready():
     if NP_CHANNEL_ID:
         channel = bot.get_channel(NP_CHANNEL_ID)
         if isinstance(channel, discord.TextChannel):
-            np = await player.fetch_now_playing()
+            np = await api.fetch_now_playing()
             if np:
                 await np_tracker.start(channel, np)
         poll_now_playing.start()
@@ -514,14 +527,17 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    """Repart si le bot est seul dans le salon (tous les humains sont partis)."""
-    if not player.voice_client:
+    """Repart si le bot est seul dans le salon (tous les humains partis) — par serveur."""
+    if member.guild is None:
         return
-    bot_channel = player.voice_client.channel
+    p = players.get(member.guild.id)
+    if not (p and p.voice_client):
+        return
+    bot_channel = p.voice_client.channel
     if len([m for m in bot_channel.members if not m.bot]) == 0:
-        log.info("Salon vide — pause")
-        if player.voice_client.is_playing():
-            player.voice_client.pause()
+        log.info("Salon vide (%s) — pause", member.guild.name)
+        if p.voice_client.is_playing():
+            p.voice_client.pause()
 
 
 @tasks.loop(seconds=45)
@@ -532,9 +548,10 @@ async def report_listeners():
     faire redescendre immédiatement."""
     n = 0
     try:
-        vc = player.voice_client
-        if vc and vc.is_connected() and vc.channel:
-            n = sum(1 for m in vc.channel.members if not m.bot)
+        for p in players.values():
+            vc = p.voice_client
+            if vc and vc.is_connected() and vc.channel:
+                n += sum(1 for m in vc.channel.members if not m.bot)
         async with aiohttp.ClientSession() as s:
             await s.post(f"{GCS_WEB_URL}/api/ext/listeners",
                          params={"source": "discord", "count": n},
@@ -545,11 +562,14 @@ async def report_listeners():
 
 @tasks.loop(minutes=1)
 async def update_presence():
-    np = await player.fetch_now_playing()
+    np = await api.fetch_now_playing()
+    st   = np.get("station", {}) if np else {}
     song = np.get("now_playing", {}).get("song", {}) if np else {}
+    station_name = st.get("name") or "Gaiverland"
     title  = song.get("title", "")
     artist = song.get("artist", "")
-    text = f"{artist} — {title}" if artist and title else (title or artist or "AzuraCast Radio")
+    track  = f"{artist} — {title}" if artist and title else (title or artist or "")
+    text = f"{station_name} · {track}" if track else station_name
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.listening, name=text[:128])
     )
@@ -562,11 +582,11 @@ async def poll_now_playing():
         # Message perdu (supprimé) → on le recrée
         channel = bot.get_channel(NP_CHANNEL_ID)
         if isinstance(channel, discord.TextChannel):
-            np = await player.fetch_now_playing()
+            np = await api.fetch_now_playing()
             if np:
                 await np_tracker.start(channel, np)
         return
-    np = await player.fetch_now_playing()
+    np = await api.fetch_now_playing()
     if np:
         await np_tracker.update(np)
 
@@ -578,6 +598,7 @@ radio_group = app_commands.Group(name="radio", description="Commandes du bot rad
 
 @radio_group.command(name="play", description="Rejoint ton salon vocal et lance la radio")
 async def cmd_play(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     if not interaction.user.voice:
         await interaction.response.send_message(
             "❌ Tu dois être dans un salon vocal.", ephemeral=True
@@ -594,6 +615,7 @@ async def cmd_play(interaction: discord.Interaction):
 
 @radio_group.command(name="stop", description="Arrête la radio et quitte le salon vocal")
 async def cmd_stop(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     await player.stop()
     await interaction.response.send_message("⏹️ Radio arrêtée.")
 
@@ -601,6 +623,7 @@ async def cmd_stop(interaction: discord.Interaction):
 @radio_group.command(name="volume", description="Règle le volume (0 à 200 %)")
 @app_commands.describe(niveau="Volume en % — 100 = normal, 200 = amplifié ×2")
 async def cmd_volume(interaction: discord.Interaction, niveau: int):
+    player = get_player(interaction.guild_id)
     # defer() EN PREMIER, avant tout travail : Discord n'accorde que 3 s pour l'accusé de
     # réception. Chaque seconde brûlée avant = risque de « Unknown interaction » (10062).
     await interaction.response.defer()
@@ -617,6 +640,7 @@ async def cmd_volume(interaction: discord.Interaction, niveau: int):
 
 @radio_group.command(name="np", description="Affiche le titre en cours sur la radio")
 async def cmd_np(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     await interaction.response.defer()
     np = await player.fetch_now_playing()
     if not np:
@@ -628,6 +652,7 @@ async def cmd_np(interaction: discord.Interaction):
 @radio_group.command(name="station", description="Choisis la station à écouter (liste auto-complétée depuis le serveur)")
 @app_commands.describe(station="La station à écouter")
 async def cmd_station(interaction: discord.Interaction, station: str):
+    player = get_player(interaction.guild_id)
     await interaction.response.defer()
     ok = await player.set_station(station)
     if not ok:
@@ -651,6 +676,7 @@ async def cmd_station(interaction: discord.Interaction, station: str):
 
 @radio_group.command(name="liens", description="Les liens mp3 des stations — à coller dans VLC, le tel, ou à partager")
 async def cmd_liens(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     await interaction.response.defer()
     embed = discord.Embed(
         title="🔗 Liens des stations",
@@ -666,7 +692,7 @@ async def cmd_liens(interaction: discord.Interaction):
 @cmd_station.autocomplete("station")
 async def station_autocomplete(interaction: discord.Interaction, current: str):
     cur = (current or "").lower()
-    stations = await player.fetch_stations()
+    stations = await api.fetch_stations()
     return [
         app_commands.Choice(name=nm, value=sc)
         for sc, nm in stations
@@ -694,6 +720,7 @@ async def cmd_vote(interaction: discord.Interaction):
 
 @radio_group.command(name="status", description="Affiche le statut du bot radio")
 async def cmd_status(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     playing = player.is_playing
     channel_mention = (
         player.voice_client.channel.mention if player.voice_client and player.voice_client.is_connected()
@@ -713,6 +740,7 @@ async def cmd_status(interaction: discord.Interaction):
 
 @radio_group.command(name="pause", description="Met la lecture en pause sans quitter le salon")
 async def cmd_pause(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     if player.voice_client and player.voice_client.is_playing():
         player.voice_client.pause()
         await interaction.response.send_message("⏸️ Mis en pause.")
@@ -722,6 +750,7 @@ async def cmd_pause(interaction: discord.Interaction):
 
 @radio_group.command(name="resume", description="Reprend la lecture après une pause")
 async def cmd_resume(interaction: discord.Interaction):
+    player = get_player(interaction.guild_id)
     if player.voice_client and player.voice_client.is_paused():
         player.voice_client.resume()
         await interaction.response.send_message("▶️ Reprise de la lecture.")
@@ -735,7 +764,7 @@ async def cmd_setnpchannel(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Cette commande doit être utilisée dans un salon texte.", ephemeral=True)
         return
     await interaction.response.defer()
-    np = await player.fetch_now_playing()
+    np = await api.fetch_now_playing()
     if not np:
         await interaction.followup.send("❌ Impossible de contacter AzuraCast.")
         return
