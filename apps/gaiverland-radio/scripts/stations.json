@@ -465,7 +465,7 @@
       },
       "_resserre_2026-08-01": "Club = warehouse à 3h (house/tech/techno). Genres franchement festival RETIRÉS (Electro House, Electro, Big Room, Euro House, Progressive Breaks) car Essentia y range du big-room peak-time. exclude_titles = filet nominatif contre les superstars festival/pop taguées « House » (Avicii, SHM, Guetta, Afrojack, Sigala…) qui appartiennent à Mainstage/Classics. Tunable. 401 titres survivent (rotation cap 250).",
       "exclude_titles": "avicii|swedish house|calvin harris|sigala|afrojack|steve aoki|guetta|martin solveig|hardwell|martin garrix|dimitri vegas|nicky romero|alan walker|kshmr|dvbbs|smells like teen|seven nation|killing in the name|brightside|final countdown|darude|sandstorm|marshmello|type beat",
-      "exclude_paths": "/music/(chill|lofi|phonk|synthwave|hard|boost|classics)/|/gaiverland_[a-z0-9]+/media/",
+      "exclude_paths": "/music/(chill|lofi|phonk|synthwave|hard|boost|classics|attic)/|/gaiverland_[a-z0-9]+/media/",
       "seeds": []
     }
   ]
