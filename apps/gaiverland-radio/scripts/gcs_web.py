@@ -1156,6 +1156,28 @@ def regie_recherche(request: Request, q: str = ""):
         return {"resultats": []}
 
 
+@app.get("/api/suggest")
+def api_suggest(q: str = ""):
+    """Autocomplétion PUBLIQUE (catalogue iTunes) pour la page « Proposer » du site.
+    Non gaté : c'est une simple aide à la saisie, aucune écriture ni donnée sensible ;
+    le serveur fait l'appel iTunes (pas de CORS, pas de clé)."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"resultats": []}
+    try:
+        r = httpx.get("https://itunes.apple.com/search",
+                      params={"term": q, "media": "music", "entity": "song", "limit": 8},
+                      timeout=6)
+        res = []
+        for x in (r.json().get("results", []) if r.status_code == 200 else []):
+            res.append({"artiste": x.get("artistName", ""), "titre": x.get("trackName", ""),
+                        "genre": x.get("primaryGenreName", ""),
+                        "annee": (x.get("releaseDate") or "")[:4]})
+        return {"resultats": res}
+    except Exception:
+        return {"resultats": []}
+
+
 @app.post("/api/regie/musique/ajouter")
 def regie_ajouter(request: Request, payload: dict = Body(...)):
     """Ajoute une demande DÉJÀ ACCEPTÉE (c'est le chef) → le downloader la prendra.
@@ -3189,6 +3211,50 @@ footer .c15{margin-top:6px;font-size:12px}
 @media(max-width:879px){
   .console-center{order:-1}
 }
+/* ===== Navigation par onglets + vues (site multi-pages sans rechargement) ===== */
+.tabs{position:sticky;top:0;z-index:40;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;
+  padding:10px 6px;margin:0 -20px 6px;background:rgba(24,14,44,.72);backdrop-filter:blur(10px);
+  border-bottom:1px solid rgba(255,244,230,.14)}
+.tab{display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:22px;cursor:pointer;
+  border:1px solid rgba(255,244,230,.22);background:rgba(255,244,230,.06);color:var(--cream);
+  font-family:Georgia,serif;font-size:15px;transition:background .15s,transform .15s}
+.tab .ti{font-size:17px;line-height:1}
+.tab:hover{background:rgba(255,244,230,.13)}
+.tab.on{background:linear-gradient(135deg,#ffd29a,#ff8fa3);color:var(--ink);border-color:transparent;font-weight:700}
+.view{display:none}
+.view.on{display:block;animation:fadeview .25s ease}
+@keyframes fadeview{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.view-intro{font-style:italic;opacity:.8;font-size:14px;margin:-4px 0 14px}
+.propsugg{margin-top:8px;border:1px solid rgba(255,244,230,.2);border-radius:12px;overflow:hidden;background:rgba(20,12,40,.92)}
+.propsugg div{padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,244,230,.08);font-size:15px}
+.propsugg div:last-child{border-bottom:0}
+.propsugg div:hover{background:rgba(255,244,230,.12)}
+.propsugg small{opacity:.6;font-family:sans-serif;font-size:12px}
+/* ===== Barre lecteur fixe (persistante, façon Spotify) ===== */
+body{padding-bottom:96px}
+.playerbar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;align-items:center;gap:16px;
+  padding:10px 20px;background:rgba(20,12,40,.93);backdrop-filter:blur(14px);
+  border-top:1px solid rgba(255,244,230,.16);box-shadow:0 -8px 30px rgba(0,0,0,.35)}
+.pb-now{display:flex;align-items:center;gap:12px;flex:1 1 200px;min-width:0}
+.pb-cover{width:52px;height:52px;border-radius:10px;object-fit:cover;background:rgba(0,0,0,.3);flex:0 0 auto}
+.pb-txt{min-width:0}
+.pb-title{font-weight:bold;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pb-artist{font-size:13px;opacity:.8;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pb-meta{font-size:11px;opacity:.6;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:sans-serif}
+.pb-ctrl{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.playerbar .playbtn{width:52px;height:52px;font-size:20px}
+.pb-vol{display:flex;align-items:center;gap:8px}
+.pb-vol .fx-vol{width:110px}
+.pb-bar{position:absolute;top:0;left:0;right:0;height:3px;margin:0;border-radius:0}
+@media(max-width:700px){
+  .playerbar{gap:10px;padding:8px 12px}
+  .pb-vol,.pb-meta{display:none}
+  .playerbar .playbtn{width:46px;height:46px}
+  .reloadbtn .tl{display:none}
+  .tab .tl{display:none}
+  .tab{padding:9px 13px}
+  .tab .ti{font-size:20px}
+}
 </style></head><body><div class="wrap">
 
 <header>
@@ -3198,6 +3264,15 @@ footer .c15{margin-top:6px;font-size:12px}
   <div class="pennant">🎪 🎡 🎠 🎢 🎆</div>
 </header>
 
+<nav class="tabs" id="tabs">
+  <button class="tab on" data-view="accueil" onclick="showView('accueil')"><span class="ti">🎪</span><span class="tl">Accueil</span></button>
+  <button class="tab" data-view="proposer" onclick="showView('proposer')"><span class="ti">🎶</span><span class="tl">Proposer</span></button>
+  <button class="tab" data-view="effets" onclick="showView('effets')"><span class="ti">🎛️</span><span class="tl">Effets</span></button>
+  <button class="tab" data-view="galerie" onclick="showView('galerie')"><span class="ti">🖼️</span><span class="tl">Galerie</span></button>
+  <button class="tab" data-view="festival" onclick="showView('festival')"><span class="ti">🎡</span><span class="tl">Festival</span></button>
+</nav>
+
+<section class="view on" id="view-accueil">
 <div class="card">
   <h2>En direct <span class="live-badge">EN DIRECT</span></h2>
   <div class="console-grid">
@@ -3227,24 +3302,36 @@ footer .c15{margin-top:6px;font-size:12px}
     </div>
   </div>
   <div class="stationDesc" id="stationDesc">La grande scène, celle où tout Gaiverland converge quand la nuit tombe et que les basses font trembler le sol. On n'y joue que les hymnes — ceux qui lèvent cent mille bras d'un coup, ceux qu'on reprend en chœur sans connaître les paroles. Si tu ne sais pas où aller, viens là : c'est le cœur qui bat.</div>
-  <audio id="player" preload="none"></audio>
-  <audio id="player-b" preload="none"></audio>
-  <div class="playbar">
-    <div class="np">
-      <div style="flex:1;min-width:160px">
-        <div class="meta" id="meta"></div>
-        <div class="bar"><i id="prog"></i></div>
-      </div>
-      <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
-      <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)"><span class="ic">⟳</span><span>Direct</span></button>
-    </div>
-    <div class="fxbar">
-      <span class="fx-ico" aria-hidden="true">🔊</span>
-      <input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume">
-      <button class="fx-toggle" onclick="toggleFxPanel()" aria-label="Effets audio">⚙ effets</button>
-    </div>
+  <div class="authbar" id="authbar"></div>
+  <div class="votes">
+    <button class="v-encore" onclick="vote('ENCORE')">🔥 j'adore</button>
+    <button class="v-review" onclick="vote('REVIEW')">😐 bof</button>
+    <button class="v-skip"   onclick="vote('SKIP')">👎 j'aime pas</button>
+    <button class="v-pass"   onclick="passTrack()">⏭ passer</button>
+    <button class="v-blacklist" id="btnBlacklist" style="display:none" onclick="blacklistTrack()">🚫 blacklist</button>
   </div>
-  <div id="fx-panel" class="fx-panel fx-hidden">
+  <div class="votemsg" id="votemsg"></div>
+</div>
+</section>
+
+<section class="view" id="view-proposer">
+<div class="card">
+  <h2>Propose un titre 🎶</h2>
+  <p class="view-intro">Cherche un morceau (l'autocomplétion t'aide) ou tape un remix à la main — le convoi l'ajoutera à l'antenne.</p>
+  <div class="propose">
+    <input id="proptitle" type="text" placeholder="Tape un artiste ou un titre…" maxlength="200" autocomplete="off" oninput="suggProp()">
+    <button class="propbtn" onclick="proposeTitle()">Envoyer au convoi 🚐</button>
+  </div>
+  <div id="propsugg" class="propsugg" hidden></div>
+  <div class="propmsg" id="propmsg"></div>
+</div>
+</section>
+
+<section class="view" id="view-effets">
+<div class="card">
+  <h2>Effets audio 🎛️</h2>
+  <p class="view-intro">Réglages sauvés sur cet appareil, actifs sur toutes les scènes.</p>
+  <div class="fx-panel">
     <div class="fx-lab">Ambiance</div>
     <div class="fx-presets js-presets"></div>
     <div class="fx-lab">Basses <span class="js-bassval">0</span> dB</div>
@@ -3261,26 +3348,10 @@ footer .c15{margin-top:6px;font-size:12px}
     <div class="fx-note js-sleepstatus" style="margin-top:6px"></div>
     <div class="fx-note js-fxnote"></div>
   </div>
-  <div class="authbar" id="authbar"></div>
-  <div class="votes">
-    <button class="v-encore" onclick="vote('ENCORE')">🔥 j'adore</button>
-    <button class="v-review" onclick="vote('REVIEW')">😐 bof</button>
-    <button class="v-skip"   onclick="vote('SKIP')">👎 j'aime pas</button>
-    <button class="v-pass"   onclick="passTrack()">⏭ passer</button>
-    <button class="v-blacklist" id="btnBlacklist" style="display:none" onclick="blacklistTrack()">🚫 blacklist</button>
-  </div>
-  <div class="votemsg" id="votemsg"></div>
 </div>
+</section>
 
-<div class="card">
-  <h2>Propose un titre 🎶</h2>
-  <div class="propose">
-    <input id="proptitle" type="text" placeholder="Artiste — Titre" maxlength="200">
-    <button class="propbtn" onclick="proposeTitle()">Envoyer au convoi 🚐</button>
-  </div>
-  <div class="propmsg" id="propmsg"></div>
-</div>
-
+<section class="view" id="view-festival">
 <div class="card">
   <h2>La tournée</h2>
   <div class="city">
@@ -3304,10 +3375,14 @@ footer .c15{margin-top:6px;font-size:12px}
   <div id="events"><div class="soon">Le journal s'écrit en ce moment même…</div></div>
 </div>
 
+</section>
+
+<section class="view" id="view-galerie">
 <div class="card">
   <h2>Galerie</h2>
   <!--GALERIE-->
 </div>
+</section>
 
 <footer>
   Gaiverland Radio — présente, comme toujours.
@@ -3316,6 +3391,25 @@ footer .c15{margin-top:6px;font-size:12px}
   <div id="modele-link" hidden style="margin-top:10px"><a href="/modele" style="color:rgba(255,244,230,.55);font-size:12px;letter-spacing:1px;text-decoration:none;border-bottom:1px solid rgba(255,244,230,.28);padding-bottom:2px">🎪 Notre modèle : Tomorrowland →</a></div>
 </footer>
 
+</div>
+
+<audio id="player" preload="none"></audio>
+<audio id="player-b" preload="none"></audio>
+<div class="playerbar" id="playerbar">
+  <div class="pb-now">
+    <img class="pb-cover" id="pb-cover" alt="" onerror="this.style.visibility='hidden'">
+    <div class="pb-txt">
+      <div class="pb-title" id="pb-title">Gaiverland Radio</div>
+      <div class="pb-artist" id="pb-artist"></div>
+      <div class="meta pb-meta" id="meta"></div>
+    </div>
+  </div>
+  <div class="pb-ctrl">
+    <button id="playbtn" class="playbtn" onclick="togglePlay()" aria-label="Lecture">▶</button>
+    <button class="reloadbtn" onclick="playLive()" aria-label="Revenir au direct" title="Revenir au direct (resync flux)"><span class="ic">⟳</span><span class="tl">Direct</span></button>
+    <div class="pb-vol"><span class="fx-ico" aria-hidden="true">🔊</span><input class="fx-vol js-vol" type="range" min="0" max="100" value="100" aria-label="Volume"></div>
+  </div>
+  <div class="bar pb-bar"><i id="prog"></i></div>
 </div>
 
 <div id="gal-lb" class="gal-lb" onclick="if(event.target===this)closeGal()">
@@ -3511,6 +3605,43 @@ const STATION_DESC={
   club:"La warehouse de Gaiverland, quand la nuit refuse de finir. House de club groovy et fédératrice — Dom Dolla, MK, Oliver Heldens, la house vocale qui fait bouger sans jamais tomber dans le dur. La scène de ceux qui ne veulent pas rentrer."
 };
 function showStationDesc(s){const el=document.getElementById('stationDesc');const t=STATION_DESC[s];if(el&&t)el.textContent=t;}
+
+// ── Navigation par onglets (vues) — le son NE s'arrête PAS (aucun rechargement) ──
+function showView(v){
+  document.querySelectorAll('.view').forEach(function(s){ s.classList.toggle('on', s.id==='view-'+v); });
+  document.querySelectorAll('.tab').forEach(function(b){ b.classList.toggle('on', b.dataset.view===v); });
+  try{ if(location.hash!=='#'+v) history.replaceState(null,'','#'+v); }catch(e){}
+  window.scrollTo(0,0);
+}
+window.addEventListener('hashchange',function(){ var v=(location.hash||'').replace('#',''); if(document.getElementById('view-'+v)) showView(v); });
+(function(){ var v=(location.hash||'').replace('#',''); if(v && document.getElementById('view-'+v)) showView(v); })();
+
+// ── Autocomplétion de la page « Proposer » (catalogue iTunes public) ──
+var _propTmr=null;
+function suggProp(){
+  clearTimeout(_propTmr);
+  _propTmr=setTimeout(async function(){
+    var inp=document.getElementById('proptitle'), box=document.getElementById('propsugg');
+    if(!inp||!box) return;
+    var q=inp.value.trim();
+    if(q.length<2){ box.hidden=true; box.innerHTML=''; return; }
+    try{
+      var d=await (await fetch('/api/suggest?q='+encodeURIComponent(q))).json();
+      if(!d.resultats||!d.resultats.length){ box.hidden=true; return; }
+      box.innerHTML='';
+      d.resultats.forEach(function(r){
+        var el=document.createElement('div');
+        var b=document.createElement('b'); b.textContent=r.artiste;
+        el.appendChild(b); el.appendChild(document.createTextNode(' — '+r.titre));
+        if(r.annee){ var sm=document.createElement('small'); sm.textContent='  '+r.annee+(r.genre?' · '+r.genre:''); el.appendChild(sm); }
+        el.onclick=function(){ inp.value=r.artiste+' — '+r.titre; box.hidden=true; box.innerHTML=''; };
+        box.appendChild(el);
+      });
+      box.hidden=false;
+    }catch(e){ box.hidden=true; }
+  },300);
+}
+
 function selectStation(s){
   if(s===curStation) return;
   const wasPlaying=!AA().paused;
@@ -3571,6 +3702,9 @@ function paintTrack(live, art){
   document.getElementById('title').textContent=t.title||'Gaiverland Radio';
   document.getElementById('artist').textContent=t.artist||'';
   if(cover) document.getElementById('hero-cover').src=cover;
+  var _pt=document.getElementById('pb-title'); if(_pt)_pt.textContent=t.title||'Gaiverland Radio';
+  var _pa=document.getElementById('pb-artist'); if(_pa)_pa.textContent=t.artist||'';
+  if(cover){var _pc=document.getElementById('pb-cover'); if(_pc){_pc.src=cover;_pc.style.visibility='visible';}}
   if(t.title && t.title!==lastTitle){ lastTitle=t.title; bgIdx++; setBg(); }  // nouveau fond par morceau
   // MediaSession : NE PAS reconstruire la métadonnée à chaque repeinture (cette fonction
   // tourne 1×/seconde). Réassigner metadata en boucle fait recharger la pochette et peut
