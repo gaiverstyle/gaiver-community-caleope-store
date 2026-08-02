@@ -1178,6 +1178,25 @@ def api_suggest(q: str = ""):
         return {"resultats": []}
 
 
+DON_BTC_ADDR = os.environ.get("GCS_DON_BTC", "bc1q36v0s4sx3m7jdg3k7sk6lhe0wgn4pfacjur28e")
+
+@app.get("/api/don")
+def api_don():
+    """Suivi PUBLIC de la cagnotte de légalisation : total BTC reçu sur l'adresse de dons
+    (via mempool.space) converti en €. Objectif réglable via GCS_DON_GOAL_EUR. Best-effort :
+    renvoie 0 si mempool est injoignable. Aucune donnée sensible (adresse Bitcoin publique)."""
+    goal = int(os.environ.get("GCS_DON_GOAL_EUR", "1200"))
+    try:
+        s = httpx.get(f"https://mempool.space/api/address/{DON_BTC_ADDR}", timeout=8).json()
+        sats = s["chain_stats"]["funded_txo_sum"] + s["mempool_stats"]["funded_txo_sum"]
+        btc = sats / 1e8
+        price = httpx.get("https://mempool.space/api/v1/prices", timeout=8).json().get("EUR", 0)
+        return {"goal": goal, "raised_eur": round(btc * price), "btc": round(btc, 6),
+                "addr": DON_BTC_ADDR}
+    except Exception:
+        return {"goal": goal, "raised_eur": 0, "btc": 0, "addr": DON_BTC_ADDR}
+
+
 @app.post("/api/regie/musique/ajouter")
 def regie_ajouter(request: Request, payload: dict = Body(...)):
     """Ajoute une demande DÉJÀ ACCEPTÉE (c'est le chef) → le downloader la prendra.
@@ -2948,6 +2967,16 @@ PAGE = """<!doctype html>
 <title>Gaiverland — Le festival permanent</title>
 <meta name="theme-color" content="#8b5cf6">
 <meta name="description" content="La radio-festival permanente. Une antenne qui ne dort jamais.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gaiverland">
+<meta property="og:title" content="Gaiverland — Le festival permanent">
+<meta property="og:description" content="La radio-festival qui ne s'arrête jamais. 9 scènes — du chill à la hyper techno. Écoute en direct.">
+<meta property="og:url" content="https://gaiverland.gaiver-it.fr/">
+<meta property="og:image" content="https://gaiverland.gaiver-it.fr/icon.svg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Gaiverland — Le festival permanent">
+<meta name="twitter:description" content="La radio-festival qui ne s'arrête jamais. 9 scènes — du chill à la hyper techno.">
+<meta name="twitter:image" content="https://gaiverland.gaiver-it.fr/icon.svg">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Gaiverland">
@@ -3255,6 +3284,22 @@ body{padding-bottom:96px}
   .tab{padding:9px 13px}
   .tab .ti{font-size:20px}
 }
+/* ===== Page « Soutenir » (dons Bitcoin + jauge d'objectif) ===== */
+.don-goal{margin:6px 0 20px}
+.don-goalhead b{font-size:26px;color:#ffd29a}
+.don-of{opacity:.8;font-size:15px}
+.don-bar{height:14px;background:rgba(255,244,230,.14);border-radius:8px;overflow:hidden;margin:10px 0 6px}
+.don-bar i{display:block;height:100%;width:0;border-radius:8px;background:linear-gradient(90deg,#ffd29a,#ff8fa3,#c9b6ff);transition:width .8s ease}
+.don-sub{font-size:13px;opacity:.7;font-style:italic}
+.don-pay{display:flex;gap:22px;align-items:center;flex-wrap:wrap;padding:16px;border:1px solid rgba(255,244,230,.18);border-radius:14px;background:rgba(255,244,230,.05)}
+.don-qr{width:180px;height:180px;border-radius:12px;background:#fff4e6;padding:8px;flex:0 0 auto}
+.don-payinfo{flex:1;min-width:240px}
+.don-lab{font-size:13px;letter-spacing:2px;text-transform:uppercase;opacity:.7;margin-bottom:6px}
+.don-addr{font-family:ui-monospace,Menlo,monospace;font-size:14px;word-break:break-all;background:rgba(0,0,0,.28);padding:10px 12px;border-radius:10px}
+.don-btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.don-wallet{text-decoration:none;display:inline-block;background:linear-gradient(135deg,#f7931a,#ffb56b)!important}
+.don-note{font-size:12px;opacity:.65;margin-top:10px}
+.don-breakdown{margin-top:18px;font-size:13.5px;line-height:1.6;opacity:.85;padding-top:14px;border-top:1px solid rgba(255,244,230,.14)}
 </style></head><body><div class="wrap">
 
 <header>
@@ -3270,6 +3315,7 @@ body{padding-bottom:96px}
   <button class="tab" data-view="effets" onclick="showView('effets')"><span class="ti">🎛️</span><span class="tl">Effets</span></button>
   <button class="tab" data-view="galerie" onclick="showView('galerie')"><span class="ti">🖼️</span><span class="tl">Galerie</span></button>
   <button class="tab" data-view="festival" onclick="showView('festival')"><span class="ti">🎡</span><span class="tl">Festival</span></button>
+  <button class="tab" data-view="soutenir" onclick="showView('soutenir')"><span class="ti">💛</span><span class="tl">Soutenir</span></button>
 </nav>
 
 <section class="view on" id="view-accueil">
@@ -3381,6 +3427,31 @@ body{padding-bottom:96px}
 <div class="card">
   <h2>Galerie</h2>
   <!--GALERIE-->
+</div>
+</section>
+
+<section class="view" id="view-soutenir">
+<div class="card">
+  <h2>Soutenir Gaiverland 💛</h2>
+  <p class="view-intro">Gaiverland tourne sur du bénévolat et du matos perso. L'objectif : rendre l'antenne <b>légale</b> (droits SACEM + producteurs) pour garder plusieurs scènes en ligne l'esprit tranquille. Chaque don part <b>uniquement</b> dans les droits de diffusion.</p>
+  <div class="don-goal">
+    <div class="don-goalhead"><b id="don-raised">…</b> <span class="don-of">réunis sur <span id="don-goal">1200</span> € / an</span></div>
+    <div class="don-bar"><i id="don-fill" style="width:0%"></i></div>
+    <div class="don-sub" id="don-sub">Cagnotte transparente — suivie en direct sur la blockchain.</div>
+  </div>
+  <div class="don-pay">
+    <img class="don-qr" src="data:image/png;base64,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" alt="QR Bitcoin — scanne-moi" width="180" height="180">
+    <div class="don-payinfo">
+      <div class="don-lab">Don en Bitcoin</div>
+      <div class="don-addr" id="don-addr">bc1q36v0s4sx3m7jdg3k7sk6lhe0wgn4pfacjur28e</div>
+      <div class="don-btns">
+        <button class="propbtn" id="don-copybtn" onclick="copyBtc()">Copier l'adresse</button>
+        <a class="propbtn don-wallet" href="bitcoin:bc1q36v0s4sx3m7jdg3k7sk6lhe0wgn4pfacjur28e">Ouvrir mon portefeuille ↗</a>
+      </div>
+      <div class="don-note">Scanne le QR depuis ton téléphone, ou copie l'adresse dans ton wallet. Monero bientôt.</div>
+    </div>
+  </div>
+  <div class="don-breakdown"><b>À quoi ça sert :</b> droits d'auteur (SACEM ~89 €/an) + droits voisins producteurs &amp; interprètes (~800 €/an pour ~5 scènes). On légalise <b>Mainstage, Hard, Boost, Classics, Club</b> en priorité (Phonk selon la demande).</div>
 </div>
 </section>
 
@@ -3611,6 +3682,7 @@ function showView(v){
   document.querySelectorAll('.view').forEach(function(s){ s.classList.toggle('on', s.id==='view-'+v); });
   document.querySelectorAll('.tab').forEach(function(b){ b.classList.toggle('on', b.dataset.view===v); });
   try{ if(location.hash!=='#'+v) history.replaceState(null,'','#'+v); }catch(e){}
+  if(v==='soutenir') loadDon();
   window.scrollTo(0,0);
 }
 window.addEventListener('hashchange',function(){ var v=(location.hash||'').replace('#',''); if(document.getElementById('view-'+v)) showView(v); });
@@ -3640,6 +3712,26 @@ function suggProp(){
       box.hidden=false;
     }catch(e){ box.hidden=true; }
   },300);
+}
+
+// ── Page « Soutenir » : jauge de cagnotte (dons BTC réels via /api/don) + copie d'adresse ──
+async function loadDon(){
+  try{
+    var d=await (await fetch('/api/don')).json();
+    var goal=d.goal||1200, raised=d.raised_eur||0;
+    var g=document.getElementById('don-goal'); if(g)g.textContent=goal;
+    var r=document.getElementById('don-raised'); if(r)r.textContent=raised+' €';
+    var f=document.getElementById('don-fill'); if(f)f.style.width=(goal?Math.min(100,Math.round(raised/goal*100)):0)+'%';
+    var sub=document.getElementById('don-sub');
+    if(sub) sub.textContent = d.btc ? (d.btc+' BTC reçus — suivi en direct sur la blockchain.')
+                                    : 'Sois le premier à soutenir — cagnotte suivie en direct sur la blockchain.';
+  }catch(e){}
+}
+function copyBtc(){
+  var a='bc1q36v0s4sx3m7jdg3k7sk6lhe0wgn4pfacjur28e';
+  var done=function(){ var b=document.getElementById('don-copybtn'); if(b){ var t=b.textContent; b.textContent='Copié ✓'; setTimeout(function(){ b.textContent=t; },1500); } };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(a).then(done,done); }
+  else { try{ var i=document.getElementById('don-addr'),rng=document.createRange(); rng.selectNode(i); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(rng); document.execCommand('copy'); }catch(e){} done(); }
 }
 
 function selectStation(s){
@@ -4033,8 +4125,8 @@ function initFxUI(){
   initFxUI();
 })();
 refresh();loadEvents();loadLoved();
-loadVisuals();loadAuth();
-setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);setInterval(loadLoved,60000);
+loadVisuals();loadAuth();loadDon();
+setInterval(refresh,10000);setInterval(loadEvents,30000);setInterval(loadVisuals,300000);setInterval(loadLoved,60000);setInterval(loadDon,120000);
 // Repeint chaque seconde SANS requête réseau : le titre bascule à l'instant précis où
 // l'auditeur entend le changement (le sondage réseau, lui, reste à 10 s).
 setInterval(function(){ if(lastLive && lastLive.song_id) paintTrack(lastLive, lastArt); },1000);
