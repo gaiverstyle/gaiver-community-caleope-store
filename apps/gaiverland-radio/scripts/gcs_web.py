@@ -3311,9 +3311,9 @@ body{padding-bottom:96px}
 .spreadbtn:hover{transform:translateY(-2px)}
 .spreadbtn.share{background:linear-gradient(135deg,#ffd29a,#ff8fa3)}
 .spreadbtn.discord{background:#5865F2;color:#fff;font-weight:700}
-.sharemenu{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);z-index:30;
-  display:flex;flex-direction:column;min-width:190px;background:rgba(20,12,40,.96);
-  border:1px solid rgba(255,244,230,.2);border-radius:14px;overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,.45)}
+.sharemenu{position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);z-index:80;
+  display:flex;flex-direction:column;min-width:200px;background:rgba(20,12,40,.98);
+  border:1px solid rgba(255,244,230,.2);border-radius:14px;overflow:hidden;box-shadow:0 -12px 34px rgba(0,0,0,.5)}
 .sharemenu a,.sharemenu button{padding:12px 16px;text-align:left;color:var(--cream);text-decoration:none;
   background:none;border:0;border-bottom:1px solid rgba(255,244,230,.08);font:inherit;font-size:15px;cursor:pointer}
 .sharemenu a:last-child,.sharemenu button:last-child{border-bottom:0}
@@ -3775,9 +3775,16 @@ function initShare(){
   set('sh-fb','https://www.facebook.com/sharer/sharer.php?u='+u);
   set('sh-rd','https://www.reddit.com/submit?url='+u+'&title='+t);
 }
+function _closeShare(e){
+  var m=document.getElementById('sharemenu'), sp=document.querySelector('.spread');
+  if(m && sp && !sp.contains(e.target)){ m.hidden=true; document.removeEventListener('click', _closeShare); }
+}
 async function shareGaiverland(){
   if(navigator.share){ try{ await navigator.share({title:'Gaiverland',text:SHARE_TXT,url:SHARE_URL}); return; }catch(e){ if(e&&e.name==='AbortError') return; } }
-  var m=document.getElementById('sharemenu'); if(m) m.hidden=!m.hidden;
+  var m=document.getElementById('sharemenu'); if(!m) return;
+  m.hidden=!m.hidden;
+  if(!m.hidden){ setTimeout(function(){ document.addEventListener('click', _closeShare); }, 0); }
+  else { document.removeEventListener('click', _closeShare); }
 }
 function copyShareLink(){
   var done=function(){ var b=document.getElementById('sh-copy'); if(b){ var t=b.textContent; b.textContent='Copié ✓'; setTimeout(function(){ b.textContent=t; },1500); } };
