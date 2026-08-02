@@ -3314,6 +3314,7 @@ body{padding-bottom:96px}
 .sharemenu{position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);z-index:80;
   display:flex;flex-direction:column;min-width:200px;background:rgba(20,12,40,.98);
   border:1px solid rgba(255,244,230,.2);border-radius:14px;overflow:hidden;box-shadow:0 -12px 34px rgba(0,0,0,.5)}
+.sharemenu[hidden]{display:none}  /* sans ça, display:flex écrase l'attribut hidden → menu toujours ouvert */
 .sharemenu a,.sharemenu button{padding:12px 16px;text-align:left;color:var(--cream);text-decoration:none;
   background:none;border:0;border-bottom:1px solid rgba(255,244,230,.08);font:inherit;font-size:15px;cursor:pointer}
 .sharemenu a:last-child,.sharemenu button:last-child{border-bottom:0}
