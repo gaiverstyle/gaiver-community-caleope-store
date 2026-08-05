@@ -320,6 +320,13 @@ def loop():
                               f"cookies (expirés ?) ou mettre à jour l'image downloader "
                               f"(docker rmi gaiverland-radio-gw-downloader + reinstall = yt-dlp/Deno à jour).",
                               flush=True)
+                        # Une passe entière en échec doit s'AFFICHER sur /regie, pas seulement
+                        # dans un journal : statut hors liste blanche → pastille rouge, et la
+                        # page Téléchargeur dit quoi faire (cause n°1 : cookies expirés).
+                        _sante(cur, "EN PANNE",
+                               f"{fails}/{tried} téléchargements en échec — dépose des cookies "
+                               f"YouTube frais sur la page, ou attends la mise à jour auto de "
+                               f"yt-dlp (lundi 04h40)")
             conn.close()
         except Exception as e:
             print(f"  ⚠ downloader loop: {e}", flush=True)
