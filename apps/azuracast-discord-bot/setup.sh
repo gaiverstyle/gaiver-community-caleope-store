@@ -64,6 +64,7 @@ cat > "${SRC_DIR}/bot.py" << 'PYEOF'
 #!/usr/bin/env python3
 """AzuraCast Radio Bot — diffuse ta radio en continu dans Discord."""
 
+import time
 import asyncio
 import logging
 import os
@@ -130,6 +131,8 @@ class RadioPlayer:
         self.volume: float = DEFAULT_VOLUME / 100.0
         self.station: str = AZURACAST_STATION_ID          # station courante (défaut = AZURACAST_STATION_ID)
         self._stream_cache: dict = {AZURACAST_STATION_ID: STREAM_URL_ENV} if STREAM_URL_ENV else {}
+        self._stations_cache: list = []                   # alimente l'auto-complétion, cf fetch_stations
+        self._stations_at: float = 0.0
 
     # -- AzuraCast API --------------------------------------------------------
 
@@ -147,15 +150,27 @@ class RadioPlayer:
     async def fetch_now_playing(self) -> dict:
         return await self._get(f"/api/nowplaying/{self.station}")
 
-    async def fetch_stations(self) -> list:
-        """Liste (shortcode, nom) des stations AzuraCast — alimente /radio station."""
+    async def fetch_stations(self, force: bool = False) -> list:
+        """Liste (shortcode, nom) des stations AzuraCast — alimente /radio station.
+        ⚠️ MISE EN CACHE OBLIGATOIRE : cette liste alimente l'auto-complétion, et Discord
+        n'accorde que 3 SECONDES pour répondre à une interaction d'auto-complétion. Un appel
+        réseau par frappe de touche (avec en plus une ClientSession neuve et un timeout à 8 s)
+        dépassait le délai dès que la boucle était occupée par le flux vocal → l'auto-complétion
+        ne s'affichait plus du tout (erreur 10062 « Unknown interaction »).
+        Le cache est rafraîchi en tâche de fond, jamais depuis le gestionnaire d'auto-complétion."""
+        maintenant = time.monotonic()
+        if not force and self._stations_cache and (maintenant - self._stations_at) < 300:
+            return self._stations_cache
         data = await self._get("/api/stations")
         out = []
         for s in (data if isinstance(data, list) else []):
             sc = s.get("shortcode") or s.get("id")
             if sc:
                 out.append((str(sc), str(s.get("name") or sc)))
-        return out
+        if out:                       # on ne remplace jamais un cache valide par du vide
+            self._stations_cache = out
+            self._stations_at = maintenant
+        return self._stations_cache
 
     async def fetch_stream_url(self) -> str:
         # Override explicite (STREAM_URL) mis en cache à l'init : prioritaire.
@@ -486,6 +501,12 @@ np_tracker = NowPlayingTracker()
 
 @bot.event
 async def on_ready():
+    # Amorce du cache des stations : l'auto-complétion doit pouvoir répondre sans réseau.
+    try:
+        noms = await api.fetch_stations(force=True)
+        log.info("Stations en cache pour l'auto-complétion : %d", len(noms))
+    except Exception as exc:
+        log.warning("Amorçage du cache des stations impossible : %s", exc)
     log.info("Connecté : %s (id %s)", bot.user, bot.user.id)
     # Sync PAR SERVEUR (instantané) et pas seulement en global.
     # `tree.sync()` global : Discord met jusqu'à 1 H à propager → le client affiche
@@ -691,8 +712,13 @@ async def cmd_liens(interaction: discord.Interaction):
 
 @cmd_station.autocomplete("station")
 async def station_autocomplete(interaction: discord.Interaction, current: str):
+    # Aucun appel réseau ici : on répond depuis le cache, sinon on dépasse les 3 s de Discord.
+    # Si le cache est vide (tout premier usage), on lance un rafraîchissement en tâche de fond
+    # et on répond avec ce qu'on a — la frappe suivante aura la liste.
     cur = (current or "").lower()
-    stations = await api.fetch_stations()
+    stations = api._stations_cache
+    if not stations:
+        asyncio.create_task(api.fetch_stations(force=True))
     return [
         app_commands.Choice(name=nm, value=sc)
         for sc, nm in stations
