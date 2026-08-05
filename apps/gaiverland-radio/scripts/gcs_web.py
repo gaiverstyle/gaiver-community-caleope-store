@@ -1634,6 +1634,20 @@ def regie_voix_reglages_ecrire(request: Request, payload: dict = Body(...)):
         return {"ok": False, "message": str(e)[:140]}
 
 
+@app.get("/dl/{nom}")
+def telecharger_pack(nom: str):
+    """Sert les paquets d'outils (ex. gaiverland-dl.zip) depuis scripts/packs/.
+    Route re-posée le 05/08 : elle existait sur l'ancienne instance et s'est perdue
+    dans une migration. Anti-traversée : basename + liste du dossier."""
+    from fastapi.responses import FileResponse
+    nom = os.path.basename(nom)
+    rep = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
+    chemin = os.path.join(rep, nom)
+    if not os.path.isdir(rep) or nom not in os.listdir(rep) or not os.path.isfile(chemin):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(chemin, media_type="application/zip", filename=nom)
+
+
 # ── Téléchargement LOCAL (gaiverland-dl sur le Mac/PC du chef) ──────────────
 # Le serveur est bridé par YouTube (quota + cookies qui brûlent) ; la machine du chef
 # ne l'est pas. Le client gaiverland-dl récupère la file, télécharge chez lui, et

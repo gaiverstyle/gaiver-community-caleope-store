@@ -1,0 +1,12 @@
+gaiverland-dl — téléchargeur local de la radio Gaiverland
+=========================================================
+Ta machine télécharge (pas de quota YouTube serveur), le serveur range tout.
+
+1. Mac/Linux : bash install.sh        Windows : clic droit install.ps1 > PowerShell
+2. Réponds aux deux questions (hôte + jeton — le k= de ton lien /regie)
+3. python3 gaiverland-dl.py --liste     → voir la file
+   python3 gaiverland-dl.py --limit 10  → en traiter 10
+   python3 gaiverland-dl.py             → tout traiter
+
+Nouveau PC ? Retélécharge le zip sur https://gaiverland.gaiver-it.fr/dl/gaiverland-dl.zip
+et relance l'installateur. Le jeton ne change pas.
