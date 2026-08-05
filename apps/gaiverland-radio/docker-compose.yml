@@ -530,6 +530,10 @@ services:
       # Écriture : /regie/musique permet au chef de déposer des cookies YouTube frais
       # depuis le navigateur (sans SSH), quand ceux du downloader expirent.
       - {{.BaseDir}}/app-config/gaiverland-radio/youtube-cookies.txt:/cookies/youtube-cookies.txt:rw
+      # Écriture : dépôt des titres téléchargés EN LOCAL par le chef (gaiverland-dl,
+      # depuis son Mac/PC — contourne les limites YouTube du serveur). Le client
+      # envoie le mp3 brut sur /api/regie/dl-local/depot, on l'écrit ici.
+      - {{.BaseDir}}/app-data/azuracast/stations/gaiverlandradio/media/music:/media-musique:rw
     ports:
       - "8100:8099"
     depends_on:

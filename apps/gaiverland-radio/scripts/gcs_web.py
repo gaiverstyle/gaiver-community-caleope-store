@@ -1019,6 +1019,44 @@ def _mettre_a_l_antenne(chemin: str) -> bool:
         return False
 
 
+def _retirer_de_l_antenne(chemin: str) -> int:
+    """Retire le fichier de TOUTES les playlists, sur toutes les stations (appelé quand le
+    chef RETIRE un jingle). Symétrique de _mettre_a_l_antenne — son absence était la fuite
+    du 05/08 : « Retirer » notait le refus mais laissait le jingle dans la playlist, donc
+    à l'antenne. Retourne le nombre de désassignations faites (best-effort : le filet
+    horaire côté serveur rattrape de toute façon)."""
+    cle = os.environ.get("AZURACAST_API_KEY", "")
+    if not cle or not chemin:
+        return 0
+    base = os.path.basename(chemin)
+    n = 0
+    h = {"X-API-Key": cle, "Accept": "application/json", "Content-Type": "application/json"}
+    try:
+        stations = httpx.get(f"{AZ_URL}/api/stations", headers=h, timeout=30).json()
+    except Exception:
+        return 0
+    for st in stations if isinstance(stations, list) else []:
+        sid = st.get("id")
+        try:
+            r = httpx.get(f"{AZ_URL}/api/station/{sid}/files", headers=h,
+                          params={"rowsPerPage": 3000}, timeout=45)
+            rows = r.json()
+            rows = rows.get("rows", rows) if isinstance(rows, dict) else rows
+            for f in rows:
+                if os.path.basename(f.get("path", "")) != base:
+                    continue
+                pls = [p["id"] for p in (f.get("playlists") or [])]
+                if not pls:
+                    continue
+                r2 = httpx.put(f"{AZ_URL}/api/station/{sid}/file/{f['id']}", headers=h,
+                               json={"playlists": []}, timeout=20)
+                if r2.status_code < 400:
+                    n += 1
+        except Exception:
+            continue
+    return n
+
+
 @app.post("/api/regie/review")
 def regie_review(request: Request, payload: dict = Body(...)):
     """Enregistre le verdict : ok (garder) / ko (retirer de l'antenne) / pending."""
@@ -1043,12 +1081,15 @@ def regie_review(request: Request, payload: dict = Body(...)):
         # Valider = mettre à l'antenne. Tant que le chef n'a pas gardé le jingle, il
         # n'est pas dans la playlist AzuraCast, donc il ne peut pas passer.
         diffuse = None
-        if st == "ok":
-            with conn.cursor() as cur:
-                cur.execute("SELECT audio_file FROM tts_library WHERE text_hash=%s", (h,))
-                row = cur.fetchone()
-            if row and row["audio_file"]:
+        with conn.cursor() as cur:
+            cur.execute("SELECT audio_file FROM tts_library WHERE text_hash=%s", (h,))
+            row = cur.fetchone()
+        if row and row["audio_file"]:
+            if st == "ok":
                 diffuse = _mettre_a_l_antenne(row["audio_file"])
+            else:
+                # Retirer / remettre en attente = HORS ANTENNE, immédiatement et partout.
+                diffuse = -_retirer_de_l_antenne(row["audio_file"])
         conn.close()
         return {"ok": True, "status": st, "diffuse": diffuse}
     except Exception as e:
@@ -1591,6 +1632,89 @@ def regie_voix_reglages_ecrire(request: Request, payload: dict = Body(...)):
         return {"ok": True, "message": "Voix ajustée — effet dès la prochaine phrase fabriquée."}
     except Exception as e:
         return {"ok": False, "message": str(e)[:140]}
+
+
+# ── Téléchargement LOCAL (gaiverland-dl sur le Mac/PC du chef) ──────────────
+# Le serveur est bridé par YouTube (quota + cookies qui brûlent) ; la machine du chef
+# ne l'est pas. Le client gaiverland-dl récupère la file, télécharge chez lui, et
+# dépose les mp3 ici. Corps BRUT (pas de multipart : python-multipart n'est pas dans
+# l'image, et une route Form sans lui ferait planter TOUT le site au démarrage).
+MEDIA_DEPOT = "/media-musique"
+DOSSIER_RE = re.compile(r"^[a-z0-9_-]{1,24}$")
+
+
+@app.get("/api/regie/dl-local/attente")
+def dl_local_attente(request: Request):
+    """La file de téléchargement, vue par le client local : propositions acceptées
+    non descendues + seeds thématiques en attente."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    out = []
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT title FROM proposal_decisions
+                           WHERE verdict='accept' AND downloaded_at IS NULL
+                           ORDER BY title LIMIT 300""")
+            out += [{"type": "proposition", "cle": r["title"], "dossier": "community"}
+                    for r in cur.fetchall()]
+            cur.execute("""SELECT theme, query FROM thematic_seeds
+                           WHERE status='pending' ORDER BY theme, query LIMIT 300""")
+            out += [{"type": "seed", "cle": r["query"], "dossier": r["theme"]}
+                    for r in cur.fetchall()]
+        conn.close()
+    except Exception as e:
+        return {"attente": [], "erreur": str(e)[:120]}
+    return {"attente": out}
+
+
+@app.post("/api/regie/dl-local/depot")
+async def dl_local_depot(request: Request, type: str = "", cle: str = "",
+                         dossier: str = "community", nom: str = ""):
+    """Réceptionne un mp3 téléchargé en local et le range dans le bon bac média."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if type not in ("proposition", "seed") or not cle:
+        raise HTTPException(status_code=400, detail="type/cle invalides")
+    if not DOSSIER_RE.fullmatch(dossier):
+        raise HTTPException(status_code=400, detail="dossier invalide")
+    # Nom de fichier : on neutralise tout ce qui ressemble à un chemin.
+    nom = os.path.basename(nom).replace("\x00", "").strip()
+    if not nom.lower().endswith(".mp3") or len(nom) < 8 or len(nom) > 180:
+        raise HTTPException(status_code=400, detail="nom de fichier invalide")
+    corps = await request.body()
+    if len(corps) < 400_000 or len(corps) > 40_000_000:
+        raise HTTPException(status_code=400, detail=f"taille suspecte ({len(corps)} octets)")
+    if not (corps[:3] == b"ID3" or corps[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+        raise HTTPException(status_code=400, detail="ce n'est pas un mp3")
+    rep = os.path.join(MEDIA_DEPOT, dossier)
+    try:
+        os.makedirs(rep, exist_ok=True)
+        chemin = os.path.join(rep, nom)
+        with open(chemin, "wb") as f:
+            f.write(corps)
+        os.chown(chemin, 1000, 1000)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="écriture impossible : " + str(e)[:90])
+    # Marquer la file + demander UN scan média à l'exécuteur (pas un par fichier).
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            if type == "proposition":
+                cur.execute("""UPDATE proposal_decisions SET downloaded_at=NOW(),
+                               download_status='ok-local' WHERE title=%s""", (cle,))
+            else:
+                cur.execute("""UPDATE thematic_seeds SET status='ok', downloaded_at=NOW()
+                               WHERE query=%s AND theme=%s""", (cle, dossier))
+            cur.execute("""INSERT INTO system_commandes (action, cible)
+                           SELECT 'scan_media', NULL
+                           WHERE NOT EXISTS (SELECT 1 FROM system_commandes
+                                             WHERE action='scan_media' AND etat='en attente')""")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return {"ok": True, "avert": "fichier posé mais file non marquée : " + str(e)[:90]}
+    return {"ok": True, "message": f"{nom} rangé dans music/{dossier}/"}
 
 
 @app.get("/api/regie/sante")
