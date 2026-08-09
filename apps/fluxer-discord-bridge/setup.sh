@@ -7,17 +7,36 @@ mkdir -p "${CALEOPE_BASE_DIR}/app-data/fluxer-discord-bridge/db"
 
 # Les tokens sont fournis interactivement par le CLI via params.json
 # et passés ici en tant que CALEOPE_PARAM_DISCORD_TOKEN, etc.
-cat > "${CONFIG_DIR}/secrets.env" << EOF
-DISCORD_TOKEN=${CALEOPE_PARAM_DISCORD_TOKEN:-}
-FLUXER_TOKEN=${CALEOPE_PARAM_FLUXER_TOKEN:-}
-CMD_PREFIX=${CALEOPE_PARAM_CMD_PREFIX:-brdg;}
-EOF
-chmod 600 "${CONFIG_DIR}/secrets.env"
+#
+# ⚠️ ORDRE DE PRIORITÉ : paramètre fourni > valeur DÉJÀ EN PLACE > défaut.
+# `caleope install --force` rejoue ce script SANS redemander les paramètres :
+# écrire `DISCORD_TOKEN=${CALEOPE_PARAM_DISCORD_TOKEN:-}` sans garde VIDE le
+# jeton et met le bot en boucle de crash sur MISSING_TOKENS. C'est arrivé le
+# 09/08 pendant une simple mise à jour d'image — et le 14/07 sur le bot radio,
+# ce qui avait déjà motivé ce motif ailleurs dans le magasin.
+SECRETS="${CONFIG_DIR}/secrets.env"
+_prev() { [ -f "${SECRETS}" ] && grep "^$1=" "${SECRETS}" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+_keep() { # $1=clé  $2=paramètre fourni  $3=défaut
+    local cur; cur="$(_prev "$1")"
+    if   [ -n "${2:-}" ];   then echo "$1=$2"
+    elif [ -n "${cur}" ];   then echo "$1=${cur}"
+    else                         echo "$1=${3:-}"
+    fi
+}
 
-# Vérification que les tokens ont bien été fournis
+{
+    _keep DISCORD_TOKEN "${CALEOPE_PARAM_DISCORD_TOKEN:-}" ""
+    _keep FLUXER_TOKEN  "${CALEOPE_PARAM_FLUXER_TOKEN:-}"  ""
+    _keep CMD_PREFIX    "${CALEOPE_PARAM_CMD_PREFIX:-}"    "brdg;"
+} > "${SECRETS}.new"
+mv -f "${SECRETS}.new" "${SECRETS}"
+chmod 600 "${SECRETS}"
+
+# Vérification que les tokens sont présents APRÈS préservation : ce qui compte
+# est ce qui se trouve dans le fichier, pas ce que l'utilisateur vient de saisir.
 MISSING=()
-[ -z "${CALEOPE_PARAM_DISCORD_TOKEN:-}" ] && MISSING+=("DISCORD_TOKEN")
-[ -z "${CALEOPE_PARAM_FLUXER_TOKEN:-}"  ] && MISSING+=("FLUXER_TOKEN")
+[ -z "$(_prev DISCORD_TOKEN)" ] && MISSING+=("DISCORD_TOKEN")
+[ -z "$(_prev FLUXER_TOKEN)"  ] && MISSING+=("FLUXER_TOKEN")
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     echo "  ⚠ Tokens manquants : ${MISSING[*]}"
