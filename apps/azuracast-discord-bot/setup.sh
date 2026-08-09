@@ -555,10 +555,19 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if not (p and p.voice_client):
         return
     bot_channel = p.voice_client.channel
-    if len([m for m in bot_channel.members if not m.bot]) == 0:
+    humans = len([m for m in bot_channel.members if not m.bot])
+    if humans == 0:
         log.info("Salon vide (%s) — pause", member.guild.name)
         if p.voice_client.is_playing():
             p.voice_client.pause()
+    elif p.voice_client.is_paused():
+        # ⚠️ SYMÉTRIQUE INDISPENSABLE de la pause ci-dessus.
+        # Sans cette branche, le bot met en pause quand le dernier humain part
+        # et ne repart JAMAIS : quand quelqu'un revient, il reste connecté mais
+        # muet. Vu de Discord, il « ne rejoint plus le vocal » alors qu'il y est.
+        # C'est exactement le symptôme remonté le 09/08.
+        log.info("Quelqu'un est revenu (%s) — reprise", member.guild.name)
+        p.voice_client.resume()
 
 
 @tasks.loop(seconds=45)
