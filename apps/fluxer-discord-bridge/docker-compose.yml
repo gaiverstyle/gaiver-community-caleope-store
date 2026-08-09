@@ -1,12 +1,19 @@
 services:
   fluxer-discord-bridge:
-    image: rillabel/fluxer-discord-bridge:latest
+    # Variante « voix » construite depuis le Dockerfile livré avec ce paquet
+    # (cf setup.sh, qui la construit si elle manque). L'image amont
+    # rillabel/fluxer-discord-bridge:latest est un pont TEXTE : elle ferait
+    # tourner le bot sans jamais lui donner la parole.
+    image: caleope-fluxer-discord-bridge-voice:1.0.0
     container_name: fluxer-discord-bridge
     restart: unless-stopped
     working_dir: /Bot
     env_file:
       - {{.BaseDir}}/app-config/{{.AppID}}/secrets.env
     volumes:
+      # Contient Bridges.yaml ET les sons (augghh*.mp3) : le bot les lit et
+      # les régénère dans /Bot/db, donc ce volume doit rester accessible en
+      # écriture.
       - {{.BaseDir}}/app-data/fluxer-discord-bridge/db:/Bot/db
     networks:
       - caleope-internal
