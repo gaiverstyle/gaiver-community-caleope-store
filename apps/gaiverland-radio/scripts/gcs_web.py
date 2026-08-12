@@ -613,11 +613,19 @@ def _station_current(station_key: str):
     return "", "", "", az_sid
 
 
-def _login_ok(provider: str, sub: str):
-    r = RedirectResponse("/?login=ok", status_code=302)
+def _login_ok(provider: str, sub: str, request: Request = None):
+    # Si la régie nous a envoyé ici (cookie gnext), on y RETOURNE après connexion —
+    # sinon le chef atterrirait sur l'accueil et devrait retaper /regie.
+    suivant = "/?login=ok"
+    if request is not None:
+        gn = request.cookies.get("gnext", "")
+        if gn in ("/regie", "/regie/voix", "/regie/sante", "/regie/musique"):
+            suivant = gn
+    r = RedirectResponse(suivant, status_code=302)
     r.set_cookie("gsid", _sign(f"{provider}:{sub}"), max_age=2592000,
                  httponly=True, secure=True, samesite="lax")
     r.delete_cookie("gstate")
+    r.delete_cookie("gnext")
     return r
 
 def _oauth_start(auth_url: str):
@@ -649,7 +657,7 @@ def auth_google_cb(request: Request, code: str = "", state: str = ""):
         sub = payload.get("sub", "")
     except Exception:
         pass
-    return _login_ok("google", sub) if sub else RedirectResponse("/?login=err", status_code=302)
+    return _login_ok("google", sub, request) if sub else RedirectResponse("/?login=err", status_code=302)
 
 @app.get("/api/auth/discord")
 def auth_discord():
@@ -674,7 +682,7 @@ def auth_discord_cb(request: Request, code: str = "", state: str = ""):
         sub = str(me.get("id", ""))
     except Exception:
         pass
-    return _login_ok("discord", sub) if sub else RedirectResponse("/?login=err", status_code=302)
+    return _login_ok("discord", sub, request) if sub else RedirectResponse("/?login=err", status_code=302)
 
 @app.get("/api/me")
 def me(request: Request):
@@ -823,7 +831,14 @@ ADMIN_TOKEN = os.environ.get("GCS_ADMIN_TOKEN", "").strip()
 
 
 def _admin_ok(request: Request) -> bool:
-    """Accès régie : jeton via ?k= (posé ensuite en cookie) — jamais public."""
+    """Accès régie, deux clés équivalentes :
+    1. le COMPTE connecté est un compte fondateur (Google/Discord de FOUNDER_IDS —
+       les mêmes identités qui pèsent déjà dans les votes) → la voie normale du chef,
+       valable sur n'importe quel appareil après une simple connexion au site ;
+    2. le jeton ?k=/cookie — conservé pour les OUTILS (gaiverland-dl, favoris
+       existants). Jamais public dans les deux cas."""
+    if FOUNDER_IDS and _uid(request) in FOUNDER_IDS:
+        return True
     if not ADMIN_TOKEN:
         return False
     given = request.query_params.get("k", "") or request.cookies.get("gadm", "")
@@ -1487,6 +1502,13 @@ def regie_dash(request: Request):
     couleurs Gaiverland). Les pages /regie/voix, /regie/sante et /regie/musique restent
     accessibles séparément — les liens déjà en favori continuent de marcher."""
     if not _admin_ok(request):
+        # Non connecté → on l'envoie se connecter sur le site (retour automatique ici).
+        # Connecté mais PAS fondateur → 404, la page n'existe pas pour lui.
+        if not _uid(request):
+            r = RedirectResponse("/?connexion=1", status_code=302)
+            r.set_cookie("gnext", "/regie", max_age=600, httponly=True,
+                         secure=True, samesite="lax")
+            return r
         raise HTTPException(status_code=404, detail="Not Found")
     r = HTMLResponse(REGIE_DASH)
     if request.query_params.get("k"):
@@ -1498,6 +1520,11 @@ def regie_dash(request: Request):
 @app.get("/regie/musique", response_class=HTMLResponse)
 def regie_musique_page(request: Request):
     if not _admin_ok(request):
+        if not _uid(request):
+            r = RedirectResponse("/?connexion=1", status_code=302)
+            r.set_cookie("gnext", "/regie/musique", max_age=600, httponly=True,
+                         secure=True, samesite="lax")
+            return r
         raise HTTPException(status_code=404, detail="Not Found")
     r = HTMLResponse(MUSIQUE_PAGE)
     if request.query_params.get("k"):
@@ -1854,6 +1881,11 @@ def regie_sante(request: Request):
 @app.get("/regie/sante", response_class=HTMLResponse)
 def regie_sante_page(request: Request):
     if not _admin_ok(request):
+        if not _uid(request):
+            r = RedirectResponse("/?connexion=1", status_code=302)
+            r.set_cookie("gnext", "/regie/sante", max_age=600, httponly=True,
+                         secure=True, samesite="lax")
+            return r
         raise HTTPException(status_code=404, detail="Not Found")
     r = HTMLResponse(SANTE_PAGE)
     if request.query_params.get("k"):
@@ -1865,6 +1897,11 @@ def regie_sante_page(request: Request):
 @app.get("/regie/voix", response_class=HTMLResponse)
 def regie_page(request: Request):
     if not _admin_ok(request):
+        if not _uid(request):
+            r = RedirectResponse("/?connexion=1", status_code=302)
+            r.set_cookie("gnext", "/regie/voix", max_age=600, httponly=True,
+                         secure=True, samesite="lax")
+            return r
         raise HTTPException(status_code=404, detail="Not Found")
     r = HTMLResponse(REGIE_PAGE)
     if request.query_params.get("k"):   # mémorise le jeton → lien simple ensuite
