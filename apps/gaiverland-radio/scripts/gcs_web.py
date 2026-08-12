@@ -1684,6 +1684,56 @@ MEDIA_DEPOT = "/media-musique"
 DOSSIER_RE = re.compile(r"^[a-z0-9_-]{1,24}$")
 
 
+EL_ENV = "/secrets/elevenlabs.env"
+
+
+@app.post("/api/regie/voix/cle")
+def regie_voix_cle(request: Request, payload: dict = Body(...)):
+    """Remplace la clé ElevenLabs depuis la régie. On VALIDE la clé en direct auprès
+    d'ElevenLabs avant de l'écrire — une clé refusée ne remplace jamais une clé en
+    place. Puis on demande à l'exécuteur de relancer le moteur de voix (le conteneur
+    doit être relancé pour relire son env_file)."""
+    if not _admin_ok(request):
+        raise HTTPException(status_code=404, detail="Not Found")
+    cle = str(payload.get("cle", "")).strip()
+    if not re.fullmatch(r"sk_[A-Za-z0-9]{16,96}", cle):
+        raise HTTPException(status_code=400,
+                            detail="format inattendu — une clé ElevenLabs commence par sk_")
+    # Épreuve du feu : la clé doit répondre chez ElevenLabs, sinon on ne touche à rien.
+    try:
+        r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                      headers={"xi-api-key": cle}, timeout=25)
+    except Exception as e:
+        return {"ok": False, "message": "ElevenLabs injoignable : " + str(e)[:80]}
+    if r.status_code != 200:
+        return {"ok": False, "message": f"clé refusée par ElevenLabs (HTTP {r.status_code}) "
+                                        "— rien n'a été modifié"}
+    d = r.json()
+    try:
+        lignes = []
+        with open(EL_ENV, encoding="utf-8") as f:
+            for l in f:
+                if l.startswith("ELEVENLABS_API_KEY="):
+                    l = "ELEVENLABS_API_KEY=" + cle + "\n"
+                lignes.append(l)
+        with open(EL_ENV, "w", encoding="utf-8") as f:
+            f.writelines(lignes)
+    except Exception as e:
+        return {"ok": False, "message": "écriture impossible : " + str(e)[:90]}
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO system_commandes (action, cible)
+                           VALUES ('relancer', 'gaiverland-tts')""")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return {"ok": True, "message": "Clé validée (%s/%s caractères utilisés) — le moteur de "
+            "voix redémarre dans la minute." % (d.get("character_count", "?"),
+                                                d.get("character_limit", "?"))}
+
+
 @app.get("/api/regie/dl-local/attente")
 def dl_local_attente(request: Request):
     """La file de téléchargement, vue par le client local : propositions acceptées
@@ -2252,6 +2302,19 @@ function rendreVoix(){
         (q.reset_unix? " · remise à zéro le "+new Date(q.reset_unix*1000).toLocaleDateString("fr-FR"):"")+
       LT+"/div"+GT+
     LT+"/div"+GT+
+    LT+'div class="card"'+GT+
+      LT+'div class="det" style="margin-bottom:6px"'+GT+
+        "Clé ElevenLabs — à remplacer quand les crédits affichent « indisponible » ou "+
+        "que les phrases échouent (les clés se périment). Crée-la sur elevenlabs.io, "+
+        "profil, cle API : elle commence par sk_. Elle est vérifiée chez ElevenLabs "+
+        "avant d'être acceptée."+LT+"/div"+GT+
+      LT+'div class="row"'+GT+
+        LT+'input type="password" class="field-input" id="elk" style="flex:1" '+
+          'placeholder="sk_…" autocomplete="off"'+GT+
+        LT+'button class="btn ghost" onclick="remplacerCle()"'+GT+"Remplacer la clé"+LT+"/button"+GT+
+      LT+"/div"+GT+
+      LT+'div class="msg" id="msg-elk"'+GT+LT+"/div"+GT+
+    LT+"/div"+GT+
     LT+"h2"+GT+"Réglages de la voix"+LT+"/h2"+GT+
     LT+'div class="card"'+GT+
       LT+'div class="det" style="margin-bottom:8px"'+GT+
@@ -2581,6 +2644,19 @@ async function enregistrerVoix(){
     if(d.ok) Object.keys(corps).forEach(function(n){ VOIX[n]=corps[n]; });
     m.textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||d.detail||"");
   }catch(e){ m.textContent="⚠️ réseau"; }
+}
+async function remplacerCle(){
+  const e=document.getElementById("elk"), m=document.getElementById("msg-elk");
+  const cle=(e.value||"").trim();
+  if(!cle){ m.textContent="⚠️ colle d abord la nouvelle clé"; return; }
+  m.textContent="vérification chez ElevenLabs…";
+  try{
+    const rep=await fetch("/api/regie/voix/cle",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({cle:cle})});
+    const d=await rep.json();
+    m.textContent=(d.ok?"✅ ":"⚠️ ")+(d.message||d.detail||"");
+    if(d.ok){ e.value=""; setTimeout(charger,70000); }
+  }catch(err){ m.textContent="⚠️ réseau"; }
 }
 async function voixDefaut(){
   VOIX={stability:0.30,style:0.75,similarity_boost:0.75,speed:1.0};

@@ -534,6 +534,10 @@ services:
       # depuis son Mac/PC — contourne les limites YouTube du serveur). Le client
       # envoie le mp3 brut sur /api/regie/dl-local/depot, on l'écrit ici.
       - {{.BaseDir}}/app-data/azuracast/stations/gaiverlandradio/media/music:/media-musique:rw
+      # Écriture : remplacement de la clé ElevenLabs depuis /regie (les clés d'EL se
+      # périment — le 12/08 ils ont invalidé les clés ancienne génération). La clé ne
+      # transite QUE navigateur→site→ce fichier, jamais par un chat ni par la base.
+      - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env:/secrets/elevenlabs.env:rw
     ports:
       - "8100:8099"
     depends_on:
