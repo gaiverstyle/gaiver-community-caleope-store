@@ -2973,7 +2973,20 @@ from az_utils import upload_file
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DB_URL          = os.environ["DATABASE_URL"]
-EL_API_KEY      = os.environ["ELEVENLABS_API_KEY"]
+def EL_API_KEY() -> str:
+    """La clé, relue dans le fichier monté à CHAQUE appel : un remplacement depuis
+    /regie prend effet immédiatement (docker restart ne relit pas env_file). Repli
+    sur l'environnement si le montage manque (ancienne installation)."""
+    try:
+        with open("/secrets/elevenlabs.env", encoding="utf-8") as f:
+            for l in f:
+                if l.startswith("ELEVENLABS_API_KEY="):
+                    v = l.split("=", 1)[1].strip()
+                    if v:
+                        return v
+    except Exception:
+        pass
+    return os.environ.get("ELEVENLABS_API_KEY", "")
 EL_VOICE_ID     = os.environ["ELEVENLABS_VOICE_ID"]     # ID de la voix Rebexis sur EL
 EL_MODEL        = os.environ.get("ELEVENLABS_MODEL", "eleven_v3")   # v2 = accent FR fiable ; eleven_v3 = plus expressif mais prononciation instable
 EL_CHARS_LIMIT  = int(os.environ.get("EL_CHARS_LIMIT", "10000"))   # par mois
@@ -3112,7 +3125,7 @@ def el_real_remaining():
     n = None
     try:
         r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
-                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+                      headers={"xi-api-key": EL_API_KEY()}, timeout=6)
         if r.status_code == 200:
             d = r.json()
             limit = d.get("character_limit") or 0
@@ -3255,7 +3268,7 @@ def el_synthesize(text: str) -> bytes:
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{EL_VOICE_ID}"
     resp = httpx.post(
         url,
-        headers={"xi-api-key": EL_API_KEY, "Content-Type": "application/json"},
+        headers={"xi-api-key": EL_API_KEY(), "Content-Type": "application/json"},
         json={
             "text": text,
             "model_id": EL_MODEL,
@@ -3316,7 +3329,7 @@ def el_credits_pct():
     pct = None
     try:
         r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
-                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+                      headers={"xi-api-key": EL_API_KEY()}, timeout=6)
         if r.status_code == 200:
             d = r.json()
             limit = d.get("character_limit") or 0
@@ -3601,7 +3614,7 @@ def get_quota():
     limite, reset = EL_CHARS_LIMIT, None
     try:
         r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
-                      headers={"xi-api-key": EL_API_KEY}, timeout=6)
+                      headers={"xi-api-key": EL_API_KEY()}, timeout=6)
         if r.status_code == 200:
             d = r.json()
             limite = d.get("character_limit") or EL_CHARS_LIMIT

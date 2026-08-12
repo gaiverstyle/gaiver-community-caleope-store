@@ -131,6 +131,10 @@ services:
       - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env
     volumes:
       - {{.BaseDir}}/app-config/gaiverland-radio/scripts:/app:ro
+      # Lecture : la clé ElevenLabs est relue dans CE FICHIER à chaque appel — un
+      # remplacement depuis /regie prend effet sans redémarrage (docker restart ne
+      # relit pas env_file, leçon apprise deux fois).
+      - {{.BaseDir}}/app-config/gaiverland-radio/elevenlabs.env:/secrets/elevenlabs.env:ro
       - {{.BaseDir}}/app-data/gaiverland-radio/tts-cache:/tts-cache
     depends_on:
       gw-db:
