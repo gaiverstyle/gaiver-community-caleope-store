@@ -18,6 +18,7 @@ Garde-fous (sûr par défaut) :
 import os
 import json
 import time
+import re
 import subprocess
 import psycopg2
 import psycopg2.extras
@@ -171,6 +172,42 @@ def _ytdlp(query: str, out: str, match_filter: str) -> subprocess.CompletedProce
     return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
 
+REMIX_RE = re.compile(r"remix|bootleg|flip|rework|hardtek|frenchcore|hardstyle", re.I)
+
+
+def _fichier_le_plus_recent(dossier: str):
+    """Le mp3 le plus récent du dossier — celui que yt-dlp vient d'écrire."""
+    try:
+        mp3 = [os.path.join(dossier, f) for f in os.listdir(dossier)
+               if f.lower().endswith(".mp3")]
+        return max(mp3, key=os.path.getmtime) if mp3 else None
+    except OSError:
+        return None
+
+
+def _ecart_basses_db(chemin: str) -> float:
+    """Écart (dB) entre le niveau global et le niveau sous 110 Hz, sur 90 s au cœur du
+    titre. Remix électro qui tape : 2-5 dB (la basse domine). Version folk/acoustique
+    attrapée par erreur : 9 dB et plus (10,9 mesurés sur la fausse Prisons de Nantes).
+    Mesure impossible → -1 : on laisse passer, jamais de faux rejet sur une panne d'outil."""
+    def rms(filtre):
+        af = (filtre + "," if filtre else "") + "astats=metadata=1:measure_perchannel=none"
+        r = subprocess.run(["ffmpeg", "-v", "info", "-ss", "45", "-t", "90", "-i", chemin,
+                            "-af", af, "-f", "null", "-"], capture_output=True, text=True)
+        for l in (r.stderr or "").splitlines():
+            if "RMS level dB" in l:
+                try:
+                    return float(l.rsplit(" ", 1)[-1])
+                except ValueError:
+                    pass
+        return None
+    plein = rms(None)
+    basses = rms("lowpass=f=110")
+    if plein is None or basses is None:
+        return -1.0
+    return plein - basses
+
+
 def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
     """Cherche + télécharge le meilleur audio PROPRE en MP3 dans target_dir. True si OK.
 
@@ -187,6 +224,23 @@ def download_one(query: str, target_dir: str = DOWNLOAD_DIR) -> bool:
             blob = (r.stdout or "") + (r.stderr or "")
             # 101 = limite --max-downloads atteinte = 1 titre bien téléchargé (succès).
             if r.returncode in (0, 101) or "has already been downloaded" in blob:
+                # ── Vérification « remix » (leçon du 13/08) : la recherche avait rendu une
+                # version FOLK à la place du remix demandé (Prisons de Nantes). Un remix
+                # électro qui tape a la basse qui domine : écart global/sous-110 Hz ≤ 8 dB.
+                # Au-delà = mauvaise version → on jette, on compte un échec, la mécanique
+                # de reprise refera un essai (et le chef voit l'échec sur /regie).
+                if REMIX_RE.search(query):
+                    f = _fichier_le_plus_recent(target_dir)
+                    if f:
+                        e = _ecart_basses_db(f)
+                        if e > 8.0:
+                            print(f"  ✗ [vérif remix] '{query[:44]}' : écart basses {e:.1f} dB"
+                                  " — pas un remix qui tape, fichier rejeté", flush=True)
+                            try:
+                                os.remove(f)
+                            except OSError:
+                                pass
+                            return False
                 return True
             tail = blob[-250:]
             if "sign in" in tail.lower() or "cookies" in tail.lower() or "not a bot" in tail.lower():

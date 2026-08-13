@@ -327,6 +327,9 @@ OAUTH_SESSION_SECRET=${OAUTH_SESSION_SECRET}
 AZURACAST_API_KEY=${AZ_API_KEY}
 AZURACAST_STATION_ID=${AZ_STATION_ID}
 AZURACAST_STATIONS_PATH=${CALEOPE_BASE_DIR}/app-data/azuracast/stations
+# Plafond des rotations : 250 excluait EN PERMANENCE des titres eligibles (selection
+# quasi deterministe, vivier 280+ -> toujours les memes ~30 dehors, constate le 13/08).
+ROTATION_MAX_TRACKS=300
 AZURACAST_GW_PLAYLIST_ID=
 AZURACAST_REBEXIS_PLAYLIST_ID=
 REBEXIS_MODE=${REBEXIS_MODE}
