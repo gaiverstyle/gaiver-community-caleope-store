@@ -1699,16 +1699,39 @@ def regie_voix_cle(request: Request, payload: dict = Body(...)):
     if not re.fullmatch(r"sk_[A-Za-z0-9]{16,96}", cle):
         raise HTTPException(status_code=400,
                             detail="format inattendu — une clé ElevenLabs commence par sk_")
-    # Épreuve du feu : la clé doit répondre chez ElevenLabs, sinon on ne touche à rien.
+    # Épreuve du feu, en DEUX temps. Les clés ElevenLabs se créent maintenant avec des
+    # permissions à cocher : une clé limitée au Text-to-Speech est VALABLE pour parler
+    # mais refusée sur l'endpoint « abonnement ». On distingue donc « clé morte » de
+    # « clé vivante mais myope », au lieu d'un refus aveugle (vécu par le chef le 12/08).
+    avert = ""
     try:
         r = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
                       headers={"xi-api-key": cle}, timeout=25)
     except Exception as e:
         return {"ok": False, "message": "ElevenLabs injoignable : " + str(e)[:80]}
-    if r.status_code != 200:
-        return {"ok": False, "message": f"clé refusée par ElevenLabs (HTTP {r.status_code}) "
-                                        "— rien n'a été modifié"}
-    d = r.json()
+    if r.status_code == 200:
+        d = r.json()
+    else:
+        try:
+            detail = r.json().get("detail", {})
+            raison = detail.get("message") or detail.get("status") or str(detail)[:80]
+        except Exception:
+            raison = ""
+        # 2e chance : la clé sait-elle au moins parler ? (liste des voix = permission TTS)
+        try:
+            r2 = httpx.get("https://api.elevenlabs.io/v1/voices",
+                           headers={"xi-api-key": cle}, timeout=25)
+        except Exception as e:
+            return {"ok": False, "message": "ElevenLabs injoignable : " + str(e)[:80]}
+        if r2.status_code != 200:
+            return {"ok": False, "message": f"clé refusée par ElevenLabs (HTTP {r.status_code}"
+                    + (f" — {raison}" if raison else "") + ") — rien n'a été modifié. "
+                    "Vérifie que tu as copié la clé complète, ou recrée-la."}
+        d = {}
+        avert = (" ⚠️ Cette clé est restreinte : la voix marchera, mais la régie ne pourra "
+                 "PAS afficher tes crédits (l'accès « User / Read » manque). Pour revoir les "
+                 "chiffres, recrée la clé sur elevenlabs.io avec toutes les permissions et "
+                 "remplace-la à nouveau ici.")
     try:
         lignes = []
         with open(EL_ENV, encoding="utf-8") as f:
@@ -1729,9 +1752,12 @@ def regie_voix_cle(request: Request, payload: dict = Body(...)):
         conn.close()
     except Exception:
         pass
-    return {"ok": True, "message": "Clé validée (%s/%s caractères utilisés) — le moteur de "
-            "voix redémarre dans la minute." % (d.get("character_count", "?"),
-                                                d.get("character_limit", "?"))}
+    if d:
+        msg = ("Clé validée (%s/%s caractères utilisés) — effet immédiat."
+               % (d.get("character_count", "?"), d.get("character_limit", "?")))
+    else:
+        msg = "Clé acceptée — effet immédiat." + avert
+    return {"ok": True, "message": msg}
 
 
 @app.get("/api/regie/dl-local/attente")
