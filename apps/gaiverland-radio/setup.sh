@@ -1941,7 +1941,7 @@ HARD_TITLE_RE = os.environ.get("HARD_TITLE_RE",
 # Dossiers des stations thématiques (chill/phonk/synthwave/hard/lofi) : leur contenu
 # appartient à CES scènes, jamais à la Mainstage — même si l'analyzer les tague
 # festival/energique. Sinon phonk/synthwave bavent sur la Mainstage.
-SCENE_PATH_RE = os.environ.get("SCENE_PATH_RE", r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|boost|phonk2)/|/bien-francais/|/gaiverland_[a-z0-9]+/media/)")
+SCENE_PATH_RE = os.environ.get("SCENE_PATH_RE", r"(/music/(chill|phonk|synthwave|hard|lofi|lofi2|boost|phonk2|buvette)/|/bien-francais/|/gaiverland_[a-z0-9]+/media/)")
 
 # ── Config UI par défaut ───────────────────────────────────────────────────────
 DEFAULT_UI_CONFIG = {
