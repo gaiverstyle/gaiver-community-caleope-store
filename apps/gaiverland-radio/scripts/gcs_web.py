@@ -65,6 +65,7 @@ STATIONS = {
     "synthwave": int(os.environ.get("GCS_SYNTHWAVE_STATION", "7")),
     "club": int(os.environ.get("GCS_CLUB_STATION", "9")),
     "classics": int(os.environ.get("GCS_CLASSICS_STATION", "8")),
+    "buvette": int(os.environ.get("GCS_BUVETTE_STATION", "10")),
 }
 STREAM_URL  = os.environ.get("GCS_STREAM_URL", "")  # override manuel Mainstage si besoin
 # Base publique d'AzuraCast pour réécrire les URLs internes (stream, pochettes)
@@ -3641,6 +3642,7 @@ body{padding-bottom:96px}
       <div class="stage live" data-st="synthwave" onclick="selectStation('synthwave')"><div class="ico">🔊</div><div class="nm">Boost</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'synthwave')">🔗</button></div>
       <div class="stage live" data-st="classics" onclick="selectStation('classics')"><div class="ico">💿</div><div class="nm">Classics</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'classics')">🔗</button></div>
       <div class="stage live" data-st="club" onclick="selectStation('club')"><div class="ico">🪩</div><div class="nm">Club</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'club')">🔗</button></div>
+      <div class="stage live" data-st="buvette" onclick="selectStation('buvette')"><div class="ico">🍺</div><div class="nm">Buvette</div><button class="cp" title="Copier le lien mp3" onclick="copyLink(event,'buvette')">🔗</button></div>
     </div>
   </div>
   <div class="stationDesc" id="stationDesc">La grande scène, celle où tout Gaiverland converge quand la nuit tombe et que les basses font trembler le sol. On n'y joue que les hymnes — ceux qui lèvent cent mille bras d'un coup, ceux qu'on reprend en chœur sans connaître les paroles. Si tu ne sais pas où aller, viens là : c'est le cœur qui bat.</div>
@@ -3835,7 +3837,7 @@ let curStation='main';
 // B direct (scènes cross-origin — Web Audio les muterait sans header CORS).
 const A=document.getElementById('player'), B=document.getElementById('player-b');
 // Kade a posé un lien mp3 same-origin par station → Web Audio lisible PARTOUT.
-const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3',classics:'/classics.mp3',club:'/club.mp3'};
+const ROUTE={main:'/live.mp3',chill:'/chill.mp3',hard:'/hard.mp3',phonk:'/phonk.mp3',lofi:'/lofi.mp3',synthwave:'/synthwave.mp3',classics:'/classics.mp3',club:'/club.mp3',buvette:'/buvette.mp3'};
 function waOK(st){ return !!ROUTE[st]; }             // toutes les stations = same-origin
 
 // ── Copier le lien mp3 d'une station (VLC, tel, partage) ──
@@ -3981,7 +3983,8 @@ const STATION_DESC={
   lofi:"Le refuge tout doux, la petite pièce où la pluie tombe derrière la vitre. Vinyle qui craque, beats feutrés, rien qui monte — la scène la plus lente du festival. Pour s'endormir, décompresser, ou laisser la nuit passer en douceur.",
   synthwave:"La scène qui pousse. Hyper techno, kicks qui rebondissent, leads euphoriques lancés à pleine vitesse — le tempo te prend les jambes et refuse de les lâcher. La station des montées d'adrénaline. Roule, cours, vole : elle est faite pour ça.",
   classics:"La salle des souvenirs, la scène où le temps s'arrête. Les hymnes de l'âge d'or qu'on connaît par cœur, l'EDM doré et les tubes intemporels, plus les pépites récentes qui tiennent. La nostalgie qui rassemble tout le monde. Ferme les yeux, t'y es déjà.",
-  club:"La warehouse de Gaiverland, quand la nuit refuse de finir. House de club groovy et fédératrice — Dom Dolla, MK, Oliver Heldens, la house vocale qui fait bouger sans jamais tomber dans le dur. La scène de ceux qui ne veulent pas rentrer."
+  club:"La warehouse de Gaiverland, quand la nuit refuse de finir. House de club groovy et fédératrice — Dom Dolla, MK, Oliver Heldens, la house vocale qui fait bouger sans jamais tomber dans le dur. La scène de ceux qui ne veulent pas rentrer.",
+  buvette:"La buvette du festival, la grande tablée où personne ne reste assis. Que des originaux qu'on braille debout, un bras autour du voisin : la chanson française qui fait la fête, l'après-ski allemand qui déraille (Layla, Atemlos, DJ Ötzi) et l'europop kitsch qui ne meurt jamais (Macarena, Barbie Girl, Blue). Pas de basses sérieuses ici — juste des tubes, des chœurs et des tournées. Santé, chef."
 };
 function showStationDesc(s){const el=document.getElementById('stationDesc');const t=STATION_DESC[s];if(el&&t)el.textContent=t;}
 
