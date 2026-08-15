@@ -561,8 +561,8 @@ def _city_photos(city: str):
 
 @app.get("/api/visuals")
 def visuals():
-    """Images du fond du player : cover courante + photos DU CHEF (balade + Toulon).
-    Wikipédia retiré → zéro rue à voitures / carte postale N&B. Fail-safe (cover au minimum)."""
+    """Images du fond du player : cover + photos RÉGIONALES de la ville courante du festival
+    (tournée Bretagne) + les photos du chef en filet de sécurité. Fail-safe (cover au minimum)."""
     imgs = []
     try:
         r = httpx.get(f"{AZ_URL}/api/nowplaying/{AZ_STATION}", timeout=4)
@@ -572,7 +572,18 @@ def visuals():
                 imgs.append(art)
     except Exception:
         pass
-    imgs += _bg_own_photos()
+    # Ville courante du festival (mini-scène) → photos de la région (Wikipédia/Commons, filtrées).
+    city = os.environ.get("GCS_CITY", "").strip()
+    try:
+        r = httpx.get(f"{STATE_URL}/state/current", timeout=2)
+        if r.status_code == 200:
+            c = r.json().get("city", "")
+            if c:
+                city = c
+    except Exception:
+        pass
+    imgs += _city_photos(city)      # photos régionales de la ville courante (dominent)
+    imgs += _bg_own_photos()        # tes photos = filet de sécurité (jamais de fond vide)
     return {"images": imgs}
 
 

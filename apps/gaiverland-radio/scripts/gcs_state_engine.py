@@ -26,7 +26,7 @@ import psycopg2.extras
 from fastapi import FastAPI, HTTPException
 
 DB_URL   = os.environ["DATABASE_URL"]
-GCS_CITY = os.environ.get("GCS_CITY", "Toulon")
+GCS_CITY = os.environ.get("GCS_CITY", "Perros-Guirec")  # TOURNÉE BRETAGNE été 2026 (ex-Toulon)
 
 import random, threading, time as _time
 
@@ -37,22 +37,25 @@ import random, threading, time as _time
 # site affiche « Mini-scène de <ville> ». Ville-mère = GCS_CITY (Toulon).
 # CPU-only, aucune API externe : liste de villes curée en dur.
 MINISCENE_ENABLED = os.environ.get("MINISCENE_ENABLED", "true").lower() == "true"
-MINISCENE_HOME    = os.environ.get("MINISCENE_HOME", GCS_CITY)
+MINISCENE_HOME    = os.environ.get("MINISCENE_HOME", "Perros-Guirec")  # ville-mère tournée Bretagne
 MINISCENE_EVAL_S  = int(os.environ.get("MINISCENE_EVAL_S", "1800"))   # ré-évalue /30 min
 MINISCENE_MIN_H   = float(os.environ.get("MINISCENE_MIN_H", "4"))     # durée mini d'une sortie
 MINISCENE_MAX_H   = float(os.environ.get("MINISCENE_MAX_H", "8"))
-MINISCENE_COOLDOWN_H = float(os.environ.get("MINISCENE_COOLDOWN_H", "6"))  # repos maison après retour
+MINISCENE_COOLDOWN_H = float(os.environ.get("MINISCENE_COOLDOWN_H", "3"))  # repos maison après retour
 MINISCENE_TZ      = os.environ.get("LORE_TZ", "Europe/Paris")
 # Probabilité de DÉPART à chaque évaluation quand on est à la maison (hors cooldown).
-MINISCENE_P_WEEKEND = float(os.environ.get("MINISCENE_P_WEEKEND", "0.06"))
-MINISCENE_P_WEEKDAY = float(os.environ.get("MINISCENE_P_WEEKDAY", "0.005"))
+# TOURNÉE BRETAGNE (été 2026) : cadence relevée pour rouler activement la région.
+MINISCENE_P_WEEKEND = float(os.environ.get("MINISCENE_P_WEEKEND", "0.12"))
+MINISCENE_P_WEEKDAY = float(os.environ.get("MINISCENE_P_WEEKDAY", "0.07"))
 
-# Villes proches de Toulon (Provence / Côte d'Azur), ~2-3 h de route max.
+# TOURNÉE BRETAGNE — Côte de Granit Rose + rayon ~100-200 km (Morlaix à l'ouest → est de Saint-Malo).
+# Ville-mère = Perros-Guirec. Villes côtières privilégiées (belles photos régionales).
 MINISCENE_CITIES = [
-    "Marseille", "Aix-en-Provence", "Nice", "Cannes", "Antibes", "Saint-Tropez",
-    "Hyères", "Fréjus", "Bandol", "Cassis", "La Ciotat", "Aubagne",
-    "Avignon", "Nîmes", "Arles", "Montpellier", "Grasse", "Menton",
-    "Manosque", "Gap", "Digne-les-Bains", "Sisteron",
+    "Ploumanac'h", "Trégastel", "Trébeurden", "Lannion", "Louannec",
+    "Morlaix", "Roscoff", "Saint-Pol-de-Léon", "Locquirec", "Plestin-les-Grèves",
+    "Paimpol", "Tréguier", "Pontrieux", "Île-de-Bréhat", "Guingamp",
+    "Saint-Brieuc", "Binic", "Erquy", "Cap Fréhel", "Saint-Cast-le-Guildo",
+    "Dinan", "Dinard", "Saint-Malo", "Cancale", "Pléneuf-Val-André",
 ]
 
 MOOD_TO_STAGE: dict[str, str] = {
