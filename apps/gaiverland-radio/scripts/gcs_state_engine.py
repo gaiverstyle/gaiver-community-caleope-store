@@ -58,6 +58,11 @@ MINISCENE_CITIES = [
     "Dinan", "Dinard", "Saint-Malo", "Cancale", "Pléneuf-Val-André",
 ]
 
+# Bascule PROGRAMMÉE : avant cette date/heure (Europe/Paris) le festival reste à Toulon
+# sans excursion ; à partir de là → tournée Bretagne. Une fois passé, tournée normale.
+MINISCENE_TOUR_START   = os.environ.get("MINISCENE_TOUR_START", "2026-08-15T20:00:00")
+MINISCENE_PRETOUR_CITY = os.environ.get("MINISCENE_PRETOUR_CITY", "Toulon")
+
 MOOD_TO_STAGE: dict[str, str] = {
     "drift":    "sunset",
     "pulse":    "mainstage",
@@ -253,6 +258,19 @@ def _is_weekend() -> bool:
     return wd >= 5   # samedi(5) / dimanche(6)
 
 
+def _tour_active() -> bool:
+    """La tournée Bretagne démarre à MINISCENE_TOUR_START (heure de Paris)."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(MINISCENE_TZ)
+        start = datetime.datetime.fromisoformat(MINISCENE_TOUR_START)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=tz)
+        return datetime.datetime.now(tz) >= start
+    except Exception:
+        return True   # en cas de souci de parsing, ne pas bloquer la tournée
+
+
 def _lore_transition(conn, text: str, city: str):
     """Écrit une entrée 'city_transition' dans le journal du festival (table partagée)."""
     try:
@@ -299,22 +317,45 @@ def _tour_manager():
                 st = cur.fetchone() or {}
             now = datetime.datetime.now(datetime.timezone.utc)
 
-            if st.get("is_miniscene"):
-                until = st.get("miniscene_until")
-                if not until or now >= until:
-                    _go_home(conn)
+            if not _tour_active():
+                # ── Pré-tournée : garder le festival à Toulon, ZÉRO excursion. ──
+                if (st.get("home_city") != MINISCENE_PRETOUR_CITY
+                        or st.get("city") != MINISCENE_PRETOUR_CITY
+                        or st.get("is_miniscene")):
+                    with conn.cursor() as cur:
+                        cur.execute("""UPDATE gcs_state SET city=%s, home_city=%s,
+                                       is_miniscene=FALSE, miniscene_until=NULL,
+                                       miniscene_return_after=NULL WHERE id=1""",
+                                    (MINISCENE_PRETOUR_CITY, MINISCENE_PRETOUR_CITY))
+                    conn.commit()
             else:
-                cd = st.get("miniscene_return_after")
-                on_cooldown = cd and now < cd
-                if not on_cooldown:
-                    p = MINISCENE_P_WEEKEND if _is_weekend() else MINISCENE_P_WEEKDAY
-                    if random.random() < p:
-                        # ville différente de la précédente
-                        last = st.get("city")
-                        pool = [c for c in MINISCENE_CITIES if c != last] or MINISCENE_CITIES
-                        city = random.choice(pool)
-                        hours = random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
-                        _depart(conn, city, hours)
+                # ── Tournée active : bascule UNIQUE Toulon → Bretagne au 1er passage. ──
+                if st.get("home_city") == MINISCENE_PRETOUR_CITY:
+                    with conn.cursor() as cur:
+                        cur.execute("""UPDATE gcs_state SET city=%s, home_city=%s,
+                                       is_miniscene=FALSE, miniscene_until=NULL,
+                                       miniscene_return_after=NULL WHERE id=1""",
+                                    (MINISCENE_HOME, MINISCENE_HOME))
+                    conn.commit()
+                    _lore_transition(conn, f"Le festival prend la route : cap sur {MINISCENE_HOME} et la Côte de Granit Rose.", MINISCENE_HOME)
+                    st = {**st, "city": MINISCENE_HOME, "home_city": MINISCENE_HOME, "is_miniscene": False}
+
+                if st.get("is_miniscene"):
+                    until = st.get("miniscene_until")
+                    if not until or now >= until:
+                        _go_home(conn)
+                else:
+                    cd = st.get("miniscene_return_after")
+                    on_cooldown = cd and now < cd
+                    if not on_cooldown:
+                        p = MINISCENE_P_WEEKEND if _is_weekend() else MINISCENE_P_WEEKDAY
+                        if random.random() < p:
+                            # ville différente de la précédente
+                            last = st.get("city")
+                            pool = [c for c in MINISCENE_CITIES if c != last] or MINISCENE_CITIES
+                            city = random.choice(pool)
+                            hours = random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
+                            _depart(conn, city, hours)
             conn.close()
         except Exception as e:
             print(f"  ⚠ tour manager: {e}")
