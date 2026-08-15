@@ -432,9 +432,10 @@ _PHOTO_REJECT = re.compile(
     r"(blason|armoiries|coat[_ ]?of[_ ]?arms|wappen|logo|drapeau|flag|"
     r"carte|\bmap\b|plan_|localisation|location_|situation|position|"
     r"seal|sceau|diagram|graph|chart|\.svg|"
-    r"postcard|postale|ancien|vintage|s[ée]pia|noir[_ ]et[_ ]blanc|"
-    r"black[_ ]?and[_ ]?white|\bn&b\b|gravure|lithograph|estampe|"
-    r"18\d\d|19[0-5]\d)", re.I)
+    r"postcard|postale|ancienne?|vintage|s[ée]pia|noir[_ ]et[_ ]blanc|"
+    r"black[_ ]?and[_ ]?white|\bn&b\b|gravure|lithograph|estampe)", re.I)
+    # NB : PAS de motif d'année (18xx/19xx) — il matchait le « 1920px » des URLs Wikimedia
+    # et rejetait TOUTES les photos. Les mots-clés ci-dessus suffisent pour les cartes postales.
 
 
 def _wm_upscale(src: str, target: int = 1920) -> str:
@@ -572,14 +573,17 @@ def visuals():
                 imgs.append(art)
     except Exception:
         pass
-    # Ville courante du festival (mini-scène) → photos de la région (Wikipédia/Commons, filtrées).
+    # Ville courante du festival (mini-scène) — lue DIRECTEMENT en base (STATE_URL absent
+    # dans gcs-web) : c'est ainsi que le fond suit la tournée (Toulon → villes bretonnes).
     city = os.environ.get("GCS_CITY", "").strip()
     try:
-        r = httpx.get(f"{STATE_URL}/state/current", timeout=2)
-        if r.status_code == 200:
-            c = r.json().get("city", "")
-            if c:
-                city = c
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT city FROM gcs_state WHERE id=1")
+            row = cur.fetchone()
+        conn.close()
+        if row and row.get("city"):
+            city = row["city"]
     except Exception:
         pass
     imgs += _city_photos(city)      # photos régionales de la ville courante (dominent)
