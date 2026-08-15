@@ -558,7 +558,11 @@ def _city_photos(city: str):
             uniq.append(s)
         if len(uniq) >= 14:
             break
-    _visuals_cache.update(city=city, at=now, imgs=uniq)
+    # Ne cacher que les succès : un résultat vide = échec transitoire (rate-limit Wikimedia)
+    # → on ne le fige pas 30 min, on réessaiera au prochain appel. Le fond ne reste jamais
+    # vide grâce au filet des photos du chef (voir /api/visuals).
+    if uniq:
+        _visuals_cache.update(city=city, at=now, imgs=uniq)
     return uniq
 
 
