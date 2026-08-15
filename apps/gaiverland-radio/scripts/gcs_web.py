@@ -444,10 +444,12 @@ def _wm_upscale(src: str, target: int = 1920) -> str:
 
 
 def _good_photo(src: str) -> bool:
-    low = src.lower()
+    # Wikimedia ajoute désormais une query string (utm_*) aux thumburl → on la retire
+    # avant de tester l'extension, sinon TOUTES les photos sont rejetées.
+    low = src.lower().split("?", 1)[0]
     if not low.endswith((".jpg", ".jpeg")):
         return False  # on veut des photos (écarte SVG/PNG cartes/blasons)
-    return not _PHOTO_REJECT.search(src)
+    return not _PHOTO_REJECT.search(low)
 
 
 def _bg_own_photos() -> list:
