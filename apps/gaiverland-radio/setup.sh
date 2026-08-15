@@ -5066,6 +5066,14 @@ PYEOF
 
 echo "  ✓ Scripts GCS Phase 1 créés (gcs_track_service + gcs_state_engine)"
 
+# ── Anti-dérive heredoc : le heredoc gcs_state_engine.py ci-dessus peut être périmé.
+# Le REPO fait foi (édité dans scripts/) → on re-copie la version du store PAR-DESSUS.
+# (Incident tournée Bretagne 15/08 : le heredoc écrasait la config des villes.)
+if [ -f "${SRC_DIR}/scripts/gcs_state_engine.py" ]; then
+    cp -f "${SRC_DIR}/scripts/gcs_state_engine.py" "${SCRIPTS_DIR}/gcs_state_engine.py"
+    echo "  ✓ gcs_state_engine.py re-synchronisé depuis le store (repo = source de vérité)"
+fi
+
 # ── gcs_rebexis.py — Phase 2 : output JSON structuré RPE v1 ──────────────────
 cat > "${SCRIPTS_DIR}/gcs_rebexis.py" <<'PYEOF'
 """
