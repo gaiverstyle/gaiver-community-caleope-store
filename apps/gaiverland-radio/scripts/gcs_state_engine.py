@@ -37,20 +37,26 @@ import random, threading, time as _time
 # site affiche « Mini-scène de <ville> ». Ville-mère = GCS_CITY (Toulon).
 # CPU-only, aucune API externe : liste de villes curée en dur.
 MINISCENE_ENABLED = os.environ.get("MINISCENE_ENABLED", "true").lower() == "true"
-MINISCENE_HOME    = os.environ.get("MINISCENE_HOME", "Perros-Guirec")  # ville-mère tournée Bretagne
 MINISCENE_EVAL_S  = int(os.environ.get("MINISCENE_EVAL_S", "1800"))   # ré-évalue /30 min
 MINISCENE_MIN_H   = float(os.environ.get("MINISCENE_MIN_H", "4"))     # durée mini d'une sortie
 MINISCENE_MAX_H   = float(os.environ.get("MINISCENE_MAX_H", "8"))
-MINISCENE_COOLDOWN_H = float(os.environ.get("MINISCENE_COOLDOWN_H", "3"))  # repos maison après retour
 MINISCENE_TZ      = os.environ.get("LORE_TZ", "Europe/Paris")
-# Probabilité de DÉPART à chaque évaluation quand on est à la maison (hors cooldown).
-# TOURNÉE BRETAGNE (été 2026) : cadence relevée pour rouler activement la région.
-MINISCENE_P_WEEKEND = float(os.environ.get("MINISCENE_P_WEEKEND", "0.12"))
-MINISCENE_P_WEEKDAY = float(os.environ.get("MINISCENE_P_WEEKDAY", "0.07"))
 
-# TOURNÉE BRETAGNE — Côte de Granit Rose + rayon ~100-200 km (Morlaix à l'ouest → est de Saint-Malo).
-# Ville-mère = Perros-Guirec. Villes côtières privilégiées (belles photos régionales).
-MINISCENE_CITIES = [
+# ── Fenêtre TOURNÉE BRETAGNE (été 2026), horodatée EN DUR (heure de Paris) ──
+#   • avant TOUR_START  → le festival reste à Toulon, aucune excursion ;
+#   • entre START et END → tournée Bretagne (Côte de Granit Rose) ;
+#   • après TOUR_END    → RETOUR AUTOMATIQUE à la normale (Toulon + roaming Provence).
+# Dates en dur : l'abonnement du chef s'arrête avant son retour → rapatriement sans lui.
+MINISCENE_TOUR_START = os.environ.get("MINISCENE_TOUR_START", "2026-08-15T20:00:00")
+MINISCENE_TOUR_END   = os.environ.get("MINISCENE_TOUR_END",   "2026-08-30T20:00:00")
+
+_CITIES_PROVENCE = [
+    "Marseille", "Aix-en-Provence", "Nice", "Cannes", "Antibes", "Saint-Tropez",
+    "Hyères", "Fréjus", "Bandol", "Cassis", "La Ciotat", "Aubagne",
+    "Avignon", "Nîmes", "Arles", "Montpellier", "Grasse", "Menton",
+    "Manosque", "Gap", "Digne-les-Bains", "Sisteron",
+]
+_CITIES_BRETAGNE = [
     "Ploumanac'h", "Trégastel", "Trébeurden", "Lannion", "Louannec",
     "Morlaix", "Roscoff", "Saint-Pol-de-Léon", "Locquirec", "Plestin-les-Grèves",
     "Paimpol", "Tréguier", "Pontrieux", "Île-de-Bréhat", "Guingamp",
@@ -58,10 +64,35 @@ MINISCENE_CITIES = [
     "Dinan", "Dinard", "Saint-Malo", "Cancale", "Pléneuf-Val-André",
 ]
 
-# Bascule PROGRAMMÉE : avant cette date/heure (Europe/Paris) le festival reste à Toulon
-# sans excursion ; à partir de là → tournée Bretagne. Une fois passé, tournée normale.
-MINISCENE_TOUR_START   = os.environ.get("MINISCENE_TOUR_START", "2026-08-15T20:00:00")
-MINISCENE_PRETOUR_CITY = os.environ.get("MINISCENE_PRETOUR_CITY", "Toulon")
+# Profils : normal (Toulon/Provence, cadence douce) · Bretagne (cadence relevée).
+_PROFILE_NORMAL   = {"home": "Toulon",        "cities": _CITIES_PROVENCE,
+                     "pwe": 0.06, "pwd": 0.005, "cooldown": 6.0}
+_PROFILE_BRETAGNE = {"home": "Perros-Guirec", "cities": _CITIES_BRETAGNE,
+                     "pwe": 0.12, "pwd": 0.07,  "cooldown": 3.0}
+
+
+def _dt(s: str):
+    from zoneinfo import ZoneInfo
+    d = datetime.datetime.fromisoformat(s)
+    return d if d.tzinfo else d.replace(tzinfo=ZoneInfo(MINISCENE_TZ))
+
+
+def _phase() -> str:
+    """'hold' avant le départ (Toulon) · 'bretagne' pendant la fenêtre · 'normal' après."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(ZoneInfo(MINISCENE_TZ))
+        if now < _dt(MINISCENE_TOUR_START):
+            return "hold"
+        if now < _dt(MINISCENE_TOUR_END):
+            return "bretagne"
+        return "normal"
+    except Exception:
+        return "normal"   # parsing douteux → comportement par défaut, on ne casse rien
+
+
+def _profile() -> dict:
+    return _PROFILE_BRETAGNE if _phase() == "bretagne" else _PROFILE_NORMAL
 
 MOOD_TO_STAGE: dict[str, str] = {
     "drift":    "sunset",
@@ -113,7 +144,7 @@ def init_db():
             ("festival_direction", "VARCHAR(20) DEFAULT 'cruise'"),
             ("weather_data",       "JSONB DEFAULT '{}'"),
             # Mini-scènes (tournée)
-            ("home_city",       f"VARCHAR(100) DEFAULT '{MINISCENE_HOME}'"),
+            ("home_city",       "VARCHAR(100) DEFAULT 'Toulon'"),
             ("is_miniscene",       "BOOLEAN DEFAULT FALSE"),
             ("miniscene_until",    "TIMESTAMPTZ"),
             ("miniscene_return_after", "TIMESTAMPTZ"),  # cooldown maison
@@ -258,19 +289,6 @@ def _is_weekend() -> bool:
     return wd >= 5   # samedi(5) / dimanche(6)
 
 
-def _tour_active() -> bool:
-    """La tournée Bretagne démarre à MINISCENE_TOUR_START (heure de Paris)."""
-    try:
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo(MINISCENE_TZ)
-        start = datetime.datetime.fromisoformat(MINISCENE_TOUR_START)
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=tz)
-        return datetime.datetime.now(tz) >= start
-    except Exception:
-        return True   # en cas de souci de parsing, ne pas bloquer la tournée
-
-
 def _lore_transition(conn, text: str, city: str):
     """Écrit une entrée 'city_transition' dans le journal du festival (table partagée)."""
     try:
@@ -295,15 +313,16 @@ def _depart(conn, city: str, hours: float):
 
 
 def _go_home(conn):
-    cd = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=MINISCENE_COOLDOWN_H)
+    prof = _profile()
+    cd = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=prof["cooldown"])
     with conn.cursor() as cur:
         cur.execute("""UPDATE gcs_state
                        SET city=home_city, is_miniscene=FALSE,
                            miniscene_until=NULL, miniscene_return_after=%s
                        WHERE id=1""", (cd,))
     conn.commit()
-    _lore_transition(conn, f"Retour à {MINISCENE_HOME}. Le c15 connaît le chemin par cœur.", MINISCENE_HOME)
-    print(f"  🏠 retour à {MINISCENE_HOME}")
+    _lore_transition(conn, f"Retour à {prof['home']}. Le c15 connaît le chemin par cœur.", prof["home"])
+    print(f"  🏠 retour à {prof['home']}")
 
 
 def _tour_manager():
@@ -317,45 +336,54 @@ def _tour_manager():
                 st = cur.fetchone() or {}
             now = datetime.datetime.now(datetime.timezone.utc)
 
-            if not _tour_active():
-                # ── Pré-tournée : garder le festival à Toulon, ZÉRO excursion. ──
-                if (st.get("home_city") != MINISCENE_PRETOUR_CITY
-                        or st.get("city") != MINISCENE_PRETOUR_CITY
-                        or st.get("is_miniscene")):
-                    with conn.cursor() as cur:
-                        cur.execute("""UPDATE gcs_state SET city=%s, home_city=%s,
-                                       is_miniscene=FALSE, miniscene_until=NULL,
-                                       miniscene_return_after=NULL WHERE id=1""",
-                                    (MINISCENE_PRETOUR_CITY, MINISCENE_PRETOUR_CITY))
-                    conn.commit()
-            else:
-                # ── Tournée active : bascule UNIQUE Toulon → Bretagne au 1er passage. ──
-                if st.get("home_city") == MINISCENE_PRETOUR_CITY:
-                    with conn.cursor() as cur:
-                        cur.execute("""UPDATE gcs_state SET city=%s, home_city=%s,
-                                       is_miniscene=FALSE, miniscene_until=NULL,
-                                       miniscene_return_after=NULL WHERE id=1""",
-                                    (MINISCENE_HOME, MINISCENE_HOME))
-                    conn.commit()
-                    _lore_transition(conn, f"Le festival prend la route : cap sur {MINISCENE_HOME} et la Côte de Granit Rose.", MINISCENE_HOME)
-                    st = {**st, "city": MINISCENE_HOME, "home_city": MINISCENE_HOME, "is_miniscene": False}
+            phase = _phase()
+            prof = _PROFILE_BRETAGNE if phase == "bretagne" else _PROFILE_NORMAL
+            home = prof["home"]
 
-                if st.get("is_miniscene"):
-                    until = st.get("miniscene_until")
-                    if not until or now >= until:
-                        _go_home(conn)
-                else:
-                    cd = st.get("miniscene_return_after")
-                    on_cooldown = cd and now < cd
-                    if not on_cooldown:
-                        p = MINISCENE_P_WEEKEND if _is_weekend() else MINISCENE_P_WEEKDAY
-                        if random.random() < p:
-                            # ville différente de la précédente
-                            last = st.get("city")
-                            pool = [c for c in MINISCENE_CITIES if c != last] or MINISCENE_CITIES
-                            city = random.choice(pool)
-                            hours = random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
-                            _depart(conn, city, hours)
+            # ── Bascule de ville-mère quand la phase change (Toulon→Bretagne le 15/08 20h,
+            #    puis Bretagne→Toulon le 30/08 20h : rapatriement AUTOMATIQUE). ──
+            if st.get("home_city") != home:
+                with conn.cursor() as cur:
+                    cur.execute("""UPDATE gcs_state SET city=%s, home_city=%s,
+                                   is_miniscene=FALSE, miniscene_until=NULL,
+                                   miniscene_return_after=NULL WHERE id=1""", (home, home))
+                conn.commit()
+                if phase == "bretagne":
+                    _lore_transition(conn, f"Le festival prend la route : cap sur {home} et la Côte de Granit Rose.", home)
+                elif phase == "normal":
+                    _lore_transition(conn, f"Fin de tournée : le festival replante ses enceintes à {home}.", home)
+                st = {**st, "city": home, "home_city": home, "is_miniscene": False,
+                      "miniscene_until": None, "miniscene_return_after": None}
+
+            if phase == "hold":
+                # ── Avant le grand départ : rester à Toulon, ZÉRO excursion. ──
+                if st.get("city") != home or st.get("is_miniscene"):
+                    with conn.cursor() as cur:
+                        cur.execute("""UPDATE gcs_state SET city=%s, is_miniscene=FALSE,
+                                       miniscene_until=NULL, miniscene_return_after=NULL
+                                       WHERE id=1""", (home,))
+                    conn.commit()
+                conn.close()
+                _time.sleep(MINISCENE_EVAL_S)
+                continue
+
+            # ── Roaming normal (bretagne OU retour Provence), selon le profil actif. ──
+            if st.get("is_miniscene"):
+                until = st.get("miniscene_until")
+                if not until or now >= until:
+                    _go_home(conn)
+            else:
+                cd = st.get("miniscene_return_after")
+                on_cooldown = cd and now < cd
+                if not on_cooldown:
+                    p = prof["pwe"] if _is_weekend() else prof["pwd"]
+                    if random.random() < p:
+                        # ville différente de la précédente
+                        last = st.get("city")
+                        pool = [c for c in prof["cities"] if c != last] or prof["cities"]
+                        city = random.choice(pool)
+                        hours = random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
+                        _depart(conn, city, hours)
             conn.close()
         except Exception as e:
             print(f"  ⚠ tour manager: {e}")
@@ -366,7 +394,7 @@ def _tour_manager():
 def tour_depart(city: str = "", hours: float = 0.0):
     """Déclenche une mini-scène à la demande (test / régie). Ville libre ou tirée au sort."""
     conn = get_conn()
-    c = city or random.choice(MINISCENE_CITIES)
+    c = city or random.choice(_profile()["cities"])
     h = hours if hours > 0 else random.uniform(MINISCENE_MIN_H, MINISCENE_MAX_H)
     _depart(conn, c, h)
     conn.close()
@@ -379,7 +407,7 @@ def tour_home():
     conn = get_conn()
     _go_home(conn)
     conn.close()
-    return {"miniscene": False, "city": MINISCENE_HOME}
+    return {"miniscene": False, "city": _profile()["home"]}
 
 
 @app.on_event("startup")
@@ -387,7 +415,8 @@ def startup():
     init_db()
     if MINISCENE_ENABLED:
         threading.Thread(target=_tour_manager, daemon=True).start()
-        print(f"✓ mini-scènes actives (home={MINISCENE_HOME}, {len(MINISCENE_CITIES)} villes)")
+        _p = _profile()
+        print(f"✓ mini-scènes actives (phase={_phase()}, home={_p['home']}, {len(_p['cities'])} villes)")
 
 
 @app.get("/health")
