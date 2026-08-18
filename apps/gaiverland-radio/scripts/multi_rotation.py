@@ -343,7 +343,7 @@ def rotate_station(cur, st: dict) -> None:
         # 31 titres attic ré-injectés à chaque rotation, 18/08). En excluant l'attic du mapping :
         # (1) il n'est plus mappé comme "voulu" donc jamais ajouté ; (2) la boucle de retrait plus
         # bas l'enlève des playlists où il traîne (il n'est plus dans desired_set). Auto-guérison.
-        if "/music/attic/" in p:
+        if "music/attic/" in p:   # ⚠️ chemin AzuraCast RELATIF (pas de slash initial : "music/attic/...")
             continue
         b = os.path.basename(p)
         dedans = pid_actuel in [x["id"] for x in (f.get("playlists") or [])]
