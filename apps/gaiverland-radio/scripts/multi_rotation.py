@@ -336,6 +336,15 @@ def rotate_station(cur, st: dict) -> None:
         p = f.get("path")
         if not p:
             continue
+        # L'attic est le CIMETIÈRE : un titre qui y a été déplacé (purge/dédup) ne doit JAMAIS
+        # pouvoir rentrer dans une rotation. Sans ça, une ligne `tracks` PÉRIMÉE (file_path encore
+        # dans l'ancien dossier thème alors que le fichier est en attic) faisait re-mapper le titre
+        # par basename vers l'exemplaire attic → fuite (ex. « Faded (Slowed+Reverb) » sur la Boost,
+        # 31 titres attic ré-injectés à chaque rotation, 18/08). En excluant l'attic du mapping :
+        # (1) il n'est plus mappé comme "voulu" donc jamais ajouté ; (2) la boucle de retrait plus
+        # bas l'enlève des playlists où il traîne (il n'est plus dans desired_set). Auto-guérison.
+        if "/music/attic/" in p:
+            continue
         b = os.path.basename(p)
         dedans = pid_actuel in [x["id"] for x in (f.get("playlists") or [])]
         garde = base_to_file.get(b)
