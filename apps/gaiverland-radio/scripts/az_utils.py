@@ -242,7 +242,7 @@ def replace_playlist(file_ids: list, playlist_id: int,
 
         # Retirer prev_az_ids de la playlist si c'est une rotation
         to_remove = [fid for fid in (prev_az_ids or []) if fid not in file_ids and fid in id_to_path]
-        for fid in to_remove[:20]:  # max 20 suppressions par cycle pour limiter la charge
+        for fid in to_remove[:200]:  # plafond haut : on AJOUTE ~45/cycle, un cap de 20 laissait la playlist GONFLER (+25/cycle → 186 titres, doublons accumulés = répétitions à l'antenne, bug chef 21/08). 200 draine le backlog + suit le churn (~40/cycle en régime).
             path = id_to_path[fid]
             current_pls = [p for p in path_to_playlists.get(path, []) if p != playlist_id]
             try:
