@@ -67,14 +67,21 @@ _VOCAL_WEIGHT_SQL = ("GREATEST(0.05, 1.0 + %s * COALESCE(vocalness, 0.5) "
 # ont la même clé. Sur le TITRE seul (pas l'artiste) car l'artiste = souvent l'uploader/remixer,
 # qui varie d'une version à l'autre. Sert à l'anti-répétition ET au dédup des versions au tirage.
 # Cf répétitions de versions constatées le 18/07 (Walked Away ×4, Call On Me ×3).
-_SONG_KEY_SQL = ("regexp_replace(lower(regexp_replace(coalesce(title,''), "
-                 "'\\([^)]*\\)|\\[[^\\]]*\\]', '', 'g')), '[^a-z0-9]', '', 'g')")
+# ⚠️ On enlève AUSSI un préfixe « Xxx - » en tête de titre : beaucoup de fichiers ont le titre
+# taggé « Artiste - Titre » (uploader) alors que leurs jumeaux sont taggés « Titre » seul → clés
+# divergentes → le même morceau échappait à l'anti-répétition (« I Could Be The One » 2× en <1h,
+# bug chef 21/08 ; 135 chansons touchées mesurées). Retrait via `^.*? - ` (non-greedy = jusqu'au
+# 1er « - »). Sûr : les plus grosses clés robustes sont de vrais doublons (Levels ×9, Are You With
+# Me ×8, Wake Me Up ×6), aucune sur-fusion de titres différents constatée.
+_SONG_KEY_SQL = ("regexp_replace(lower(regexp_replace(regexp_replace(coalesce(title,''), "
+                 "'\\([^)]*\\)|\\[[^\\]]*\\]', '', 'g'), '^.*? - ', '')), '[^a-z0-9]', '', 'g')")
 _PAREN_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+_PREFIX_RE = re.compile(r"^.*? - ")
 
 
 def _base_key(title: str) -> str:
-    """Version Python de _SONG_KEY_SQL (titre sans parenthèses, alphanumérique)."""
-    return re.sub(r"[^a-z0-9]", "", _PAREN_RE.sub("", title or "").lower())
+    """Version Python de _SONG_KEY_SQL (titre sans parenthèses NI préfixe « Artiste - », alphanumérique)."""
+    return re.sub(r"[^a-z0-9]", "", _PREFIX_RE.sub("", _PAREN_RE.sub("", title or "")).lower())
 
 
 # Dynamique énergétique : insérer des RESPIRATIONS (creux mélodiques dansants) à intervalles
