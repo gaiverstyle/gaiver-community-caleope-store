@@ -760,7 +760,7 @@ def generate_playlist(count: int = 20, mood: Optional[str] = None):
                   VOCAL_BIAS, INSTR_TECHNO_PENALTY, INSTR_VOCAL_THRESHOLD, COVER_PENALTY, count * 3))
             cand = _dedupe_versions(list(cur.fetchall()))   # une seule version par chanson
         fresh = [c for c in cand if c["id"] not in set(recent_ids)]
-        pool = fresh if len(fresh) >= count else cand  # assez de neuf ? sinon on autorise la répète
+        pool = fresh if fresh else cand  # on GARDE l'anti-répétition tant qu'il reste du neuf (avant : `>= count`=40, jamais atteint par un artiste → répète autorisée en permanence = Robin Schulz rejoué, bug chef 25/08). Ne rejoue QUE si l'artiste est totalement épuisé (tout passé en 6h).
         selected = order_for_coherence(pool, count, current_energy)
         if selected:
             avg_e = sum(float(t.get("energy") or 0.5) for t in selected) / len(selected)

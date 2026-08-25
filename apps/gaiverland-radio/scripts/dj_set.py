@@ -33,7 +33,7 @@ AUTO_CANDIDATES = [
 AUTO_ENABLED   = os.environ.get("AUTO_DJSET_ENABLED", "1") == "1"
 AUTO_PERIOD    = int(os.environ.get("AUTO_DJSET_PERIOD_MIN", "180"))   # écart mini entre 2 débuts de set
 AUTO_DURATION  = int(os.environ.get("AUTO_DJSET_DURATION_MIN", "60"))  # durée d'un set auto
-AUTO_MIN_TRACKS = int(os.environ.get("AUTO_DJSET_MIN_TRACKS", "12"))   # sinon l'artiste boucle
+AUTO_MIN_TRACKS = int(os.environ.get("AUTO_DJSET_MIN_TRACKS", "15"))   # titres DISTINCTS mini (1h set ~15 créneaux) sinon l'artiste boucle
 AUTO_COOLDOWN  = int(os.environ.get("AUTO_DJSET_COOLDOWN", "4"))       # pas de reprise dans les N derniers sets
 AUTO_HOURS     = os.environ.get("AUTO_DJSET_HOURS", "10-23")           # heures Paris autorisées (début de set)
 
@@ -59,8 +59,13 @@ def _conn():
 
 
 def _count(c, flt):
+    # Compte les CHANSONS DISTINCTES (clé robuste titre sans (), [] ni préfixe « Artiste - »),
+    # PAS les fichiers : Robin Schulz avait 12 fichiers mais 8 titres distincts → un set d'1h
+    # (~15 créneaux) l'épuisait et rejouait (bug chef 25/08). On veut assez de titres UNIQUES.
     with c.cursor() as cur:
-        cur.execute("""SELECT count(*) AS n FROM tracks
+        cur.execute("""SELECT count(DISTINCT regexp_replace(lower(regexp_replace(regexp_replace(
+                         coalesce(title,''), '\\([^)]*\\)|\\[[^\\]]*\\]', '', 'g'), '^.*? - ', '')),
+                         '[^a-z0-9]', '', 'g')) AS n FROM tracks
                        WHERE analyzed AND az_id IS NOT NULL AND file_path !~ %s
                          AND (artist ILIKE %s OR title ILIKE %s)""",
                     (SCENE_RE, f"%{flt}%", f"%{flt}%"))
