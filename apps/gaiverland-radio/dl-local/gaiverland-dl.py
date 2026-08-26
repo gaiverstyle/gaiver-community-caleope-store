@@ -117,8 +117,10 @@ def main():
             nom = os.path.basename(fichier)
             with open(fichier, "rb") as f:
                 corps = f.read()
+            # le depot marque la file par le TITRE d'origine (cle = requete de recherche,
+            # parfois affinee cote serveur — les deux peuvent differer)
             params = urllib.parse.urlencode(
-                {"k": jeton, "type": t["type"], "cle": cle,
+                {"k": jeton, "type": t["type"], "cle": t.get("titre", cle),
                  "dossier": dossier, "nom": nom})
             try:
                 rep = api(f"{hote}/api/regie/dl-local/depot?{params}", corps=corps,

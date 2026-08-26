@@ -1792,10 +1792,16 @@ def dl_local_attente(request: Request):
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("""SELECT title FROM proposal_decisions
+            # ⚠️ canon_title d'abord : c'est la requête AFFINÉE (ex. « … remix hardtek »
+            # posée après un mauvais téléchargement). En envoyant le titre brut, le client
+            # local refaisait exactement la recherche qui avait déjà rapporté la mauvaise
+            # version (constaté sur « Prisons de Nantes », 13/08). La cle sert à CHERCHER ;
+            # le marquage au dépôt se fait toujours par title.
+            cur.execute("""SELECT title, canon_title FROM proposal_decisions
                            WHERE verdict='accept' AND downloaded_at IS NULL
                            ORDER BY title LIMIT 300""")
-            out += [{"type": "proposition", "cle": r["title"], "dossier": "community"}
+            out += [{"type": "proposition", "cle": r["canon_title"] or r["title"],
+                     "titre": r["title"], "dossier": "community"}
                     for r in cur.fetchall()]
             cur.execute("""SELECT theme, query FROM thematic_seeds
                            WHERE status='pending' ORDER BY theme, query LIMIT 300""")
