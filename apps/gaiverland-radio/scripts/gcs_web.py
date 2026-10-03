@@ -1257,22 +1257,49 @@ def api_suggest(q: str = ""):
 
 
 DON_BTC_ADDR = os.environ.get("GCS_DON_BTC", "bc1q36v0s4sx3m7jdg3k7sk6lhe0wgn4pfacjur28e")
+DON_ESPLORA_URL = os.environ.get("GCS_DON_ESPLORA_URL", "https://blockstream.info/api").rstrip("/")
+DON_PRICE_URL = os.environ.get(
+    "GCS_DON_PRICE_URL",
+    "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur",
+)
+_don_cache = {"at": 0.0, "payload": None}
+_DON_CACHE_TTL = 300
+
 
 @app.get("/api/don")
 def api_don():
     """Suivi PUBLIC de la cagnotte de légalisation : total BTC reçu sur l'adresse de dons
-    (via mempool.space) converti en €. Objectif réglable via GCS_DON_GOAL_EUR. Best-effort :
-    renvoie 0 si mempool est injoignable. Aucune donnée sensible (adresse Bitcoin publique)."""
+    converti en €. Blockstream fournit l'état de l'adresse et CoinGecko le cours ; les URLs
+    sont surchargeables. Un cache de cinq minutes évite deux appels externes par visite et
+    sert la dernière valeur connue pendant une panne. Aucune donnée sensible."""
     goal = int(os.environ.get("GCS_DON_GOAL_EUR", "1200"))
+    now = time.monotonic()
+    if _don_cache["payload"] and now - _don_cache["at"] < _DON_CACHE_TTL:
+        return _don_cache["payload"]
+
     try:
-        s = httpx.get(f"https://mempool.space/api/address/{DON_BTC_ADDR}", timeout=8).json()
+        # trust_env=False : aucun proxy implicite ne doit pouvoir retenir cette route
+        # publique. Le timeout de connexion est plus court que le timeout total.
+        timeout = httpx.Timeout(6.0, connect=3.0)
+        with httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+            r_stats = client.get(f"{DON_ESPLORA_URL}/address/{DON_BTC_ADDR}")
+            r_stats.raise_for_status()
+            s = r_stats.json()
+            r_price = client.get(DON_PRICE_URL)
+            r_price.raise_for_status()
+            price = float(r_price.json().get("bitcoin", {}).get("eur", 0))
+        if price <= 0:
+            raise ValueError("cours BTC/EUR absent")
         sats = s["chain_stats"]["funded_txo_sum"] + s["mempool_stats"]["funded_txo_sum"]
         btc = sats / 1e8
-        price = httpx.get("https://mempool.space/api/v1/prices", timeout=8).json().get("EUR", 0)
-        return {"goal": goal, "raised_eur": round(btc * price), "btc": round(btc, 6),
-                "addr": DON_BTC_ADDR}
+        payload = {"goal": goal, "raised_eur": round(btc * price), "btc": round(btc, 6),
+                   "addr": DON_BTC_ADDR}
+        _don_cache.update(at=now, payload=payload)
+        return payload
     except Exception:
-        return {"goal": goal, "raised_eur": 0, "btc": 0, "addr": DON_BTC_ADDR}
+        return _don_cache["payload"] or {
+            "goal": goal, "raised_eur": 0, "btc": 0, "addr": DON_BTC_ADDR,
+        }
 
 
 @app.post("/api/regie/musique/ajouter")
