@@ -54,9 +54,9 @@ chmod 600 "${SECRETS}"
 
 # ── requirements.txt ─────────────────────────────────────────────────────────
 cat > "${SRC_DIR}/requirements.txt" << 'PYREQ'
-discord.py[voice]>=2.4.0
-aiohttp>=3.9.0
-PyNaCl>=1.5.0
+discord.py[voice]==2.7.1
+aiohttp==3.14.3
+PyNaCl==1.5.0
 PYREQ
 
 # ── bot.py ───────────────────────────────────────────────────────────────────
@@ -121,6 +121,21 @@ DEFAULT_VOLUME       = max(0, min(200, int(os.environ.get("DEFAULT_VOLUME", "100
 NP_CHANNEL_ID        = int(os.environ.get("NP_CHANNEL_ID", "0") or "0")
 NP_POLL_INTERVAL     = max(5, int(os.environ.get("NP_POLL_INTERVAL", "10") or "10"))
 SITE_URL             = os.environ.get("SITE_URL", "").strip().rstrip("/")   # site des votes auditeurs (optionnel)
+VOICE_CONNECT_TIMEOUT = 8.0
+
+
+# Une seule session HTTP pour tous les polls AzuraCast/GCS. L'ancienne version
+# ouvrait une connexion TCP/TLS neuve toutes les 10 secondes, plus une autre pour
+# la présence et une autre pour les auditeurs. Sur un LXC déjà chargé, ce travail
+# inutile augmentait la latence et le nombre de sockets éphémères.
+_http_session: aiohttp.ClientSession | None = None
+
+
+async def get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8))
+    return _http_session
 
 
 # ── Player ───────────────────────────────────────────────────────────────────
@@ -133,6 +148,9 @@ class RadioPlayer:
         self._stream_cache: dict = {AZURACAST_STATION_ID: STREAM_URL_ENV} if STREAM_URL_ENV else {}
         self._stations_cache: list = []                   # alimente l'auto-complétion, cf fetch_stations
         self._stations_at: float = 0.0
+        # Une seule opération vocale à la fois par serveur. Deux /play rapprochés
+        # pouvaient auparavant créer deux handshakes Discord concurrents.
+        self._voice_lock = asyncio.Lock()
 
     # -- AzuraCast API --------------------------------------------------------
 
@@ -140,9 +158,10 @@ class RadioPlayer:
         headers = {"X-API-Key": AZURACAST_API_KEY} if AZURACAST_API_KEY else {}
         url = f"{AZURACAST_URL}{path}"
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
-                    return await r.json()
+            session = await get_http_session()
+            async with session.get(url, headers=headers) as r:
+                r.raise_for_status()
+                return await r.json()
         except Exception as exc:
             log.warning("AzuraCast GET %s → %s", path, exc)
             return {}
@@ -236,64 +255,148 @@ class RadioPlayer:
             return True
         return False
 
-    async def play(self, channel: discord.VoiceChannel) -> tuple[bool, str]:
-        stream_url = await self.fetch_stream_url()
-        if not stream_url:
-            return False, "URL du stream introuvable. Vérifie AZURACAST_URL et AZURACAST_STATION_ID."
+    def reconcile_voice_client(self, guild: discord.Guild) -> discord.VoiceClient | None:
+        """Réconcilie notre état avec le registre vocal officiel de discord.py.
 
-        if self.voice_client and self.voice_client.is_connected():
-            if self.voice_client.channel.id != channel.id:
-                await self.voice_client.move_to(channel)
-        else:
-            self.voice_client = await channel.connect()
+        Après une reprise de session Gateway, `self.voice_client.is_connected()` peut
+        être faux alors que discord.py conserve encore le VoiceClient dans le registre
+        de la guilde. Appeler `channel.connect()` dans cet état lève alors
+        « Already connected to a voice channel ». La guilde est la source de vérité.
+        """
+        registered = guild.voice_client
+        if registered is not None:
+            if registered is not self.voice_client:
+                log.info("VoiceClient de %s réadopté depuis le registre Discord", guild.name)
+            self.voice_client = registered
+        elif self.voice_client and not self.voice_client.is_connected():
+            self.voice_client = None
+        return self.voice_client
 
-        if self.voice_client.is_playing():
-            self.voice_client.stop()
-            # stop() n'est PAS instantané : le thread lecteur doit rendre la main. Sans cette
-            # attente, play() lève ClientException(« Already playing audio ») et le ffmpeg
-            # qu'on vient de créer n'est jamais nettoyé → processus orphelin qui garde une
-            # connexion Icecast ouverte (8 ffmpeg vivants constatés le 28/07, compteur
-            # d'auditeurs faussé). Même garde que set_station().
-            for _ in range(20):
-                if not self.voice_client.is_playing():
-                    break
-                await asyncio.sleep(0.05)
-
-        source = await self._make_source_async(stream_url)
+    async def _cleanup_voice_client(self, voice_client: discord.VoiceClient, reason: str):
+        """Nettoie une connexion vocale obsolète, même si Discord ne répond plus."""
+        log.warning("Nettoyage VoiceClient (%s)", reason)
         try:
-            self.voice_client.play(source, after=self._after)
-        except Exception:
-            # La source n'a pas été prise en charge → on tue nous-mêmes son ffmpeg,
-            # sinon il survit indéfiniment.
+            async with asyncio.timeout(5):
+                await voice_client.disconnect(force=True)
+        except Exception as exc:
+            log.warning("Disconnect vocal forcé incomplet (%s) : %s", reason, exc)
+            # cleanup() retire localement l'entrée du registre discord.py. Il est
+            # idempotent et reste nécessaire si le handshake de déconnexion expire.
             try:
-                source.cleanup()
+                voice_client.cleanup()
             except Exception:
                 pass
-            raise
-        return True, stream_url
+        finally:
+            if self.voice_client is voice_client:
+                self.voice_client = None
+
+    async def _ensure_voice(self, channel: discord.VoiceChannel) -> tuple[discord.VoiceClient | None, str]:
+        """Retourne une connexion saine ou un message d'erreur montrable à l'utilisateur."""
+        voice_client = self.reconcile_voice_client(channel.guild)
+        if voice_client and voice_client.is_connected():
+            try:
+                if voice_client.channel.id != channel.id:
+                    await voice_client.move_to(channel)
+                return voice_client, ""
+            except Exception as exc:
+                await self._cleanup_voice_client(voice_client, f"move_to échoué: {exc}")
+        elif voice_client:
+            await self._cleanup_voice_client(voice_client, "connexion locale obsolète")
+
+        # Une course reste possible entre le nettoyage et connect(). Si discord.py
+        # signale encore « Already connected », on nettoie son registre puis on fait
+        # UNE nouvelle tentative. Les timeouts, eux, ne sont pas rejoués : mieux vaut
+        # répondre clairement en ~16 s maximum que laisser la commande tourner une minute.
+        for attempt in range(2):
+            try:
+                self.voice_client = await channel.connect(
+                    timeout=VOICE_CONNECT_TIMEOUT,
+                    reconnect=True,
+                    self_deaf=True,
+                )
+                return self.voice_client, ""
+            except asyncio.TimeoutError:
+                self.voice_client = None
+                return None, (
+                    "Discord n'a pas terminé la connexion vocale à temps. "
+                    "Réessaie dans quelques secondes."
+                )
+            except discord.ClientException as exc:
+                registered = channel.guild.voice_client
+                if registered and registered.is_connected():
+                    self.voice_client = registered
+                    if registered.channel.id != channel.id:
+                        try:
+                            await registered.move_to(channel)
+                        except Exception as move_exc:
+                            return None, f"Connexion vocale existante impossible à déplacer : {move_exc}"
+                    return registered, ""
+                if registered:
+                    await self._cleanup_voice_client(registered, f"registre Discord: {exc}")
+                if attempt == 0:
+                    continue
+                return None, f"Discord refuse la connexion vocale : {exc}"
+            except Exception as exc:
+                self.voice_client = None
+                log.exception("Connexion vocale inattendue")
+                return None, f"Connexion vocale impossible : {type(exc).__name__}"
+        return None, "Connexion vocale impossible."
+
+    async def play(self, channel: discord.VoiceChannel) -> tuple[bool, str]:
+        async with self._voice_lock:
+            stream_url = await self.fetch_stream_url()
+            if not stream_url:
+                return False, "URL du stream introuvable. Vérifie AZURACAST_URL et AZURACAST_STATION_ID."
+
+            voice_client, error = await self._ensure_voice(channel)
+            if not voice_client:
+                return False, error
+
+            if voice_client.is_playing():
+                voice_client.stop()
+                # stop() n'est PAS instantané : le thread lecteur doit rendre la main. Sans cette
+                # attente, play() lève ClientException(« Already playing audio ») et le ffmpeg
+                # qu'on vient de créer n'est jamais nettoyé → processus orphelin qui garde une
+                # connexion Icecast ouverte (8 ffmpeg vivants constatés le 28/07, compteur
+                # d'auditeurs faussé). Même garde que set_station().
+                for _ in range(20):
+                    if not voice_client.is_playing():
+                        break
+                    await asyncio.sleep(0.05)
+
+            source = await self._make_source_async(stream_url)
+            try:
+                voice_client.play(source, after=self._after)
+            except Exception:
+                # La source n'a pas été prise en charge → on tue nous-mêmes son ffmpeg,
+                # sinon il survit indéfiniment.
+                try:
+                    source.cleanup()
+                except Exception:
+                    pass
+                raise
+            return True, stream_url
 
     def _after(self, exc: Exception | None):
         if exc:
             log.error("Erreur lecteur : %s", exc)
 
     async def stop(self):
-        if self.voice_client:
-            if self.voice_client.is_playing():
-                self.voice_client.stop()
-            await self.voice_client.disconnect()
-            self.voice_client = None
+        async with self._voice_lock:
+            if self.voice_client:
+                await self._cleanup_voice_client(self.voice_client, "commande stop")
 
     async def restart_with_volume(self):
         """Relance le stream pour appliquer le nouveau volume."""
-        if not (self.voice_client and self.voice_client.is_connected()):
-            return
-        channel = self.voice_client.channel
-        if self.voice_client.is_playing():
-            self.voice_client.stop()
-        stream_url = await self.fetch_stream_url()
-        if stream_url:
-            source = await self._make_source_async(stream_url)
-            self.voice_client.play(source, after=self._after)
+        async with self._voice_lock:
+            if not (self.voice_client and self.voice_client.is_connected()):
+                return
+            if self.voice_client.is_playing():
+                self.voice_client.stop()
+            stream_url = await self.fetch_stream_url()
+            if stream_url:
+                source = await self._make_source_async(stream_url)
+                self.voice_client.play(source, after=self._after)
 
     async def set_station(self, station: str) -> bool:
         """Change la station courante et relance le flux en vocal si en écoute.
@@ -306,36 +409,37 @@ class RadioPlayer:
         comme ça qu'on blackliste un titre qu'on n'écoute pas (incident 14/07).
         Désormais : on résout le flux d'ABORD, et on ne bascule l'état QUE si le son suit.
         """
-        if station == self.station:
-            return True
+        async with self._voice_lock:
+            if station == self.station:
+                return True
 
-        previous, self.station = self.station, station
-        url = await self.fetch_stream_url()          # résout d'après self.station (la nouvelle)
-        if not url:
-            self.station = previous                  # rien n'a bougé → ne pas mentir sur l'état
-            log.warning("Station %s : flux introuvable → on reste sur %s", station, previous)
-            return False
-
-        if self.voice_client and self.voice_client.is_connected():
-            if self.voice_client.is_playing():
-                self.voice_client.stop()
-                # stop() n'est pas instantané : le thread lecteur doit rendre la main,
-                # sinon play() lève ClientException(« Already playing audio »).
-                for _ in range(20):
-                    if not self.voice_client.is_playing():
-                        break
-                    await asyncio.sleep(0.05)
-            try:
-                self.voice_client.play(await self._make_source_async(url), after=self._after)
-            except Exception as exc:
-                self.station = previous
-                log.error("Relance du flux sur %s échouée : %s", station, exc)
+            previous, self.station = self.station, station
+            url = await self.fetch_stream_url()          # résout d'après self.station (la nouvelle)
+            if not url:
+                self.station = previous                  # rien n'a bougé → ne pas mentir sur l'état
+                log.warning("Station %s : flux introuvable → on reste sur %s", station, previous)
                 return False
-            log.info("Station : %s → %s (%s)", previous, station, url)
-        else:
-            log.info("Station : %s → %s (hors vocal — effectif au prochain /radio play)",
-                     previous, station)
-        return True
+
+            if self.voice_client and self.voice_client.is_connected():
+                if self.voice_client.is_playing():
+                    self.voice_client.stop()
+                    # stop() n'est pas instantané : le thread lecteur doit rendre la main,
+                    # sinon play() lève ClientException(« Already playing audio »).
+                    for _ in range(20):
+                        if not self.voice_client.is_playing():
+                            break
+                        await asyncio.sleep(0.05)
+                try:
+                    self.voice_client.play(await self._make_source_async(url), after=self._after)
+                except Exception as exc:
+                    self.station = previous
+                    log.error("Relance du flux sur %s échouée : %s", station, exc)
+                    return False
+                log.info("Station : %s → %s (%s)", previous, station, url)
+            else:
+                log.info("Station : %s → %s (hors vocal — effectif au prochain /radio play)",
+                         previous, station)
+            return True
 
     @property
     def is_playing(self) -> bool:
@@ -348,7 +452,16 @@ intents = discord.Intents.default()
 intents.voice_states = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class RadioBot(commands.Bot):
+    async def close(self):
+        global _http_session
+        session, _http_session = _http_session, None
+        if session and not session.closed:
+            await session.close()
+        await super().close()
+
+
+bot = RadioBot(command_prefix="!", intents=intents)
 # Un player PAR SERVEUR : chaque serveur écoute sa propre station, met play/stop et
 # change de scène chez lui sans toucher aux autres (multi-serveurs simultané).
 players: dict[int, RadioPlayer] = {}
@@ -538,7 +651,8 @@ async def on_ready():
             np = await api.fetch_now_playing()
             if np:
                 await np_tracker.start(channel, np)
-        poll_now_playing.start()
+        if not poll_now_playing.is_running():
+            poll_now_playing.start()
 
     if not update_presence.is_running():
         update_presence.start()
@@ -552,22 +666,25 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.guild is None:
         return
     p = players.get(member.guild.id)
-    if not (p and p.voice_client):
+    if not p:
         return
-    bot_channel = p.voice_client.channel
+    voice_client = p.reconcile_voice_client(member.guild)
+    if not (voice_client and voice_client.is_connected() and voice_client.channel):
+        return
+    bot_channel = voice_client.channel
     humans = len([m for m in bot_channel.members if not m.bot])
     if humans == 0:
         log.info("Salon vide (%s) — pause", member.guild.name)
-        if p.voice_client.is_playing():
-            p.voice_client.pause()
-    elif p.voice_client.is_paused():
+        if voice_client.is_playing():
+            voice_client.pause()
+    elif voice_client.is_paused():
         # ⚠️ SYMÉTRIQUE INDISPENSABLE de la pause ci-dessus.
         # Sans cette branche, le bot met en pause quand le dernier humain part
         # et ne repart JAMAIS : quand quelqu'un revient, il reste connecté mais
         # muet. Vu de Discord, il « ne rejoint plus le vocal » alors qu'il y est.
         # C'est exactement le symptôme remonté le 09/08.
         log.info("Quelqu'un est revenu (%s) — reprise", member.guild.name)
-        p.voice_client.resume()
+        voice_client.resume()
 
 
 @tasks.loop(seconds=45)
@@ -582,10 +699,11 @@ async def report_listeners():
             vc = p.voice_client
             if vc and vc.is_connected() and vc.channel:
                 n += sum(1 for m in vc.channel.members if not m.bot)
-        async with aiohttp.ClientSession() as s:
-            await s.post(f"{GCS_WEB_URL}/api/ext/listeners",
-                         params={"source": "discord", "count": n},
-                         timeout=aiohttp.ClientTimeout(total=5))
+        session = await get_http_session()
+        async with session.post(f"{GCS_WEB_URL}/api/ext/listeners",
+                                params={"source": "discord", "count": n},
+                                timeout=aiohttp.ClientTimeout(total=5)) as response:
+            response.raise_for_status()
     except Exception as exc:
         log.warning("report listeners → %s", exc)
 
@@ -646,14 +764,17 @@ async def cmd_play(interaction: discord.Interaction):
 @radio_group.command(name="stop", description="Arrête la radio et quitte le salon vocal")
 async def cmd_stop(interaction: discord.Interaction):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
+    await interaction.response.defer()
     await player.stop()
-    await interaction.response.send_message("⏹️ Radio arrêtée.")
+    await interaction.followup.send("⏹️ Radio arrêtée.")
 
 
 @radio_group.command(name="volume", description="Règle le volume (0 à 200 %)")
 @app_commands.describe(niveau="Volume en % — 100 = normal, 200 = amplifié ×2")
 async def cmd_volume(interaction: discord.Interaction, niveau: int):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
     # defer() EN PREMIER, avant tout travail : Discord n'accorde que 3 s pour l'accusé de
     # réception. Chaque seconde brûlée avant = risque de « Unknown interaction » (10062).
     await interaction.response.defer()
@@ -683,6 +804,7 @@ async def cmd_np(interaction: discord.Interaction):
 @app_commands.describe(station="La station à écouter")
 async def cmd_station(interaction: discord.Interaction, station: str):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
     await interaction.response.defer()
     ok = await player.set_station(station)
     if not ok:
@@ -756,6 +878,7 @@ async def cmd_vote(interaction: discord.Interaction):
 @radio_group.command(name="status", description="Affiche le statut du bot radio")
 async def cmd_status(interaction: discord.Interaction):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
     playing = player.is_playing
     channel_mention = (
         player.voice_client.channel.mention if player.voice_client and player.voice_client.is_connected()
@@ -776,6 +899,7 @@ async def cmd_status(interaction: discord.Interaction):
 @radio_group.command(name="pause", description="Met la lecture en pause sans quitter le salon")
 async def cmd_pause(interaction: discord.Interaction):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
     if player.voice_client and player.voice_client.is_playing():
         player.voice_client.pause()
         await interaction.response.send_message("⏸️ Mis en pause.")
@@ -786,6 +910,7 @@ async def cmd_pause(interaction: discord.Interaction):
 @radio_group.command(name="resume", description="Reprend la lecture après une pause")
 async def cmd_resume(interaction: discord.Interaction):
     player = get_player(interaction.guild_id)
+    player.reconcile_voice_client(interaction.guild)
     if player.voice_client and player.voice_client.is_paused():
         player.voice_client.resume()
         await interaction.response.send_message("▶️ Reprise de la lecture.")
@@ -814,6 +939,29 @@ async def cmd_setnpchannel(interaction: discord.Interaction):
 
 
 bot.tree.add_command(radio_group)
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Toute commande doit recevoir une réponse, même sur erreur inattendue."""
+    original = getattr(error, "original", error)
+    log.error(
+        "Commande /%s en échec : %s",
+        getattr(interaction.command, "qualified_name", "inconnue"),
+        original,
+        exc_info=(type(original), original, original.__traceback__),
+    )
+    message = (
+        "❌ La commande a rencontré un problème interne. "
+        "L'erreur a été journalisée ; tu peux réessayer dans quelques secondes."
+    )
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception as response_exc:
+        log.warning("Impossible de répondre à l'interaction en erreur : %s", response_exc)
 
 bot.run(DISCORD_TOKEN, log_handler=None)
 PYEOF
